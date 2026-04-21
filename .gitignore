@@ -1,0 +1,50 @@
+# Git Ignore Rules
+# ==========================================
+
+# Node modules (if using npm)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+build/
+*.min.js
+*.min.css
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Dependencies
+package-lock.json
+yarn.lock
+
+# Temporary files
+.cache/
+temp/
+tmp/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Browser cache
+.cache
+*.cache
