@@ -353,6 +353,7 @@ function saveAssetToDB() {
   const name = g('f-name').trim();
   if (!type) return notify('Error: Select an asset type', true);
   if (!name) return notify('Error: Enter an asset name', true);
+  
 
   const id = editingId || genId();
   const { p, s, rating: inherit } = getInherit();
@@ -360,8 +361,8 @@ function saveAssetToDB() {
   const residual = (RESIDUAL[eff] || {})[inherit.replace(' ', '_')] || 'Low';
   const c = +g('f-c'), ii = +g('f-i'), a = +g('f-a');
 
-  alasql("DELETE FROM Assets WHERE id = ?", [id]);
-  alasql("DELETE FROM AssetControls WHERE asset_id = ?", [id]);
+  alasql(`DELETE FROM Assets WHERE id = '${id}'`);
+  alasql(`DELETE FROM AssetControls WHERE asset_id = '${id}'`);
 
   alasql(`INSERT INTO Assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
       id, type, name, g('f-group'), g('f-owner'), g('f-user'), g('f-custodian'),
@@ -384,46 +385,69 @@ function saveAssetToDB() {
 }
 
 function editAsset(id) {
-  const a = alasql("SELECT * FROM Assets WHERE id = ?", [id])[0];
-  if (!a) return;
-  editingId = id;
-  
-  const titleEl = document.getElementById('form-title');
-  if(titleEl) titleEl.innerHTML = 'UPDATE <span>RECORD</span>';
-  
-  document.getElementById('f-type').value = a.type || '';
-  document.getElementById('f-id').value = a.id || '';
-  document.getElementById('f-name').value = a.name || '';
-  document.getElementById('f-group').value = a.group_name || '';
-  document.getElementById('f-owner').value = a.owner || '';
-  document.getElementById('f-user').value = a.user_name || '';
-  document.getElementById('f-custodian').value = a.custodian || '';
-  document.getElementById('f-desc').value = a.description || '';
-  document.getElementById('f-pii').value = a.pii || 'N';
-  document.getElementById('f-spi').value = a.spi || 'N';
-  document.getElementById('f-corp').value = a.corp || 'N';
-  
-  document.getElementById('f-c').value = a.ciaC || '2';
-  document.getElementById('f-i').value = a.ciaI || '2';
-  document.getElementById('f-a').value = a.ciaA || '2';
-  
-  document.getElementById('f-risk-desc').value = a.riskDesc || '';
-  document.getElementById('f-prob').value = a.prob || '3';
-  document.getElementById('f-sev').value = a.sev || '3';
-  
-  document.getElementById('f-effectiveness').value = a.effectiveness || 'substantially';
-  document.getElementById('f-action-plan').value = a.actionPlan || '';
-  document.getElementById('f-action-owner').value = a.actionOwner || '';
-  document.getElementById('f-action-date').value = a.actionDate || '';
+  try {
+      // 1. Fix: Use exact string injection to find the asset
+      const a = alasql(`SELECT * FROM Assets WHERE id = '${id}'`)[0];
+      
+      if (!a) {
+          notify("Error: Asset not found in database.", true);
+          return;
+      }
 
-  const ctrls = alasql("SELECT ctrl_id FROM AssetControls WHERE asset_id = ?", [id]).map(r => r.ctrl_id);
-  Array.from(document.getElementById('f-controls').options).forEach(opt => {
-      opt.selected = ctrls.includes(parseInt(opt.value));
-  });
+      editingId = id;
 
-  updateCIA(); updateRisk(); 
-  showSection('add'); 
-  window.scrollTo(0,0);
+      const titleEl = document.getElementById('form-title');
+      if(titleEl) titleEl.innerHTML = 'UPDATE <span>RECORD</span>';
+
+      // 2. Populate text and dropdown fields
+      document.getElementById('f-type').value = a.type || '';
+      document.getElementById('f-id').value = a.id || '';
+      document.getElementById('f-name').value = a.name || '';
+      document.getElementById('f-group').value = a.group_name || '';
+      document.getElementById('f-owner').value = a.owner || '';
+      document.getElementById('f-user').value = a.user_name || '';
+      document.getElementById('f-custodian').value = a.custodian || '';
+      document.getElementById('f-desc').value = a.description || '';
+      document.getElementById('f-pii').value = a.pii || 'N';
+      document.getElementById('f-spi').value = a.spi || 'N';
+      document.getElementById('f-corp').value = a.corp || 'N';
+      document.getElementById('f-c').value = a.ciaC || '2';
+      document.getElementById('f-i').value = a.ciaI || '2';
+      document.getElementById('f-a').value = a.ciaA || '2';
+
+      // Reset the risk template dropdown, but fill the manual risk data
+      if (document.getElementById('f-risk-category')) document.getElementById('f-risk-category').value = ""; 
+      document.getElementById('f-risk-desc').value = a.riskDesc || '';
+      document.getElementById('f-prob').value = a.prob || '3';
+      document.getElementById('f-sev').value = a.sev || '3';
+
+      document.getElementById('f-effectiveness').value = a.effectiveness || 'substantially';
+      document.getElementById('f-action-plan').value = a.actionPlan || '';
+      document.getElementById('f-action-owner').value = a.actionOwner || '';
+      document.getElementById('f-action-date').value = a.actionDate || '';
+
+      // 3. Fix: Use exact string injection for Controls
+      const ctrls = alasql(`SELECT ctrl_id FROM AssetControls WHERE asset_id = '${id}'`).map(r => r.ctrl_id);
+      [1,2,3,4,5,6,7,8].forEach(n => {
+          const cb = document.getElementById('ctrl'+n);
+          if(cb) cb.checked = ctrls.includes(n);
+      });
+
+      // 4. Update UI Math and shift view to the form
+      updateCIA(); 
+      updateRisk(); 
+      showSection('add'); 
+      window.scrollTo(0,0);
+
+      // 5. Safely trigger the custom Multi-Select tags to draw
+      if (typeof updateTags === "function") {
+          setTimeout(updateTags, 50);
+      }
+
+  } catch (err) {
+      console.error("Edit Error:", err);
+      notify("Failed to open asset for editing.", true);
+  }
 }
 
 function deleteAsset(id) {
