@@ -39,19 +39,113 @@ if (isInitialized) {
     alasql.tables.Assets.data = storedAssets;
     alasql.tables.AssetControls.data = storedControls;
 } else {
-    // FIRST TIME ONLY: Seed Sample Data
-    alasql(`INSERT INTO Assets VALUES (
-        'IA-001', 'IA', 'PLM Student Registry System', 'Registrar', 
-        'W. Mikhail', 'Staff', 'IT Admin', 'Core database for student records', 
-        'Y', 'Y', 'N', 
-        3, 3, 2, 8, 'Restricted', 
-        'Potential SQL injection leading to unauthorized access', 3, 4, 'High', 
-        'partially', 'High',
-        'Implement parameterized queries', 'W. Mikhail', '2026-12-01'
-    )`);
-    alasql("INSERT INTO AssetControls VALUES ('IA-001', 1), ('IA-001', 3), ('IA-001', 6)");
+    // FIRST TIME ONLY: Seed Sample Data (10 Realistic PLM Assets with Detailed Roles)
+    alasql(`INSERT INTO Assets VALUES 
+        ('IA-001', 'IA', 'University Clinic Medical Records', 'Clinic', 
+         'Head University Physician', 'Clinic Nurses & Doctors', 'Clinic Records Admin', 
+         'Physical and digital health records of students and faculty.', 
+         'Y', 'Y', 'N', 3, 3, 2, 8, 'Restricted', 
+         'Accidental data leak of sensitive health information via unsecured sharing or misplacement.', 
+         3, 5, 'High', 'partially', 'High', 
+         'Enforce strict physical access to the clinic records room and implement DLP tools for digital health data.', 
+         'Head Physician', '2026-10-15'),
+
+        ('PhA-002', 'PhA', 'CET Engineering Lab Computers', 'CET', 
+         'Dean of CET', 'Engineering Students & Faculty', 'CET Lab Technician', 
+         'High-performance desktops used for CAD and simulations.', 
+         'N', 'N', 'N', 1, 2, 2, 5, 'Internal Use', 
+         'Theft of physical hardware components during off-hours.', 
+         3, 3, 'Moderate', 'partially', 'Moderate', 
+         'Install physical cable locks on all lab PCs and upgrade lab CCTV coverage.', 
+         'Security Office', '2026-11-01'),
+
+        ('SA-003', 'SA', 'PLM Library Management System', 'Library', 
+         'Chief University Librarian', 'Students, Faculty & Staff', 'ITC Database Administrator', 
+         'System managing book inventory and borrowing records.', 
+         'Y', 'N', 'N', 2, 2, 3, 7, 'Confidential', 
+         'Unpatched software vulnerabilities leading to system disruption.', 
+         4, 3, 'High', 'substantially', 'Moderate', 
+         'Establish a monthly patch management routine for the library server OS.', 
+         'ITC SecOps', '2026-09-30'),
+
+        ('PA-004', 'PA', 'University President & Board', 'Admin', 
+         'Board of Regents', 'Exec Assistants / Dept Heads', 'Office of the University Sec', 
+         'Top-level executive management with highest signing authority.', 
+         'Y', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 
+         'Targeted spear-phishing (Whaling) attempting to authorize fraudulent wire transfers.', 
+         3, 5, 'High', 'ineffective', 'High', 
+         'Mandate executive anti-phishing training and enforce out-of-band verbal verification for transfers.', 
+         'CISO', '2026-08-15'),
+
+        ('SV-005', 'SV', 'PLM Official Website', 'ITC', 
+         'VP for Communications', 'Public & Students', 'ITC Web Development Team', 
+         'Primary public-facing portal for university info.', 
+         'N', 'N', 'Y', 1, 2, 3, 6, 'Confidential', 
+         'DDoS attack during admissions season rendering the site inaccessible.', 
+         4, 3, 'High', 'substantially', 'Moderate', 
+         'Route website traffic through a cloud-based DDoS mitigation and CDN service.', 
+         'ITC Infra', '2026-12-01'),
+
+        ('FA-006', 'FA', 'University Cashier Main Vault', 'Finance', 
+         'VP for Finance', 'University Cashiers', 'Head Cashier / Security', 
+         'Physical safe holding daily tuition fee collections.', 
+         'N', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 
+         'Theft or armed robbery targeting physical cash collections.', 
+         2, 4, 'Moderate', 'fully', 'Low', 
+         '', '', ''),
+
+        ('IA-007', 'IA', 'PLM Alumni Database', 'Alumni Office', 
+         'Director of Alumni Relations', 'Alumni Office Staff', 'ITC Enterprise Systems Team', 
+         'Contact info and employment history of former students.', 
+         'Y', 'N', 'N', 3, 2, 2, 7, 'Confidential', 
+         'Unauthorized extraction of the database by an insider.', 
+         3, 4, 'High', 'partially', 'High', 
+         'Enforce strict RBAC limiting export capabilities and monitor query logs.', 
+         'ITC SecOps', '2026-10-30'),
+
+        ('PhA-008', 'PhA', 'Campus Security CCTV NVR', 'Security', 
+         'Chief of Campus Security', 'Duty Security Guards', 'ITC Infrastructure Team', 
+         'Network Video Recorder storing 30 days of security footage.', 
+         'Y', 'N', 'N', 3, 3, 3, 9, 'Restricted', 
+         'Hardware failure due to overheating in the security office closet.', 
+         3, 4, 'High', 'substantially', 'Moderate', 
+         'Relocate the NVR to the main climate-controlled server room with RAID 5.', 
+         'Chief of Security', '2026-09-15'),
+
+        ('SA-009', 'SA', 'HR Payroll & Benefits System', 'HR', 
+         'HR Director', 'Payroll Officers & HR Staff', 'ITC Database Administrator', 
+         'System calculating faculty salaries and tax deductions.', 
+         'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 
+         'Disgruntled employee modifying salary bands (Insider Threat).', 
+         2, 5, 'Moderate', 'partially', 'Moderate', 
+         'Implement strict segregation of duties (maker-checker rule) for payroll changes.', 
+         'HR Director', '2026-11-15'),
+
+        ('FA-010', 'FA', 'University Digital Banking Portal', 'Finance', 
+         'VP for Finance', 'Finance Managers', 'Finance IT Support', 
+         'Online access to operational bank accounts for payments.', 
+         'N', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 
+         'Unauthorized access to admin accounts via credential stuffing.', 
+         3, 5, 'High', 'substantially', 'Moderate', 
+         'Require physical hardware security keys for banking portal access.', 
+         'VP for Finance', '2026-12-15')
+    `);
     
-    // Set the flag so the sample data NEVER respawns again
+    // Seed Control Checkboxes (Mapped to the 10 assets above)
+    alasql(`INSERT INTO AssetControls VALUES 
+        ('IA-001', 1), ('IA-001', 3), ('IA-001', 7),
+        ('PhA-002', 5),
+        ('SA-003', 1), ('SA-003', 6),
+        ('PA-004', 1),
+        ('SV-005', 1), ('SV-005', 6),
+        ('FA-006', 1), ('FA-006', 2), ('FA-006', 3), ('FA-006', 5),
+        ('IA-007', 1), ('IA-007', 3), ('IA-007', 6),
+        ('PhA-008', 1), ('PhA-008', 3), ('PhA-008', 5),
+        ('SA-009', 1), ('SA-009', 2), ('SA-009', 3), ('SA-009', 4),
+        ('FA-010', 1), ('FA-010', 2), ('FA-010', 3), ('FA-010', 7)
+    `);
+    
+    // Set the flag so the sample data NEVER respawns again if the user deletes everything
     localStorage.setItem('impactlens_initialized', 'true');
 }
 
