@@ -5,18 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ImpactLens — Risk Assessment</title>
   
-  <!-- ==========================================
-       EXTERNAL FONTS & LIBRARIES
-       ========================================== -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap" rel="stylesheet">
   
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/alasql@4.2.2/dist/alasql.min.js"></script>
   
-  <!-- ==========================================
-       LOCAL STYLESHEETS
-       ========================================== -->
   <link rel="stylesheet" href="./assets/styles/main.css">
   
 </head>
@@ -36,7 +30,7 @@
     <div class="status-dot"></div>
     <div class="header-stat">Assets: <span id="hdr-total">0</span></div>
     <div class="header-stat" style="background: rgba(255,153,0,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--warn);">
-        Action Plans Due (14 days): <span id="hdr-deadlines" style="color:var(--warn)">0</span>
+        Action Plans Due (14 days): <span id="hdr-deadlines" style="color:var(--warn); font-weight:bold;">0</span>
     </div>
     <div style="display: flex; gap: 8px; margin-left: 12px;">
       <button class="btn btn-sm btn-success" onclick="exportDataXLSX()">▤ Export</button>
@@ -69,7 +63,6 @@
   </nav>
 
   <main>
-    <!-- ========================================== DASHBOARD ========================================== -->
     <div id="sec-dashboard" class="section active">
       <div class="page-header">
         <div>
@@ -96,7 +89,6 @@
       </div>
     </div>
 
-    <!-- ========================================== ADD ASSET FORM ========================================== -->
     <div id="sec-add" class="section">
       <div class="page-header"><div><div class="page-title" id="form-title">INSERT <span>RECORD</span></div></div></div>
       
@@ -105,7 +97,7 @@
         <div class="form-row grid-3">
           <div class="field"><label>Asset ID</label><input type="text" id="f-id" readonly placeholder="Auto-generated..."></div>
           <div class="field"><label>Asset Type *</label>
-            <select id="f-type" onchange="onTypeChange()">
+            <select id="f-type" onchange="runEnforcementEngine()">
               <option value="">— Select type —</option>
               <option value="IA">IA — Information Asset</option>
               <option value="PhA">PhA — Physical Asset</option>
@@ -127,7 +119,7 @@
           <div class="field"><label>Hostname (e.g. PLMSRVR01)</label><input type="text" id="f-hostname"></div>
           <div class="field"><label>IP Address</label><input type="text" id="f-ip" placeholder="e.g. 10.1.1.50"></div>
           <div class="field"><label>Environment</label>
-            <select id="f-env">
+            <select id="f-env" onchange="runEnforcementEngine()">
               <option value="Internal">Internal (LAN)</option>
               <option value="External">External (DMZ)</option>
               <option value="Internet Facing">Internet Facing</option>
@@ -143,57 +135,57 @@
       </div>
 
       <div class="card">
-        <div class="card-header">02 — Data & Classification</div>
+        <div class="card-header">02 — Data & Classification <span style="font-size:9px; color:var(--text3); margin-left:auto;">🔒 System Enforced</span></div>
         <div class="form-row grid-3">
-          <div class="field"><label>Personal info (PI)?</label><select id="f-pii"><option value="N">No</option><option value="Y">Yes</option></select></div>
-          <div class="field"><label>Sensitive PI (SPI)?</label><select id="f-spi"><option value="N">No</option><option value="Y">Yes</option></select></div>
-          <div class="field"><label>Corporate info?</label><select id="f-corp"><option value="N">No</option><option value="Y">Yes</option></select></div>
+          <div class="field"><label>Personal info (PI)?</label><select id="f-pii" onchange="runEnforcementEngine()"><option value="N">No</option><option value="Y">Yes</option></select></div>
+          <div class="field"><label>Sensitive PI (SPI)?</label><select id="f-spi" onchange="runEnforcementEngine()"><option value="N">No</option><option value="Y">Yes</option></select></div>
+          <div class="field"><label>Corporate info?</label><select id="f-corp" onchange="runEnforcementEngine()"><option value="N">No</option><option value="Y">Yes</option></select></div>
         </div>
         <div class="form-row grid-3" style="margin-top:16px;">
-          <div class="field"><label>Confidentiality (1-3)</label><select id="f-c" onchange="updateCIA()"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
-          <div class="field"><label>Integrity (1-3)</label><select id="f-i" onchange="updateCIA()"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
-          <div class="field"><label>Availability (1-3)</label><select id="f-a" onchange="updateCIA()"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
+          <div class="field"><label>Confidentiality (1-3) <span id="lock-c"></span></label><select id="f-c" onchange="runEnforcementEngine()"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
+          <div class="field"><label>Integrity (1-3) <span id="lock-i"></span></label><select id="f-i" onchange="runEnforcementEngine()"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
+          <div class="field"><label>Availability (1-3) <span id="lock-a"></span></label><select id="f-a" onchange="runEnforcementEngine()"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
         </div>
         <p style="margin-top: 10px; font-family: var(--mono); color: var(--accent);">Class: <span id="cia-class">Confidential</span></p>
       </div>
 
       <div class="card">
-        <div class="card-header">03 — Risk & Controls</div>
+        <div class="card-header">03 — Threat & Controls <span style="font-size:9px; color:var(--text3); margin-left:auto;">🔒 Defense-in-Depth Enforced</span></div>
         
         <div class="form-row" style="margin-bottom:16px;">
             <div class="field">
                 <label style="color:var(--accent2);">Auto-fill Risk Template (Categories)</label>
                 <select id="f-risk-category" onchange="applyRiskTemplate()" style="border-color:var(--accent2);">
                     <option value="">-- Custom / Manual Entry --</option>
-                    <optgroup label="Physical Security">
+                    <optgroup label="Physical Security" id="opt-phys">
                         <option value="phys_theft">Theft of storage devices or printed documents</option>
                         <option value="phys_destruct">Destruction of facilities or systems (Fire, Flood, Earthquake)</option>
                     </optgroup>
-                    <optgroup label="Human Resources">
+                    <optgroup label="Human Resources" id="opt-hr">
                         <option value="hr_insider">Disgruntled employee or insider threat</option>
                         <option value="hr_accidental">Accidental data deletion or modification</option>
                     </optgroup>
-                    <optgroup label="Cyber Security - External">
+                    <optgroup label="Cyber Security - External" id="opt-cyber-ext">
                         <option value="cyber_ext_ransomware">Ransomware / Malware attacks</option>
                         <option value="cyber_ext_leak">Data Leak / Breach or PII Exposure</option>
                         <option value="cyber_ext_ddos">DDoS attacks (Distributed Denial of Service)</option>
                         <option value="cyber_ext_supply">Third Party / Supply Chain compromise</option>
                     </optgroup>
-                    <optgroup label="Cyber Security - Internal">
+                    <optgroup label="Cyber Security - Internal" id="opt-cyber-int">
                         <option value="cyber_int_unauth">Unauthorized Access to Admin accounts</option>
                         <option value="cyber_int_vuln">Unpatched System vulnerabilities / Misconfiguration</option>
                     </optgroup>
-                    <optgroup label="Non-Compliance / Legal">
+                    <optgroup label="Non-Compliance / Legal" id="opt-comp">
                         <option value="legal_dpa">Non-compliance to Data Privacy Act (DPA)</option>
                     </optgroup>
                 </select>
             </div>
         </div>
 
-        <div class="form-row"><div class="field"><label>Identified Risk Description</label><textarea id="f-risk-desc"></textarea></div></div>
+        <div class="form-row"><div class="field"><label>Identified Risk Description</label><textarea id="f-risk-desc" oninput="runEnforcementEngine()"></textarea></div></div>
         <div class="form-row grid-2" style="margin-top:16px;">
-          <div class="field"><label>Probability (1-5)</label><select id="f-prob" onchange="updateRisk()"><option value="1">1 - Rare</option><option value="2">2 - Unlikely</option><option value="3" selected>3 - Possible</option><option value="4">4 - Likely</option><option value="5">5 - Almost Certain</option></select></div>
-          <div class="field"><label>Severity (1-5)</label><select id="f-sev" onchange="updateRisk()"><option value="1">1 - Insignificant</option><option value="2">2 - Minor</option><option value="3" selected>3 - Moderate</option><option value="4">4 - Major</option><option value="5">5 - High/Catastrophic</option></select></div>
+          <div class="field"><label>Probability (1-5)</label><select id="f-prob" onchange="runEnforcementEngine()"><option value="1">1 - Rare</option><option value="2">2 - Unlikely</option><option value="3" selected>3 - Possible</option><option value="4">4 - Likely</option><option value="5">5 - Almost Certain</option></select></div>
+          <div class="field"><label>Severity (1-5)</label><select id="f-sev" onchange="runEnforcementEngine()"><option value="1">1 - Insignificant</option><option value="2">2 - Minor</option><option value="3" selected>3 - Moderate</option><option value="4">4 - Major</option><option value="5">5 - High/Catastrophic</option></select></div>
         </div>
         
         <label style="margin-top: 20px;">Implemented Controls</label>
@@ -204,24 +196,6 @@
               <span>▼</span>
             </div>
             <div class="multi-select-dropdown" id="ctrl-dropdown">
-              <label class="multi-select-option"><input type="checkbox" value="1" id="ctrl1" onchange="updateTags()"> Documented procedures</label>
-              <label class="multi-select-option"><input type="checkbox" value="2" id="ctrl2" onchange="updateTags()"> Segregation of duties</label>
-              <label class="multi-select-option"><input type="checkbox" value="3" id="ctrl3" onchange="updateTags()"> Access restriction</label>
-              <label class="multi-select-option"><input type="checkbox" value="4" id="ctrl4" onchange="updateTags()"> Removal of access</label>
-              <label class="multi-select-option"><input type="checkbox" value="5" id="ctrl5" onchange="updateTags()"> Physical controls</label>
-              <label class="multi-select-option"><input type="checkbox" value="6" id="ctrl6" onchange="updateTags()"> Information backup</label>
-              <label class="multi-select-option"><input type="checkbox" value="7" id="ctrl7" onchange="updateTags()"> Encryption</label>
-              <label class="multi-select-option"><input type="checkbox" value="8" id="ctrl8" onchange="updateTags()"> Asset disposal</label>
-            </div>
-          </div>
-          <div class="selected-tags" id="selected-controls-tags"></div>
-        </div>
-
-        <div class="form-row" style="margin-top:16px">
-          <div class="field">
-            <label>Control effectiveness</label>
-            <select id="f-effectiveness" onchange="updateResidual()">
-             <option value="ineffective">Ine<div class="multi-select-dropdown" id="ctrl-dropdown">
               <label class="multi-select-option"><input type="checkbox" value="1" id="ctrl1" onchange="updateTags()"> Documented procedures</label>
               <label class="multi-select-option"><input type="checkbox" value="2" id="ctrl2" onchange="updateTags()"> Segregation of duties</label>
               <label class="multi-select-option"><input type="checkbox" value="3" id="ctrl3" onchange="updateTags()"> Role-Based Access Control (RBAC)</label>
@@ -235,8 +209,9 @@
               <label class="multi-select-option"><input type="checkbox" value="11" id="ctrl11" onchange="updateTags()"> Vulnerability Scanning & Patching</label>
               <label class="multi-select-option"><input type="checkbox" value="12" id="ctrl12" onchange="updateTags()"> Network Segmentation (VLANs)</label>
               <label class="multi-select-option"><input type="checkbox" value="13" id="ctrl13" onchange="updateTags()"> Incident Response Plan</label>
-            </select>
+            </div>
           </div>
+          <div class="selected-tags" id="selected-controls-tags"></div>
         </div>
       </div>
 
@@ -245,9 +220,27 @@
         <div style="display:flex; gap:16px; margin-bottom:16px; align-items:center;">
            <span style="font-family:var(--mono); color:var(--text3); text-transform:uppercase; font-size:10px;">Calculated Residual Risk:</span>
            <span class="badge badge-mo" id="r-residual" style="font-size:14px; padding:6px 12px;">Moderate</span>
+           <span id="control-feedback" style="font-size:11px; color:var(--text2); margin-left:8px;"></span>
         </div>
         <div id="action-plan-section">
           <div class="card-header" style="color:var(--danger); border-bottom:none; margin-bottom:10px; font-size:10px;">Action plan required for High/Moderate Risk</div>
+          <div class="form-row grid-2" style="margin-bottom: 16px;">
+            <div class="field"><label>Risk Treatment Strategy <span id="lock-treat"></span></label>
+                <select id="f-action-type" onchange="runEnforcementEngine()">
+                    <option value="Mitigate">Mitigate (Apply controls)</option>
+                    <option value="Avoid">Avoid (Stop activity)</option>
+                    <option value="Transfer">Transfer (Insurance/Third-party)</option>
+                    <option value="Accept">Accept (Acknowledge risk)</option>
+                </select>
+            </div>
+            <div class="field"><label>Status</label>
+                <select id="f-action-status" onchange="runEnforcementEngine()">
+                    <option value="Pending">Pending</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Done">Done (Closed)</option>
+                </select>
+            </div>
+          </div>
           <div class="form-row"><div class="field"><label>Suggested Action Plan Description</label><textarea id="f-action-plan" placeholder="Describe mitigations..."></textarea></div></div>
           <div class="form-row grid-2">
             <div class="field"><label>Action Owner</label><input type="text" id="f-action-owner"></div>
@@ -262,7 +255,6 @@
       </div>
     </div>
 
-    <!-- ========================================== ASSET TABLE ========================================== -->
     <div id="sec-register" class="section">
       <div class="page-header"><div><div class="page-title">ASSET <span>TABLE</span></div><div class="page-desc">// Comprehensive inventory of all registered information assets</div></div></div>
       <div class="table-wrap">
@@ -270,7 +262,6 @@
       </div>
     </div>
 
-    <!-- ========================================== RISK REGISTER ========================================== -->
     <div id="sec-risk" class="section">
       <div class="page-header"><div><div class="page-title">RISK <span>REGISTER</span></div><div class="page-desc">// Combined Risk Heatmap and Query Table</div></div></div>
       
@@ -326,20 +317,17 @@
       </div>
     </div>
 
-    <!-- ========================================== CONTROL METRICS ========================================== -->
     <div id="sec-controls" class="section">
       <div class="page-header"><div><div class="page-title">CONTROL <span>METRICS</span></div><div class="page-desc">// Aggregate tracking of implemented security controls and their overall effectiveness</div></div></div>
       <div class="card"><div class="card-header">Implementation coverage across all assets</div><div id="ctrl-bars"></div></div>
       <div class="card"><div class="card-header">Overall Control Effectiveness distribution</div><div id="ctrl-effectiveness"></div></div>
     </div>
 
-    <!-- ========================================== ACTION PLANS ========================================== -->
     <div id="sec-actions" class="section">
       <div class="page-header"><div><div class="page-title">ACTION <span>PLANS</span></div><div class="page-desc">// Required mitigations and target timelines for High and Moderate residual risks</div></div></div>
       <div id="actions-content"></div>
     </div>
 
-    <!-- ========================================== REPORTING & SIGN-OFFS ========================================== -->
     <div id="sec-report" class="section">
         <div class="page-header">
             <div><div class="page-title">REPORTING & <span>SIGN-OFFS</span></div><div class="page-desc">// Document context, executive highlights, and official management approvals</div></div>
@@ -392,10 +380,8 @@
         </div>
     </div>
 
-    <!-- ========================================== GUIDELINES ========================================== -->
     <div id="sec-guidelines" class="section">
       <div class="page-header"><div><div class="page-title">RISK <span>GUIDELINES</span></div><div class="page-desc">// Unabridged reference documentation based on IAR template</div></div></div>
-      <!-- Guidelines content (long - preserved from original) -->
       
       <div class="card">
         <div class="card-header">Asset Type and Asset ID Naming Convention</div>
@@ -466,9 +452,6 @@
 
 <div id="notification" class="notification"></div>
 
-<!-- ==========================================
-     LOCAL SCRIPTS
-     ========================================== -->
 <script src="./assets/scripts/app.js"></script>
 
 </body>
