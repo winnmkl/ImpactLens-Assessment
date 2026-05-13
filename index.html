@@ -25,20 +25,21 @@
 <header>
   <div class="logo">
     <div class="logo-mark">
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="margin-right: 4px; filter: drop-shadow(0 0 8px rgba(200,255,0,0.4));">
-        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-        <circle cx="12" cy="12" r="3"></circle>
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="margin-right: 4px; filter: drop-shadow(0 0 8px rgba(200,255,0,0.6));">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
       </svg>
       IMPACTLENS
     </div>
-    <div class="logo-sub">Your Eyes on Information<br>Security Risk Assessment</div>
+    <div class="logo-sub">Information Security<br>Risk Assessment</div>
   </div>
   <div class="header-right">
     <div class="status-dot"></div>
     <div class="header-stat">Assets: <span id="hdr-total">0</span></div>
-    <div class="header-stat">High Risk: <span id="hdr-high" style="color:var(--danger)">0</span></div>
+    <div class="header-stat" style="background: rgba(255,153,0,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--warn);">
+        Action Plans Due (14 days): <span id="hdr-deadlines" style="color:var(--warn)">0</span>
+    </div>
     <div style="display: flex; gap: 8px; margin-left: 12px;">
-      <button class="btn btn-sm btn-success" onclick="exportDataXLSX()">▤ Generate Excel (.xlsx)</button>
+      <button class="btn btn-sm btn-success" onclick="exportDataXLSX()">▤ Export</button>
     </div>
   </div>
 </header>
@@ -100,26 +101,44 @@
       <div class="page-header"><div><div class="page-title" id="form-title">INSERT <span>RECORD</span></div></div></div>
       
       <div class="card">
-        <div class="card-header">01 — Primary details</div>
-        <div class="form-row grid-2">
+        <div class="card-header">01 — Primary Details & Network Context</div>
+        <div class="form-row grid-3">
           <div class="field"><label>Asset ID</label><input type="text" id="f-id" readonly placeholder="Auto-generated..."></div>
-          <div class="field"><label>Asset type *</label><select id="f-type" onchange="onTypeChange()">
-            <option value="">— Select type —</option>
-            <option value="IA">IA — Information Asset</option>
-            <option value="PhA">PhA — Physical Asset</option>
-            <option value="PA">PA — People Asset</option>
-            <option value="SA">SA — Software Asset</option>
-            <option value="SV">SV — Service Asset</option>
-            <option value="FA">FA — Financial Asset</option>
-          </select></div>
+          <div class="field"><label>Asset Type *</label>
+            <select id="f-type" onchange="onTypeChange()">
+              <option value="">— Select type —</option>
+              <option value="IA">IA — Information Asset</option>
+              <option value="PhA">PhA — Physical Asset</option>
+              <option value="PA">PA — People Asset</option>
+              <option value="SA">SA — Software Asset</option>
+              <option value="SV">SV — Service Asset</option>
+              <option value="FA">FA — Financial Asset</option>
+            </select>
+          </div>
+          <div class="field"><label>Department (ICTO, HR, etc.)</label><input type="text" id="f-dept"></div>
         </div>
+        
         <div class="form-row grid-2" style="margin-top:16px;">
           <div class="field"><label>Asset Name *</label><input type="text" id="f-name"></div>
-          <div class="field"><label>Group / Unit / Branch</label><input type="text" id="f-group"></div>
+          <div class="field"><label>Description</label><input type="text" id="f-desc"></div>
         </div>
-        <div class="form-row" style="margin-top:16px;"><div class="field"><label>Description</label><textarea id="f-desc"></textarea></div></div>
+
         <div class="form-row grid-3" style="margin-top:16px;">
-          <div class="field"><label>Owner</label><input type="text" id="f-owner"></div><div class="field"><label>User</label><input type="text" id="f-user"></div><div class="field"><label>Custodian</label><input type="text" id="f-custodian"></div>
+          <div class="field"><label>Hostname (e.g. PLMSRVR01)</label><input type="text" id="f-hostname"></div>
+          <div class="field"><label>IP Address</label><input type="text" id="f-ip" placeholder="e.g. 10.1.1.50"></div>
+          <div class="field"><label>Environment</label>
+            <select id="f-env">
+              <option value="Internal">Internal (LAN)</option>
+              <option value="External">External (DMZ)</option>
+              <option value="Internet Facing">Internet Facing</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="form-row grid-3" style="margin-top:16px;">
+          <div class="field"><label>Owner</label><input type="text" id="f-owner"></div>
+          <div class="field"><label>User</label><input type="text" id="f-user"></div>
+          <div class="field"><label>Custodian</label><input type="text" id="f-custodian"></div>
         </div>
       </div>
 
@@ -202,8 +221,20 @@
           <div class="field">
             <label>Control effectiveness</label>
             <select id="f-effectiveness" onchange="updateResidual()">
-              <option value="ineffective">Ineffective</option><option value="partially">Partially effective</option>
-              <option value="substantially" selected>Substantially effective</option><option value="fully">Fully effective</option>
+             <option value="ineffective">Ine<div class="multi-select-dropdown" id="ctrl-dropdown">
+              <label class="multi-select-option"><input type="checkbox" value="1" id="ctrl1" onchange="updateTags()"> Documented procedures</label>
+              <label class="multi-select-option"><input type="checkbox" value="2" id="ctrl2" onchange="updateTags()"> Segregation of duties</label>
+              <label class="multi-select-option"><input type="checkbox" value="3" id="ctrl3" onchange="updateTags()"> Role-Based Access Control (RBAC)</label>
+              <label class="multi-select-option"><input type="checkbox" value="4" id="ctrl4" onchange="updateTags()"> Multi-Factor Authentication (MFA)</label>
+              <label class="multi-select-option"><input type="checkbox" value="5" id="ctrl5" onchange="updateTags()"> Physical controls (CCTV, Locks)</label>
+              <label class="multi-select-option"><input type="checkbox" value="6" id="ctrl6" onchange="updateTags()"> Automated Information backup</label>
+              <label class="multi-select-option"><input type="checkbox" value="7" id="ctrl7" onchange="updateTags()"> Encryption (At Rest / In Transit)</label>
+              <label class="multi-select-option"><input type="checkbox" value="8" id="ctrl8" onchange="updateTags()"> Asset disposal procedures</label>
+              <label class="multi-select-option"><input type="checkbox" value="9" id="ctrl9" onchange="updateTags()"> Endpoint Detection & Response (EDR)</label>
+              <label class="multi-select-option"><input type="checkbox" value="10" id="ctrl10" onchange="updateTags()"> Network Firewall / WAF</label>
+              <label class="multi-select-option"><input type="checkbox" value="11" id="ctrl11" onchange="updateTags()"> Vulnerability Scanning & Patching</label>
+              <label class="multi-select-option"><input type="checkbox" value="12" id="ctrl12" onchange="updateTags()"> Network Segmentation (VLANs)</label>
+              <label class="multi-select-option"><input type="checkbox" value="13" id="ctrl13" onchange="updateTags()"> Incident Response Plan</label>
             </select>
           </div>
         </div>

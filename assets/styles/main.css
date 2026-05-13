@@ -6,7 +6,9 @@
 :root {
   --bg: #0a0a0f; --bg2: #111118; --bg3: #18181f; --bg4: #202028;
   --border: #2a2a35; --border2: #3a3a48;
-  --text: #e8e8f0; --text2: #8888a0; --text3: #55556a;
+  --text: #ffffff; /* Brightened from #e8e8f0 */
+  --text2: #a0a0c0; /* Brightened from #8888a0 */
+  --text3: #70708a; /* Brightened from #55556a */
   --accent: #c8ff00; --accent2: #00d4ff; --danger: #ff4444;
   --warn: #ff9900; --success: #00cc77; --info: #6666ff; --purple: #aa44ff;
   --mono: 'IBM Plex Mono', monospace; --sans: 'IBM Plex Sans', sans-serif; --display: 'Bebas Neue', sans-serif;
@@ -26,7 +28,7 @@ body {
   background: var(--bg); 
   color: var(--text); 
   font-family: var(--sans); 
-  font-size: 13px; 
+  font-size: 14px; 
   line-height: 1.6; 
   min-height: 100vh; 
 }
@@ -162,7 +164,7 @@ nav {
   transition: all 0.2s ease; 
   border-left: 3px solid transparent; 
   color: var(--text2); 
-  font-size: 13px; 
+  font-size: 14px; 
   font-weight: 400; 
 }
 
@@ -320,7 +322,7 @@ input, select, textarea {
   border: 1px solid var(--border); 
   color: var(--text); 
   font-family: var(--mono); 
-  font-size: 13px; 
+  font-size: 14px; 
   padding: 10px 14px; 
   border-radius: 4px; 
   outline: none; 
