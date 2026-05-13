@@ -29,7 +29,7 @@
     <div class="status-dot"></div>
     <div class="header-stat">Assets: <span id="hdr-total">0</span></div>
     
-    <div class="header-stat" id="hdr-high-container" style="background: rgba(255,68,68,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--danger);">
+    <div class="header-stat" style="background: rgba(255,68,68,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--danger);">
         High Risks: <span id="hdr-high" style="color:var(--danger); font-weight:bold;">0</span>
     </div>
     
@@ -120,37 +120,21 @@
         </div>
         
         <div class="form-row grid-3" style="margin-top:16px;">
-            <div class="field">
-                <label>Hostname</label>
-                <input type="text" id="f-hostname" placeholder="e.g. PLMSRVR01">
-            </div>
-            <div class="field">
-                <label>Server</label>
-                <input type="text" id="f-server" placeholder="e.g. PLM 1 - Main Server">
-            </div>
-            <div class="field">
-                <label>Custodian</label>
-                <input type="text" id="f-custodian">
-            </div>
+            <div class="field"><label>Hostname</label><input type="text" id="f-hostname" placeholder="e.g. PLMSRVR01"></div>
+            <div class="field"><label>Server</label><input type="text" id="f-server" placeholder="e.g. PLM 1 - Main Server"></div>
+            <div class="field"><label>Custodian</label><input type="text" id="f-custodian"></div>
         </div>
 
         <div class="form-row grid-3" style="margin-top:16px;">
-            <div class="field">
-                <label>IP Address (If applicable):</label>
-                <input type="text" id="f-ip" placeholder="e.g. 10.10.10.10">
-            </div>
-            <div class="field">
-                <label>Environment:</label>
+            <div class="field"><label>IP Address</label><input type="text" id="f-ip" placeholder="e.g. 10.10.10.10"></div>
+            <div class="field"><label>Environment:</label>
                 <select id="f-environment" onchange="runEnforcementEngine()">
                     <option value="Internal">Internal</option>
                     <option value="Internet Facing">Internet Facing</option>
                     <option value="Hybrid">Hybrid</option>
                 </select>
             </div>
-            <div class="field">
-                <label>Department:</label>
-                <input type="text" id="f-department" placeholder="e.g. ICTO">
-            </div>
+            <div class="field"><label>Department:</label><input type="text" id="f-department" placeholder="e.g. ICTO"></div>
         </div>
       </div>
 
