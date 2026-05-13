@@ -114,6 +114,7 @@
           <div class="field"><label>Asset Name *</label><input type="text" id="f-name"></div>
           <div class="field"><label>Description</label><input type="text" id="f-desc"></div>
         </div>
+<<<<<<< HEAD
 
         <div class="form-row grid-3" style="margin-top:16px;">
           <div class="field"><label>Hostname (e.g. PLMSRVR01)</label><input type="text" id="f-hostname"></div>
@@ -131,6 +132,44 @@
           <div class="field"><label>Owner</label><input type="text" id="f-owner"></div>
           <div class="field"><label>User</label><input type="text" id="f-user"></div>
           <div class="field"><label>Custodian</label><input type="text" id="f-custodian"></div>
+=======
+        <div class="form-row" style="margin-top:16px;"><div class="field"><label>Description</label><textarea id="f-desc"></textarea></div></div>
+        
+        <!-- REPLACED Owner / User -> Hostname / Server -->
+        <div class="form-row grid-3" style="margin-top:16px;">
+            <div class="field">
+                <label>Hostname</label>
+                <input type="text" id="f-hostname" placeholder="e.g. PLMSRVR01">
+            </div>
+            <div class="field">
+                <label>Server</label>
+                <input type="text" id="f-server" placeholder="e.g. PLM 1 - Main Server">
+            </div>
+            <div class="field">
+                <label>Custodian</label>
+                <input type="text" id="f-custodian">
+            </div>
+        </div>
+
+        <!-- ADDED IP Address, Environment (Dropdown), Department -->
+        <div class="form-row grid-3" style="margin-top:16px;">
+            <div class="field">
+                <label>IP Address (If applicable):</label>
+                <input type="text" id="f-ip" placeholder="e.g. 10.10.10.10">
+            </div>
+            <div class="field">
+                <label>Environment:</label>
+                <select id="f-environment">
+                    <option value="Internal">Internal</option>
+                    <option value="Internet Facing">Internet Facing</option>
+                    <option value="Hybrid">Hybrid</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Department:</label>
+                <input type="text" id="f-department"  placeholder="e.g. ICTO">
+            </div>
+>>>>>>> 80c7a50869eb560ad247968d98128211612f8b9f
         </div>
       </div>
 
@@ -258,7 +297,7 @@
     <div id="sec-register" class="section">
       <div class="page-header"><div><div class="page-title">ASSET <span>TABLE</span></div><div class="page-desc">// Comprehensive inventory of all registered information assets</div></div></div>
       <div class="table-wrap">
-        <table><thead><tr><th>ID</th><th>Asset name</th><th>Type</th><th>Group</th><th>Owner</th><th>Actions</th></tr></thead><tbody id="reg-body"></tbody></table>
+        <table><thead><tr><th>ID</th><th>Asset name</th><th>Type</th><th>Group</th><th>Hostname</th><th>Actions</th></tr></thead><tbody id="reg-body"></tbody></table>
       </div>
     </div>
 
