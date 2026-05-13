@@ -12,7 +12,6 @@
   <script src="https://cdn.jsdelivr.net/npm/alasql@4.2.2/dist/alasql.min.js"></script>
   
   <link rel="stylesheet" href="./assets/styles/main.css">
-  
 </head>
 <body>
 
@@ -29,6 +28,11 @@
   <div class="header-right">
     <div class="status-dot"></div>
     <div class="header-stat">Assets: <span id="hdr-total">0</span></div>
+    
+    <div class="header-stat" id="hdr-high-container" style="background: rgba(255,68,68,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--danger);">
+        High Risks: <span id="hdr-high" style="color:var(--danger); font-weight:bold;">0</span>
+    </div>
+    
     <div class="header-stat" style="background: rgba(255,153,0,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--warn);">
         Action Plans Due (14 days): <span id="hdr-deadlines" style="color:var(--warn); font-weight:bold;">0</span>
     </div>
@@ -107,35 +111,14 @@
               <option value="FA">FA — Financial Asset</option>
             </select>
           </div>
-          <div class="field"><label>Department (ICTO, HR, etc.)</label><input type="text" id="f-dept"></div>
+          <div class="field"><label>Group</label><input type="text" id="f-group" placeholder="e.g. Finance Group"></div>
         </div>
         
         <div class="form-row grid-2" style="margin-top:16px;">
           <div class="field"><label>Asset Name *</label><input type="text" id="f-name"></div>
           <div class="field"><label>Description</label><input type="text" id="f-desc"></div>
         </div>
-<<<<<<< HEAD
-
-        <div class="form-row grid-3" style="margin-top:16px;">
-          <div class="field"><label>Hostname (e.g. PLMSRVR01)</label><input type="text" id="f-hostname"></div>
-          <div class="field"><label>IP Address</label><input type="text" id="f-ip" placeholder="e.g. 10.1.1.50"></div>
-          <div class="field"><label>Environment</label>
-            <select id="f-env" onchange="runEnforcementEngine()">
-              <option value="Internal">Internal (LAN)</option>
-              <option value="External">External (DMZ)</option>
-              <option value="Internet Facing">Internet Facing</option>
-            </select>
-          </div>
-        </div>
         
-        <div class="form-row grid-3" style="margin-top:16px;">
-          <div class="field"><label>Owner</label><input type="text" id="f-owner"></div>
-          <div class="field"><label>User</label><input type="text" id="f-user"></div>
-          <div class="field"><label>Custodian</label><input type="text" id="f-custodian"></div>
-=======
-        <div class="form-row" style="margin-top:16px;"><div class="field"><label>Description</label><textarea id="f-desc"></textarea></div></div>
-        
-        <!-- REPLACED Owner / User -> Hostname / Server -->
         <div class="form-row grid-3" style="margin-top:16px;">
             <div class="field">
                 <label>Hostname</label>
@@ -151,7 +134,6 @@
             </div>
         </div>
 
-        <!-- ADDED IP Address, Environment (Dropdown), Department -->
         <div class="form-row grid-3" style="margin-top:16px;">
             <div class="field">
                 <label>IP Address (If applicable):</label>
@@ -159,7 +141,7 @@
             </div>
             <div class="field">
                 <label>Environment:</label>
-                <select id="f-environment">
+                <select id="f-environment" onchange="runEnforcementEngine()">
                     <option value="Internal">Internal</option>
                     <option value="Internet Facing">Internet Facing</option>
                     <option value="Hybrid">Hybrid</option>
@@ -167,9 +149,8 @@
             </div>
             <div class="field">
                 <label>Department:</label>
-                <input type="text" id="f-department"  placeholder="e.g. ICTO">
+                <input type="text" id="f-department" placeholder="e.g. ICTO">
             </div>
->>>>>>> 80c7a50869eb560ad247968d98128211612f8b9f
         </div>
       </div>
 
@@ -359,7 +340,6 @@
     <div id="sec-controls" class="section">
       <div class="page-header"><div><div class="page-title">CONTROL <span>METRICS</span></div><div class="page-desc">// Aggregate tracking of implemented security controls and their overall effectiveness</div></div></div>
       <div class="card"><div class="card-header">Implementation coverage across all assets</div><div id="ctrl-bars"></div></div>
-      <div class="card"><div class="card-header">Overall Control Effectiveness distribution</div><div id="ctrl-effectiveness"></div></div>
     </div>
 
     <div id="sec-actions" class="section">

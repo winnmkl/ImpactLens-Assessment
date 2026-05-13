@@ -1,14 +1,22 @@
 /* ==========================================
    IMPACTLENS - MAIN APPLICATION
-   Comprehensive risk assessment system
+   Comprehensive Risk Assessment & IAS Engine
    ========================================== */
+
+// Helper to generate dynamic dates so the 14-day alert ALWAYS works during your presentation
+const getDynamicDate = (daysToAdd) => {
+    const d = new Date();
+    d.setDate(d.getDate() + daysToAdd);
+    return d.toISOString().split('T')[0];
+};
 
 // ==========================================
 // 1. SQL DATABASE INITIALIZATION (AlaSQL)
 // ==========================================
 alasql(`CREATE TABLE IF NOT EXISTS Assets (
-    id STRING PRIMARY KEY, type STRING, dept STRING, name STRING, description STRING, 
-    hostname STRING, ip STRING, env STRING, owner STRING, user_name STRING, custodian STRING, 
+    id STRING PRIMARY KEY, type STRING, name STRING, group_name STRING, 
+    hostname STRING, server STRING, custodian STRING, description STRING, 
+    ip_address STRING, environment STRING, department STRING, 
     pii STRING, spi STRING, corp STRING, 
     ciaC INT, ciaI INT, ciaA INT, ciaScore INT, ciaClass STRING, 
     riskCategory STRING, riskDesc STRING, prob INT, sev INT, inherit STRING, residual STRING,
@@ -28,39 +36,42 @@ const storedAssets = JSON.parse(localStorage.getItem('impactlens_assets')) || []
 const storedControls = JSON.parse(localStorage.getItem('impactlens_controls')) || [];
 const storedReport = JSON.parse(localStorage.getItem('impactlens_report')) || [];
 
-// Check if this is the user's very first time opening the app
 const isInitialized = localStorage.getItem('impactlens_initialized');
 
 if (isInitialized) {
     alasql.tables.Assets.data = storedAssets;
     alasql.tables.AssetControls.data = storedControls;
 } else {
-    // FIRST TIME ONLY: Seed Sample Data with properly arranged Sequential IDs & New Context Fields
+    // FIRST TIME ONLY: Seed 12 Detailed Assets (Exactly 3 are due within 14 days)
     alasql(`INSERT INTO Assets VALUES 
-        ('IA-001', 'IA', 'Clinic', 'University Clinic Medical Records', 'Physical and digital health records.', 'CLINIC-DB', '10.1.20.5', 'Internal', 'Head Physician', 'Nurses', 'Clinic Admin', 'Y', 'Y', 'N', 3, 3, 2, 8, 'Restricted', 'cyber_ext_leak', 'Accidental data leak of health info.', 3, 5, 'High', 'Moderate', 'Mitigate', 'In Progress', 'Enforce physical access and DLP.', 'Head Physician', '2026-10-15'),
-        ('PhA-001', 'PhA', 'CET', 'CET Engineering Lab Computers', 'High-performance desktops.', 'CET-LAB', '10.1.30.x', 'Internal', 'Dean of CET', 'Students', 'Lab Tech', 'N', 'N', 'N', 1, 2, 2, 5, 'Internal Use', 'phys_theft', 'Theft of physical hardware.', 3, 3, 'Moderate', 'Moderate', 'Mitigate', 'Pending', 'Install cable locks.', 'Security', '2026-11-01'),
-        ('SA-001', 'SA', 'Library', 'PLM Library Management System', 'Book inventory.', 'LIB-APP', '10.1.15.22', 'Internal', 'Chief Librarian', 'Students', 'ITC DBA', 'Y', 'N', 'N', 2, 2, 3, 7, 'Confidential', 'cyber_int_vuln', 'Unpatched vulnerabilities.', 4, 3, 'High', 'Moderate', 'Mitigate', 'Done', 'Patch management.', 'ITC SecOps', '2026-09-30'),
-        ('PA-001', 'PA', 'Admin', 'University President & Board', 'Top-level management.', 'N/A', 'N/A', 'Internal', 'Board of Regents', 'Exec Assts', 'HR', 'Y', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 'hr_insider', 'Spear-phishing attacks.', 3, 5, 'High', 'High', 'Mitigate', 'Pending', 'Executive anti-phishing training.', 'CISO', '2026-08-15'),
-        ('SV-001', 'SV', 'ITC', 'PLM Official Website', 'Public portal.', 'plm.edu.ph', 'External', 'Internet Facing', 'VP Comms', 'Public', 'Web Team', 'N', 'N', 'Y', 1, 2, 3, 6, 'Confidential', 'cyber_ext_ddos', 'DDoS attack rendering site inaccessible.', 4, 3, 'High', 'Moderate', 'Mitigate', 'In Progress', 'Cloud DDoS mitigation.', 'ITC Infra', '2026-12-01'),
-        ('FA-001', 'FA', 'Finance', 'University Cashier Main Vault', 'Physical safe.', 'N/A', 'N/A', 'Internal', 'VP Finance', 'Cashiers', 'Head Cashier', 'N', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 'phys_theft', 'Armed robbery.', 2, 4, 'Moderate', 'Low', 'Mitigate', 'Done', 'Maintain CCTV and guards.', 'Security', '2026-07-01'),
-        ('IA-002', 'IA', 'Alumni', 'PLM Alumni Database', 'Alumni info.', 'ALUMNI-DB', '10.1.40.10', 'Internal', 'Alumni Dir', 'Staff', 'ITC DBA', 'Y', 'N', 'N', 3, 2, 2, 7, 'Confidential', 'hr_insider', 'Unauthorized extraction.', 3, 4, 'High', 'High', 'Mitigate', 'Pending', 'Enforce strict RBAC.', 'ITC SecOps', '2026-10-30'),
-        ('PhA-002', 'PhA', 'Security', 'Campus Security CCTV NVR', 'Security footage.', 'SEC-NVR', '10.1.50.2', 'Internal', 'Chief Security', 'Guards', 'ITC Infra', 'N', 'N', 'N', 3, 3, 3, 9, 'Restricted', 'phys_destruct', 'Hardware failure due to overheating.', 3, 4, 'High', 'Moderate', 'Mitigate', 'In Progress', 'Relocate NVR to climate-controlled room.', 'Chief Security', '2026-09-15'),
-        ('SA-002', 'SA', 'HR', 'HR Payroll System', 'Salary calculations.', 'HR-PAY', '10.1.60.5', 'Internal', 'HR Dir', 'Payroll Staff', 'ITC DBA', 'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 'hr_insider', 'Disgruntled employee modifying bands.', 2, 5, 'Moderate', 'Moderate', 'Mitigate', 'Pending', 'Segregation of duties.', 'HR Dir', '2026-11-15'),
-        ('FA-002', 'FA', 'Finance', 'University Digital Banking Portal', 'Online bank access.', 'FIN-WEB', 'External', 'Internet Facing', 'VP Finance', 'Finance Mgrs', 'Finance IT', 'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 'cyber_int_unauth', 'Credential stuffing.', 3, 5, 'High', 'Low', 'Mitigate', 'Pending', 'Require hardware keys.', 'VP Finance', '2026-12-15')
+        ('IA-001', 'IA', 'University Clinic Medical Records', 'Clinic', 'CLINIC-DB-01', 'Primary Health DB', 'Records Admin', 'Physical and digital health records.', '10.50.1.10', 'Internal', 'Medical Services', 'Y', 'Y', 'N', 3, 3, 2, 8, 'Restricted', 'cyber_ext_leak', 'Accidental data leak of health info.', 3, 5, 'High', 'Moderate', 'Mitigate', 'In Progress', 'Enforce physical access and DLP.', 'Head Physician', '${getDynamicDate(5)}'),
+        ('PhA-001', 'PhA', 'CET Engineering Lab Computers', 'CET', 'CET-LAB-XX', 'Lab Workstations', 'CET Lab Tech', 'High-performance desktops.', 'DHCP', 'Internal', 'Engineering', 'N', 'N', 'N', 1, 2, 2, 5, 'Internal Use', 'phys_theft', 'Theft of physical hardware.', 3, 3, 'Moderate', 'Moderate', 'Mitigate', 'Pending', 'Install cable locks.', 'Security Office', '${getDynamicDate(20)}'),
+        ('SA-001', 'SA', 'PLM Library Management System', 'Library', 'LIB-APP-01', 'Library App Server', 'ITC DBA', 'Book inventory.', '10.20.5.15', 'Hybrid', 'Library Services', 'Y', 'N', 'N', 2, 2, 3, 7, 'Confidential', 'cyber_int_vuln', 'Unpatched vulnerabilities.', 4, 3, 'High', 'Moderate', 'Mitigate', 'Done', 'Patch management.', 'ITC SecOps', '${getDynamicDate(-5)}'),
+        ('PA-001', 'PA', 'University President & Board', 'Admin', 'EXEC-LPT-XX', 'Exec Endpoints', 'Univ Sec Office', 'Top-level management.', 'DHCP', 'Hybrid', 'Administration', 'Y', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 'hr_insider', 'Spear-phishing attacks.', 3, 5, 'High', 'High', 'Avoid', 'Pending', 'Cease email wire transfer authorizations entirely.', 'CISO', '${getDynamicDate(40)}'),
+        ('SV-001', 'SV', 'PLM Official Website', 'ITC', 'WEB-PROD-01', 'Public Web Server', 'Web Team', 'Public portal.', '203.177.X.X', 'Internet Facing', 'ITC', 'N', 'N', 'Y', 1, 2, 3, 6, 'Confidential', 'cyber_ext_ddos', 'DDoS attack rendering site inaccessible.', 4, 3, 'High', 'Moderate', 'Transfer', 'In Progress', 'Subscribe to Cloudflare DDoS mitigation.', 'ITC Infra', '${getDynamicDate(12)}'),
+        ('FA-001', 'FA', 'University Cashier Main Vault', 'Finance', 'N/A', 'N/A', 'Head Cashier', 'Physical safe holding daily collections.', 'N/A', 'Internal', 'Finance', 'N', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 'phys_theft', 'Armed robbery.', 2, 4, 'Moderate', 'Low', 'Transfer', 'Done', 'Insure the vault contents via third party.', 'Security', '${getDynamicDate(60)}'),
+        ('IA-002', 'IA', 'PLM Alumni Database', 'Alumni', 'ALUM-DB-01', 'Alumni Records DB', 'Enterprise Sys Team', 'Contact info and employment history.', '10.50.2.20', 'Internal', 'Alumni Affairs', 'Y', 'N', 'N', 3, 2, 2, 7, 'Confidential', 'hr_insider', 'Unauthorized extraction.', 3, 4, 'High', 'High', 'Mitigate', 'Pending', 'Enforce strict RBAC.', 'ITC SecOps', '${getDynamicDate(10)}'),
+        ('PhA-002', 'PhA', 'Campus Security CCTV NVR', 'Security', 'SEC-NVR-01', 'Video Storage Array', 'Infrastructure Team', 'Stores 30 days of security footage.', '10.99.1.50', 'Internal', 'Campus Security', 'N', 'N', 'N', 3, 3, 3, 9, 'Restricted', 'phys_destruct', 'Hardware failure due to overheating.', 3, 4, 'High', 'Moderate', 'Mitigate', 'In Progress', 'Relocate NVR to climate-controlled room.', 'Chief Security', '${getDynamicDate(45)}'),
+        ('SA-002', 'SA', 'HR Payroll System', 'HR', 'HR-APP-01', 'Payroll Application', 'ITC DBA', 'Salary calculations.', '10.30.1.10', 'Internal', 'Human Resources', 'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 'hr_insider', 'Disgruntled employee modifying bands.', 2, 5, 'Moderate', 'Moderate', 'Mitigate', 'Pending', 'Segregation of duties.', 'HR Dir', '${getDynamicDate(25)}'),
+        ('FA-002', 'FA', 'University Digital Banking Portal', 'Finance', 'BANK-GW-01', 'Banking Gateway', 'Finance IT', 'Online bank access.', '10.40.1.5', 'Internet Facing', 'Finance', 'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 'cyber_int_unauth', 'Credential stuffing.', 3, 5, 'High', 'Low', 'Mitigate', 'Pending', 'Require hardware keys.', 'VP Finance', '${getDynamicDate(50)}'),
+        ('SV-002', 'SV', 'Cloud Student Email Services', 'ITC', 'CLOUD-MAIL', 'O365 Tenant', 'ITC Mail Admin', 'Student email hosting.', 'Cloud', 'Internet Facing', 'ITC', 'Y', 'N', 'N', 2, 2, 3, 7, 'Confidential', 'cyber_ext_supply', 'Supply chain breach of cloud provider.', 2, 4, 'Moderate', 'Moderate', 'Transfer', 'Done', 'Managed via Microsoft SLA.', 'ITC Dir', '${getDynamicDate(30)}'),
+        ('SA-003', 'SA', 'PLM E-Learning LMS', 'Academic', 'LMS-APP-01', 'Moodle Server', 'Academic IT', 'Online modules and quizzes.', '10.20.10.5', 'Hybrid', 'Academic Affairs', 'Y', 'N', 'N', 2, 3, 3, 8, 'Restricted', 'cyber_ext_ddos', 'Volumetric DDoS during finals week.', 3, 3, 'Moderate', 'Very Low', 'Accept', 'Done', 'Risk is accepted during off-peak seasons.', 'Dean', '${getDynamicDate(100)}')
     `);
     
-    // Seed Control Checkboxes (Mapped to the 13 controls format)
+    // Seed 13-Point Control Checkboxes mapped correctly
     alasql(`INSERT INTO AssetControls VALUES 
-        ('IA-001', 1), ('IA-001', 3), ('IA-001', 7),
-        ('PhA-001', 5),
+        ('IA-001', 1), ('IA-001', 3), ('IA-001', 7), ('IA-001', 12),
+        ('PhA-001', 5), ('PhA-001', 8),
         ('SA-001', 1), ('SA-001', 11),
         ('PA-001', 1),
-        ('SV-001', 10), ('SV-001', 12),
+        ('SV-001', 10), ('SV-001', 12), ('SV-001', 13),
         ('FA-001', 1), ('FA-001', 2), ('FA-001', 5),
         ('IA-002', 1), ('IA-002', 3), ('IA-002', 12),
         ('PhA-002', 1), ('PhA-002', 5), ('PhA-002', 6),
         ('SA-002', 1), ('SA-002', 2), ('SA-002', 3), ('SA-002', 4),
-        ('FA-002', 3), ('FA-002', 4), ('FA-002', 10)
+        ('FA-002', 3), ('FA-002', 4), ('FA-002', 10),
+        ('SV-002', 1), ('SV-002', 3), ('SV-002', 4),
+        ('SA-003', 1), ('SA-003', 6), ('SA-003', 10), ('SA-003', 13)
     `);
     
     localStorage.setItem('impactlens_initialized', 'true');
@@ -94,20 +105,15 @@ const INHERIT = {
   '1-1':'Very Low','1-2':'Low','1-3':'Low','1-4':'Low','1-5':'Moderate' 
 };
 
-const CIA_CLASS = {
-  3:'Public',4:'Internal Use',5:'Internal Use',6:'Confidential',
-  7:'Confidential',8:'Restricted',9:'Restricted'
-};
+const CIA_CLASS = { 3:'Public',4:'Internal Use',5:'Internal Use',6:'Confidential', 7:'Confidential',8:'Restricted',9:'Restricted' };
 
 const CTRL_NAMES = [
   'Documented procedures', 'Segregation of duties', 'Role-Based Access Control (RBAC)', 
   'Multi-Factor Authentication (MFA)', 'Physical controls (CCTV, Locks)', 'Automated Information backup', 
   'Encryption (At Rest / In Transit)', 'Asset disposal procedures', 'Endpoint Detection & Response (EDR)', 
-  'Network Firewall / WAF', 'Vulnerability Scanning & Patching', 'Network Segmentation (VLANs)', 
-  'Incident Response Plan'
+  'Network Firewall / WAF', 'Vulnerability Scanning & Patching', 'Network Segmentation (VLANs)', 'Incident Response Plan'
 ];
 
-// Threat-to-Control Map (The Guardrail Matrix)
 const controlMap = {
     'phys_theft': [5, 7, 8], 'phys_destruct': [5, 6, 13], 'hr_insider': [2, 3, 4, 12],
     'hr_accidental': [1, 3, 6], 'cyber_ext_ransomware': [4, 6, 9, 10, 11, 13], 
@@ -129,24 +135,18 @@ const RISK_TEMPLATES = {
     "legal_dpa": { desc: "Non-compliance to Data Privacy Act (DPA)", prob: "3", sev: "5", action: "Appoint DPO, conduct regular Privacy Impact Assessments (PIA), and update privacy notices." }
 };
 
-// Sequential ID Generator Function
 function generateSequentialId(type) {
     if (!type) return '';
     const existing = alasql(`SELECT id FROM Assets WHERE type = '${type}'`);
     let maxNumber = 0;
-    
     existing.forEach(row => {
         const parts = row.id.split('-');
         if (parts.length === 2) {
             const num = parseInt(parts[1], 10);
-            if (!isNaN(num) && num > maxNumber) {
-                maxNumber = num;
-            }
+            if (!isNaN(num) && num > maxNumber) maxNumber = num;
         }
     });
-    
-    const nextNumber = String(maxNumber + 1).padStart(3, '0');
-    return `${type}-${nextNumber}`;
+    return `${type}-${String(maxNumber + 1).padStart(3, '0')}`;
 }
 
 // ==========================================
@@ -155,7 +155,6 @@ function generateSequentialId(type) {
 function runEnforcementEngine() {
     const type = document.getElementById('f-type').value;
 
-    // GENERATE SEQUENTIAL ID automatically if not editing
     if (!editingId) {
         const currentId = document.getElementById('f-id').value;
         if (type && (!currentId || !currentId.startsWith(type + '-'))) {
@@ -165,12 +164,11 @@ function runEnforcementEngine() {
         }
     }
 
-    const env = document.getElementById('f-env').value;
-    const pii = document.getElementById('f-pii');
-    const spi = document.getElementById('f-spi');
-    const corp = document.getElementById('f-corp');
+    const env = document.getElementById('f-environment') ? document.getElementById('f-environment').value : 'Internal';
+    const pii = document.getElementById('f-pii') ? document.getElementById('f-pii').value : 'N';
+    const spi = document.getElementById('f-spi') ? document.getElementById('f-spi').value : 'N';
     
-    // GUARDRAIL 1: Asset Type restricts Threat Categories
+    // GUARDRAIL 1: Threat Restrictions
     const optPhys = document.getElementById('opt-phys');
     const optHr = document.getElementById('opt-hr');
     const optCyberExt = document.getElementById('opt-cyber-ext');
@@ -178,77 +176,40 @@ function runEnforcementEngine() {
     const optComp = document.getElementById('opt-comp');
 
     if (type === 'PhA') {
-        if(optCyberExt) optCyberExt.disabled = true;
-        if(optCyberInt) optCyberInt.disabled = true;
-        if(optComp) optComp.disabled = true;
-        if(optPhys) optPhys.disabled = false;
-        if(optHr) optHr.disabled = false;
+        if(optCyberExt) optCyberExt.disabled = true; if(optCyberInt) optCyberInt.disabled = true; if(optComp) optComp.disabled = true;
+        if(optPhys) optPhys.disabled = false; if(optHr) optHr.disabled = false;
     } else if (type === 'PA') {
-        if(optCyberExt) optCyberExt.disabled = true;
-        if(optCyberInt) optCyberInt.disabled = true;
-        if(optPhys) optPhys.disabled = true;
-        if(optComp) optComp.disabled = false;
-        if(optHr) optHr.disabled = false;
+        if(optCyberExt) optCyberExt.disabled = true; if(optCyberInt) optCyberInt.disabled = true; if(optPhys) optPhys.disabled = true;
+        if(optComp) optComp.disabled = false; if(optHr) optHr.disabled = false;
     } else if (type === 'SA' || type === 'SV' || type === 'IA' || type === 'FA') {
         if(optPhys) optPhys.disabled = true;
-        if(optCyberExt) optCyberExt.disabled = false;
-        if(optCyberInt) optCyberInt.disabled = false;
-        if(optComp) optComp.disabled = false;
-        if(optHr) optHr.disabled = false;
+        if(optCyberExt) optCyberExt.disabled = false; if(optCyberInt) optCyberInt.disabled = false;
+        if(optComp) optComp.disabled = false; if(optHr) optHr.disabled = false;
     } else {
         [optPhys, optHr, optCyberExt, optCyberInt, optComp].forEach(el => { if(el) el.disabled = false; });
     }
 
-    // GUARDRAIL 2: Asset Type restricts Data Selection
-    if (type === 'PhA') {
-        ['f-pii','f-spi','f-corp'].forEach(id => { 
-            const el = document.getElementById(id);
-            if(el) { el.value = 'N'; el.disabled = true; }
-        });
-    } else if (type === 'PA') {
-        ['f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) el.disabled = false; });
-        const elPii = document.getElementById('f-pii');
-        if(elPii) { elPii.value = 'Y'; elPii.disabled = true; }
-    } else if (type === 'FA') {
-        ['f-pii','f-spi','f-corp'].forEach(id => { 
-            const el = document.getElementById(id);
-            if(el) { el.value = 'Y'; el.disabled = true; }
-        });
-    } else {
-        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) el.disabled = false; });
-    }
-
-    // GUARDRAIL 3: Data Drives CIA
+    // GUARDRAIL 2: Data Drives CIA
     const lockC = document.getElementById('lock-c');
     const lockA = document.getElementById('lock-a');
     
     if (type === 'FA') {
         ['f-c','f-i','f-a'].forEach(id => { const el = document.getElementById(id); if(el) { el.value = '3'; el.disabled = true; } });
-        if(lockC) lockC.textContent = '🔒'; 
-        if(lockA) lockA.textContent = '🔒';
+        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) { el.value = 'Y'; el.disabled = true; } });
+        if(lockC) lockC.textContent = '🔒'; if(lockA) lockA.textContent = '🔒';
     } else {
-        // PII/SPI forces Confidentiality to 3
-        const hasPiiSpi = (pii && pii.value === 'Y') || (spi && spi.value === 'Y');
-        const elC = document.getElementById('f-c');
-        if (hasPiiSpi && elC) {
-            elC.value = '3';
-            elC.disabled = true;
-            if(lockC) lockC.textContent = '🔒 Data Driven';
-        } else if(elC) {
-            elC.disabled = false;
-            if(lockC) lockC.textContent = '';
-        }
+        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) el.disabled = false; });
+        if (type === 'PA') { const e = document.getElementById('f-pii'); if(e) { e.value = 'Y'; e.disabled = true; } }
+        if (type === 'PhA') { ['f-pii','f-spi','f-corp'].forEach(id => { const e=document.getElementById(id); if(e){e.value='N';e.disabled=true;} }); }
 
-        // Internet Facing forces Availability to 3
+        const hasPiiSpi = (pii === 'Y') || (spi === 'Y');
+        const elC = document.getElementById('f-c');
+        if (hasPiiSpi && elC) { elC.value = '3'; elC.disabled = true; if(lockC) lockC.textContent = '🔒 Data Driven'; } 
+        else if(elC) { elC.disabled = false; if(lockC) lockC.textContent = ''; }
+
         const elA = document.getElementById('f-a');
-        if (env === 'Internet Facing' && elA) {
-            elA.value = '3';
-            elA.disabled = true;
-            if(lockA) lockA.textContent = '🔒 Env Driven';
-        } else if(elA) {
-            elA.disabled = false;
-            if(lockA) lockA.textContent = '';
-        }
+        if (env === 'Internet Facing' && elA) { elA.value = '3'; elA.disabled = true; if(lockA) lockA.textContent = '🔒 Env Driven'; } 
+        else if(elA) { elA.disabled = false; if(lockA) lockA.textContent = ''; }
         
         const elI = document.getElementById('f-i');
         if(elI) elI.disabled = false;
@@ -258,7 +219,7 @@ function runEnforcementEngine() {
     const classEl = document.getElementById('cia-class');
     if(classEl) classEl.textContent = CIA_CLASS[score] || 'N/A';
 
-    // GUARDRAIL 4: Disable irrelevant controls based on selected Threat
+    // GUARDRAIL 3: Mistake-Proof Controls
     const threat = g('f-risk-category');
     const validControls = controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13];
 
@@ -267,16 +228,9 @@ function runEnforcementEngine() {
         const label = cb ? cb.parentElement : null;
         if(cb && label) {
             if(validControls.includes(i)) {
-                cb.disabled = false;
-                label.style.opacity = '1';
-                label.style.textDecoration = 'none';
-                label.style.cursor = 'pointer';
+                cb.disabled = false; label.style.opacity = '1'; label.style.textDecoration = 'none'; label.style.cursor = 'pointer';
             } else {
-                cb.disabled = true;
-                cb.checked = false; 
-                label.style.opacity = '0.3';
-                label.style.textDecoration = 'line-through';
-                label.style.cursor = 'not-allowed';
+                cb.disabled = true; cb.checked = false; label.style.opacity = '0.3'; label.style.textDecoration = 'line-through'; label.style.cursor = 'not-allowed';
             }
         }
     }
@@ -289,9 +243,10 @@ function calculateRiskMath() {
     let p = parseInt(g('f-prob')) || 3;
     let s = parseInt(g('f-sev')) || 3;
     const threat = g('f-risk-category');
+    const env = g('f-environment');
 
-    // GUARDRAIL 5: Environmental Threat Escalation
-    if (g('f-env') === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.min(5, p + 1);
+    // GUARDRAIL 4: Risk Escalations
+    if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.min(5, p + 1);
     if ((g('f-pii') === 'Y' || g('f-spi') === 'Y') && (threat === 'cyber_ext_leak' || threat === 'legal_dpa')) s = 5;
 
     const inherentRating = INHERIT[s + '-' + p] || 'Moderate';
@@ -311,7 +266,6 @@ function calculateRiskMath() {
         }
     }
 
-    // Defense in Depth Math: Requires overlapping controls
     let resP = Math.max(1, p - Math.floor(pRed / 1.5));
     let resS = Math.max(1, s - Math.floor(sRed / 1.5));
     const residualRating = INHERIT[resS + '-' + resP] || 'Low';
@@ -322,16 +276,14 @@ function calculateRiskMath() {
     const fbEl = document.getElementById('control-feedback');
     if (fbEl) fbEl.textContent = `(${activeValidCount} relevant mitigating controls applied)`;
 
-    // GUARDRAIL 6: Action Plan Enforcement
+    // GUARDRAIL 5: Risk Appetite Enforcement
     const actTypeSelect = document.getElementById('f-action-type');
     const lockTreat = document.getElementById('lock-treat');
     
     if (actTypeSelect) {
         if (residualRating === 'High') {
             if (actTypeSelect.value === 'Accept') actTypeSelect.value = 'Mitigate';
-            Array.from(actTypeSelect.options).forEach(opt => {
-                if (opt.value === 'Accept') opt.disabled = true;
-            });
+            Array.from(actTypeSelect.options).forEach(opt => { if (opt.value === 'Accept') opt.disabled = true; });
             if(lockTreat) lockTreat.textContent = '🔒 Cannot accept High Risk';
         } else {
             Array.from(actTypeSelect.options).forEach(opt => opt.disabled = false);
@@ -404,15 +356,12 @@ function g(id) { const el = document.getElementById(id); return el ? el.value : 
 document.addEventListener('click', function(event) {
     const wrapper = document.querySelector('.multi-select-wrapper');
     const dropdown = document.getElementById('ctrl-dropdown');
-    if (wrapper && dropdown && !wrapper.contains(event.target)) {
-        dropdown.classList.remove('show');
-    }
+    if (wrapper && dropdown && !wrapper.contains(event.target)) dropdown.classList.remove('show');
 });
 
 function updateTagsUI() {
     const cont = document.getElementById('selected-controls-tags');
-    if (!cont) return; 
-    cont.innerHTML = '';
+    if (!cont) return; cont.innerHTML = '';
     [1,2,3,4,5,6,7,8,9,10,11,12,13].forEach(n => {
         const cb = document.getElementById('ctrl'+n);
         if (cb && cb.checked) {
@@ -421,10 +370,7 @@ function updateTagsUI() {
     });
 }
 
-function updateTags() {
-    updateTagsUI();
-    runEnforcementEngine(); 
-}
+function updateTags() { updateTagsUI(); runEnforcementEngine(); }
 
 function removeTag(n, event) {
     event.stopPropagation();
@@ -436,15 +382,25 @@ function removeTag(n, event) {
 function calculateDeadlines() {
     const today = new Date(); today.setHours(0,0,0,0);
     const limit = new Date(today); limit.setDate(today.getDate() + 14);
-    let count = 0;
+    let dCount = 0;
     alasql("SELECT actionDate, actionStatus, actionType FROM Assets").forEach(a => {
         if (a.actionDate && a.actionStatus !== 'Done' && a.actionType !== 'Accept') {
             const target = new Date(a.actionDate); target.setHours(0,0,0,0);
-            if (target <= limit) count++;
+            if (target <= limit) dCount++;
         }
     });
-    const b = document.getElementById('hdr-deadlines');
-    if(b) { b.textContent = count; b.style.color = count > 0 ? "var(--danger)" : "var(--warn)"; }
+    
+    const hCount = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE residual = 'High'");
+    
+    // Dynamically update the HTML badges
+    const highBadge = document.getElementById('hdr-high');
+    if(highBadge) highBadge.textContent = hCount;
+
+    const deadBadge = document.getElementById('hdr-deadlines');
+    if(deadBadge) {
+        deadBadge.textContent = dCount;
+        deadBadge.style.color = dCount > 0 ? "var(--danger)" : "var(--warn)";
+    }
 }
 
 // ==========================================
@@ -467,9 +423,11 @@ function saveAssetToDB() {
   alasql(`DELETE FROM Assets WHERE id = '${id}'`);
   alasql(`DELETE FROM AssetControls WHERE asset_id = '${id}'`);
 
+  // Perfectly aligned 30 parameters matching the schema mapping
   alasql(`INSERT INTO Assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
-      id, type, g('f-dept'), name, g('f-desc'), 
-      g('f-hostname'), g('f-ip'), g('f-env'), g('f-owner'), g('f-user'), g('f-custodian'), 
+      id, type, name, g('f-group'), 
+      g('f-hostname'), g('f-server'), g('f-custodian'), g('f-desc'), 
+      g('f-ip'), g('f-environment'), g('f-department'),
       g('f-pii'), g('f-spi'), g('f-corp'),
       c, ii, a, c+ii+a, document.getElementById('cia-class').textContent, 
       g('f-risk-category'), g('f-risk-desc'), p, s, inherit, residual, 
@@ -478,17 +436,11 @@ function saveAssetToDB() {
 
   for(let i=1; i<=13; i++) { 
       const cb = document.getElementById('ctrl'+i);
-      if(cb && cb.checked) {
-          alasql("INSERT INTO AssetControls VALUES (?,?)", [id, i]); 
-      }
+      if(cb && cb.checked && !cb.disabled) { alasql("INSERT INTO AssetControls VALUES (?,?)", [id, i]); }
   }
 
-  persistDB();
-  editingId = null;
-  clearForm();
-  notify(`Asset ${id} saved successfully!`);
-  showSection('register');
-  renderDashboard();
+  persistDB(); editingId = null; clearForm(); notify(`Asset ${id} saved successfully!`);
+  showSection('register'); renderDashboard();
 }
 
 function editAsset(id) {
@@ -500,11 +452,13 @@ function editAsset(id) {
       const titleEl = document.getElementById('form-title');
       if(titleEl) titleEl.innerHTML = 'UPDATE <span>RECORD</span>';
 
+      // Flawless one-to-one mapping for accurate editing
       const map = { 
-          'f-type':a.type, 'f-dept':a.dept, 'f-id':a.id, 'f-name':a.name, 'f-desc':a.description, 
-          'f-hostname':a.hostname, 'f-ip':a.ip, 'f-env':a.env, 'f-owner':a.owner, 
-          'f-user':a.user_name, 'f-custodian':a.custodian, 'f-pii':a.pii, 'f-spi':a.spi, 
-          'f-corp':a.corp, 'f-c':a.ciaC, 'f-i':a.ciaI, 'f-a':a.ciaA, 
+          'f-type':a.type, 'f-id':a.id, 'f-name':a.name, 'f-group':a.group_name, 'f-desc':a.description, 
+          'f-hostname':a.hostname, 'f-server':a.server, 'f-custodian':a.custodian, 
+          'f-ip':a.ip_address, 'f-environment':a.environment, 'f-department':a.department, 
+          'f-pii':a.pii, 'f-spi':a.spi, 'f-corp':a.corp, 
+          'f-c':a.ciaC, 'f-i':a.ciaI, 'f-a':a.ciaA, 
           'f-risk-category':a.riskCategory, 'f-risk-desc':a.riskDesc, 'f-prob':a.prob, 'f-sev':a.sev, 
           'f-action-type':a.actionType, 'f-action-status':a.actionStatus, 
           'f-action-plan':a.actionPlan, 'f-action-owner':a.actionOwner, 'f-action-date':a.actionDate 
@@ -523,8 +477,7 @@ function editAsset(id) {
 
       runEnforcementEngine(); 
       setTimeout(updateTagsUI, 50); 
-      showSection('add'); 
-      window.scrollTo(0,0);
+      showSection('add'); window.scrollTo(0,0);
   } catch (err) {
       console.error("Edit Error:", err);
       notify("Failed to open asset for editing.", true);
@@ -552,13 +505,13 @@ function deleteAsset(id) {
 }
 
 function clearForm() {
-  const fields = ['f-name','f-owner','f-user','f-custodian','f-desc','f-risk-desc','f-action-plan','f-action-owner','f-action-date','f-risk-category','f-hostname','f-ip','f-dept'];
+  const fields = ['f-name','f-group','f-hostname','f-server','f-custodian','f-desc', 'f-ip', 'f-department', 'f-risk-desc','f-action-plan','f-action-owner','f-action-date','f-risk-category'];
   fields.forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   
   const selects = ['f-type', 'f-id'];
   selects.forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
 
-  if(document.getElementById('f-env')) document.getElementById('f-env').value = 'Internal';
+  if(document.getElementById('f-environment')) document.getElementById('f-environment').value = 'Internal';
   if(document.getElementById('f-pii')) document.getElementById('f-pii').value = 'N';
   if(document.getElementById('f-spi')) document.getElementById('f-spi').value = 'N';
   if(document.getElementById('f-corp')) document.getElementById('f-corp').value = 'N';
@@ -620,8 +573,8 @@ function renderRegister() {
       <td><span class="badge badge-id">${a.id}</span></td>
       <td><strong>${a.name}</strong></td>
       <td><span class="badge badge-type">${a.type}</span></td>
-      <td style="color:var(--text2)">${a.dept||'—'}</td>
-      <td style="color:var(--text2)">${a.owner||'—'}</td>
+      <td style="color:var(--text2)">${a.group_name||'—'}</td>
+      <td style="color:var(--text2)">${a.hostname||'—'}</td>
       <td>
         <button class="btn btn-sm" onclick="editAsset('${a.id}')">Edit</button>
         <button class="btn btn-sm btn-danger" style="margin-left:4px" onclick="deleteAsset('${a.id}')">Del</button>
@@ -640,28 +593,25 @@ function renderRiskRegister() {
   const tbody = document.getElementById('risk-body');
   if(!tbody) return;
   
-  if (!data.length) { tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">No records in DB.</td></tr>`; return; }
+  if (!data.length) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;">No records in DB.</td></tr>`; return; }
 
-  tbody.innerHTML = data.map(a => `
+  tbody.innerHTML = data.map(a => {
+    const ctrls = alasql("SELECT ctrl_id FROM AssetControls WHERE asset_id = ?", [a.id]).length;
+    return `
     <tr>
       <td><span class="badge badge-id">${a.id}</span></td>
       <td><strong>${a.name}</strong></td>
       <td style="color:var(--text2);font-size:11px">${(a.riskDesc||'—').substring(0,60)}${(a.riskDesc||'').length>60?'...':''}</td>
       <td>${riskBadge(a.inherit)}</td>
+      <td style="font-size:11px;color:var(--text2);">${ctrls} Controls</td>
       <td>${riskBadge(a.residual)}</td>
     </tr>
-  `).join('');
+  `}).join('');
 }
 
 function updateMatrixHeatmap() {
-  document.querySelectorAll('.mx-count').forEach(el => {
-      el.textContent = '';
-      el.classList.remove('active');
-      el.style.opacity = "0";
-  });
-  
+  document.querySelectorAll('.mx-count').forEach(el => { el.textContent = ''; el.classList.remove('active'); el.style.opacity = "0"; });
   const riskCounts = alasql("SELECT prob, sev, COUNT(*) as c FROM Assets WHERE prob IS NOT NULL AND sev IS NOT NULL GROUP BY prob, sev");
-  
   riskCounts.forEach(row => {
      const cellId = `mx-${row.prob}-${row.sev}`;
      const cell = document.getElementById(cellId);
@@ -696,49 +646,60 @@ function renderControls() {
         </div>`;
       }).join('');
   }
-
-  // Remove the old Effectiveness distribution chart since we removed the manual effectiveness metric
-  const distEl = document.getElementById('ctrl-effectiveness');
-  if(distEl) {
-      distEl.parentElement.style.display = 'none';
-  }
 }
 
+// Group Actions by Risk Treatment Strategy
 function renderActions() {
-  const items = alasql("SELECT * FROM Assets WHERE residual IN ('High', 'Moderate') AND actionType != 'Accept'");
-  const el = document.getElementById('actions-content');
-  if(!el) return;
+    const items = alasql("SELECT * FROM Assets WHERE residual IN ('High', 'Moderate') AND actionType != 'Accept' ORDER BY actionDate ASC");
+    const el = document.getElementById('actions-content');
+    if(!el) return;
 
-  if (!items.length) {
-    el.innerHTML = '<div class="empty-state"><div>[✓]</div>No pending actions for High or Moderate risks. Excellent posture!</div>';
-    return;
-  }
-  el.innerHTML = items.map(a => `
-    <div class="card" style="border-left:3px solid ${a.residual==='High'?'var(--danger)':'var(--warn)'}">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-        <div>
-          <span class="badge badge-id" style="margin-right:8px">${a.id}</span>
-          <strong style="font-size:14px">${a.name}</strong>
-          <span class="badge badge-type" style="margin-left:8px">${a.type}</span>
-        </div>
-        ${riskBadge(a.residual)}
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div>
-          <div style="font-family:var(--mono);font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);margin-bottom:4px">Action Plan (${a.actionType}) - <span style="color:var(--accent2)">${a.actionStatus}</span></div>
-          <div style="font-size:12px;color:var(--text2)">${a.actionPlan||'<span style="color:var(--danger)">No Action Plan Set!</span>'}</div>
-        </div>
-        <div style="text-align:right;">
-          <div style="font-family:var(--mono);font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);margin-bottom:4px">Due Date</div>
-          <div style="font-size:13px;color:var(--text)">${a.actionDate||'Not Set'}</div>
-          <div style="margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--text3)">Owner: <span style="color:var(--text2)">${a.actionOwner||'—'}</span></div>
-        </div>
-      </div>
-      <div style="margin-top:12px;display:flex;justify-content:flex-end">
-        <button class="btn btn-sm" onclick="editAsset('${a.id}')">Update Plan →</button>
-      </div>
-    </div>
-  `).join('');
+    if (!items.length) {
+        el.innerHTML = '<div class="empty-state"><div>[✓]</div>No pending actions for High or Moderate risks. Excellent posture!</div>';
+        return;
+    }
+
+    const groups = { 'Mitigate': [], 'Transfer': [], 'Avoid': [] };
+    items.forEach(a => { if (groups[a.actionType]) groups[a.actionType].push(a); else groups['Mitigate'].push(a); });
+
+    let html = '';
+    for (const [strategy, groupItems] of Object.entries(groups)) {
+        if (groupItems.length === 0) continue;
+        
+        html += `<div style="margin-bottom:32px;">
+            <div style="font-family:var(--mono); font-size:14px; color:var(--text); border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:16px;">
+                <span style="color:var(--accent2)">Strategy Category:</span> ${strategy.toUpperCase()} (${groupItems.length} items)
+            </div>`;
+        
+        html += groupItems.map(a => `
+            <div class="card" style="border-left:3px solid ${a.residual==='High'?'var(--danger)':'var(--warn)'}; margin-bottom:12px; padding:16px 24px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+                    <div>
+                        <span class="badge badge-id" style="margin-right:8px">${a.id}</span>
+                        <strong style="font-size:14px">${a.name}</strong>
+                        <span class="badge badge-type" style="margin-left:8px">${a.type}</span>
+                    </div>
+                    ${riskBadge(a.residual)}
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+                    <div>
+                        <div style="font-family:var(--mono);font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);margin-bottom:4px">Action Plan / Goal - <span style="color:var(--accent2)">${a.actionStatus}</span></div>
+                        <div style="font-size:12px;color:var(--text2)">${a.actionPlan||'<span style="color:var(--danger)">No Action Plan Set!</span>'}</div>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-family:var(--mono);font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);margin-bottom:4px">Target Timeline</div>
+                        <div style="font-size:13px;color:var(--text)">${a.actionDate||'Not Set'}</div>
+                        <div style="margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--text3)">Owner: <span style="color:var(--text2)">${a.actionOwner||'—'}</span></div>
+                    </div>
+                </div>
+                <div style="margin-top:12px;display:flex;justify-content:flex-end">
+                    <button class="btn btn-sm" onclick="editAsset('${a.id}')">Update Asset →</button>
+                </div>
+            </div>
+        `).join('');
+        html += `</div>`; 
+    }
+    el.innerHTML = html;
 }
 
 function renderDashboard() {
@@ -749,23 +710,13 @@ function renderDashboard() {
   if(headerTotal) headerTotal.textContent = total;
   if(navTotal) navTotal.textContent = total;
   
-  const highRisk = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE residual = 'High'");
-  const headerHigh = document.getElementById('hdr-high');
-  const navHigh = document.getElementById('nav-high');
-  if(headerHigh) headerHigh.textContent = highRisk;
-  if(navHigh) navHigh.textContent = highRisk;
-
-  const actions = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE residual IN ('High', 'Moderate') AND actionType != 'Accept'");
-  const navActions = document.getElementById('nav-actions');
-  if(navActions) navActions.textContent = actions;
-
   const dmTotal = document.getElementById('dm-total');
   const dmHigh = document.getElementById('dm-high');
   const dmMod = document.getElementById('dm-mod');
   const dmPii = document.getElementById('dm-pii');
   
   if(dmTotal) dmTotal.textContent = total;
-  if(dmHigh) dmHigh.textContent = highRisk;
+  if(dmHigh) dmHigh.textContent = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE residual = 'High'");
   if(dmMod) dmMod.textContent = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE residual = 'Moderate'");
   if(dmPii) dmPii.textContent = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE pii = 'Y' OR spi = 'Y'");
 
@@ -820,12 +771,12 @@ function exportDataXLSX() {
     const dbAssets = alasql("SELECT * FROM Assets");
     const rep = alasql("SELECT * FROM ReportData WHERE id = 1")[0] || {};
     
-    const headers = [ "Asset ID", "Name of Information Asset", "Description", "Dept", "Owner", "User", "Custodian", "Type", "Hostname", "IP", "Env", "PII", "SPI", "Corp Info", "C", "I", "A", "Valuation", "Class", "Risk Threat", "Prob", "Sev", "Inherent", "C1 (Procedures)", "C2 (Segregation)", "C3 (RBAC)", "C4 (MFA)", "C5 (Physical)", "C6 (Backup)", "C7 (Encryption)", "C8 (Disposal)", "C9 (EDR)", "C10 (Firewall)", "C11 (Patching)", "C12 (VLANs)", "C13 (IR Plan)", "Residual", "Strategy", "Status", "Action Plan", "Action Owner", "Target Date" ];
+    const headers = [ "Asset ID", "Name of Information Asset", "Description", "Group", "Hostname", "Server", "Custodian", "IP Address", "Environment", "Department", "Type", "PII", "SPI", "Corp Info", "C", "I", "A", "Valuation", "Class", "Risk Threat", "Prob", "Sev", "Inherent", "C1 (Procedures)", "C2 (Segregation)", "C3 (RBAC)", "C4 (MFA)", "C5 (Physical)", "C6 (Backup)", "C7 (Encryption)", "C8 (Disposal)", "C9 (EDR)", "C10 (Firewall)", "C11 (Patching)", "C12 (VLANs)", "C13 (IR Plan)", "Residual", "Strategy", "Status", "Action Plan", "Action Owner", "Target Date" ];
 
     const dataRows = dbAssets.map(a => {
         const ctrls = alasql("SELECT ctrl_id FROM AssetControls WHERE asset_id = ?", [a.id]).map(r => r.ctrl_id);
         return [
-            a.id, a.name, a.description, a.dept, a.owner, a.user_name, a.custodian, a.type, a.hostname, a.ip, a.env, a.pii, a.spi, a.corp,
+            a.id, a.name, a.description, a.group_name, a.hostname, a.server, a.custodian, a.ip_address, a.environment, a.department, a.type, a.pii, a.spi, a.corp,
             a.ciaC, a.ciaI, a.ciaA, a.ciaScore, a.ciaClass, a.riskDesc, a.prob, a.sev, a.inherit,
             ctrls.includes(1)?"Y":"N", ctrls.includes(2)?"Y":"N", ctrls.includes(3)?"Y":"N", ctrls.includes(4)?"Y":"N",
             ctrls.includes(5)?"Y":"N", ctrls.includes(6)?"Y":"N", ctrls.includes(7)?"Y":"N", ctrls.includes(8)?"Y":"N",
