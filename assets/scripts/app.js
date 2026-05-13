@@ -1,9 +1,9 @@
 /* ==========================================
    IMPACTLENS - MAIN APPLICATION
-   Comprehensive Risk Assessment & IAS Engine
+   Comprehensive risk assessment system
    ========================================== */
 
-// Helper to generate dynamic dates so the 14-day alert ALWAYS works
+// Helper to generate dynamic dates so the 14-day alert ALWAYS works during your presentation
 const getDynamicDate = (daysToAdd) => {
     const d = new Date();
     d.setDate(d.getDate() + daysToAdd);
@@ -13,25 +13,20 @@ const getDynamicDate = (daysToAdd) => {
 // ==========================================
 // 1. SQL DATABASE INITIALIZATION (AlaSQL)
 // ==========================================
-
-// AUTO-FIX: Automatically clean the user's browser storage if they have the old broken schema
-if (localStorage.getItem('impactlens_initialized') && !JSON.parse(localStorage.getItem('impactlens_assets') || '[]')[0]?.actionType) {
-    localStorage.removeItem('impactlens_assets');
-    localStorage.removeItem('impactlens_controls');
-    localStorage.removeItem('impactlens_initialized');
-}
-
 alasql(`CREATE TABLE IF NOT EXISTS Assets (
     id STRING PRIMARY KEY, type STRING, name STRING, group_name STRING, 
     hostname STRING, server STRING, custodian STRING, description STRING, 
     ip_address STRING, environment STRING, department STRING, 
     pii STRING, spi STRING, corp STRING, 
     ciaC INT, ciaI INT, ciaA INT, ciaScore INT, ciaClass STRING, 
-    riskCategory STRING, riskDesc STRING, prob INT, sev INT, inherit STRING, residual STRING,
+    riskCategory STRING, riskDesc STRING, prob INT, sev INT, inherit STRING, 
+    residual STRING,
     actionType STRING, actionStatus STRING, actionPlan STRING, actionOwner STRING, actionDate STRING
 )`);
 
-alasql(`CREATE TABLE IF NOT EXISTS AssetControls (asset_id STRING, ctrl_id INT)`);
+alasql(`CREATE TABLE IF NOT EXISTS AssetControls (
+    asset_id STRING, ctrl_id INT
+)`);
 
 alasql(`CREATE TABLE IF NOT EXISTS ReportData (
     id INT PRIMARY KEY, docDate STRING, docVersion STRING, docAuthor STRING, docApproval STRING, docDesc STRING,
@@ -39,33 +34,121 @@ alasql(`CREATE TABLE IF NOT EXISTS ReportData (
     prepName STRING, prepTitle STRING, revName STRING, revTitle STRING, appName STRING, appTitle STRING
 )`);
 
+// Load persistence from LocalStorage
 const storedAssets = JSON.parse(localStorage.getItem('impactlens_assets')) || [];
 const storedControls = JSON.parse(localStorage.getItem('impactlens_controls')) || [];
 const storedReport = JSON.parse(localStorage.getItem('impactlens_report')) || [];
 
+// Check if this is the user's very first time opening the app
 const isInitialized = localStorage.getItem('impactlens_initialized');
 
 if (isInitialized) {
+    // If they have been here before, strictly load their saved data
     alasql.tables.Assets.data = storedAssets;
     alasql.tables.AssetControls.data = storedControls;
 } else {
-    // FIRST TIME ONLY: Seed 12 Detailed Assets (Properly sequential, 4 are due within 14 days)
+    // FIRST TIME ONLY: Seed Sample Data (Updated with Hostname, Server, IP, Environment, Department)
     alasql(`INSERT INTO Assets VALUES 
-        ('IA-001', 'IA', 'University Clinic Medical Records', 'Clinic', 'CLINIC-DB-01', 'Clinic Primary DB', 'Clinic Records Admin', 'Physical and digital health records.', '10.50.1.10', 'Internal', 'Medical Services', 'Y', 'Y', 'N', 3, 3, 2, 8, 'Restricted', 'cyber_ext_leak', 'Accidental data leak of health info.', 3, 5, 'High', 'Moderate', 'Mitigate', 'In Progress', 'Enforce strict physical access and implement DLP tools.', 'Head Physician', '${getDynamicDate(5)}'),
-        ('PhA-001', 'PhA', 'CET Engineering Lab Computers', 'CET', 'CET-LAB-XX', 'Lab Workstations', 'CET Lab Technician', 'High-performance desktops used for CAD.', 'DHCP', 'Internal', 'Engineering', 'N', 'N', 'N', 1, 2, 2, 5, 'Internal Use', 'phys_theft', 'Theft of physical hardware components.', 3, 3, 'Moderate', 'Moderate', 'Mitigate', 'Pending', 'Install physical cable locks on all lab PCs.', 'Security Office', '${getDynamicDate(10)}'),
-        ('SA-001', 'SA', 'PLM Library Management System', 'Library', 'LIB-APP-01', 'Library App Server', 'ITC Database Administrator', 'System managing book inventory.', '10.20.5.15', 'Hybrid', 'Library Services', 'Y', 'N', 'N', 2, 2, 3, 7, 'Confidential', 'cyber_int_vuln', 'Unpatched software vulnerabilities leading to system disruption.', 4, 3, 'High', 'Moderate', 'Mitigate', 'Done', 'Establish a monthly patch management routine.', 'ITC SecOps', '${getDynamicDate(-5)}'),
-        ('PA-001', 'PA', 'University President & Board', 'Admin', 'EXEC-LPT-XX', 'Exec Endpoints', 'Office of the University Sec', 'Top-level executive management.', 'DHCP', 'Hybrid', 'Administration', 'Y', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 'hr_insider', 'Targeted spear-phishing (Whaling) attempting to authorize wire transfers.', 3, 5, 'High', 'High', 'Avoid', 'Pending', 'Cease email wire transfer authorizations entirely.', 'CISO', '${getDynamicDate(40)}'),
-        ('SV-001', 'SV', 'PLM Official Website', 'ITC', 'WEB-PROD-01', 'Public Web Server', 'ITC Web Development Team', 'Primary public-facing portal.', '203.177.X.X', 'Internet Facing', 'ITC', 'N', 'N', 'Y', 1, 2, 3, 6, 'Confidential', 'cyber_ext_ddos', 'DDoS attack during admissions season rendering the site inaccessible.', 4, 3, 'High', 'Moderate', 'Transfer', 'In Progress', 'Route website traffic through a cloud DDoS mitigation service.', 'ITC Infra', '${getDynamicDate(2)}'),
-        ('FA-001', 'FA', 'University Cashier Main Vault', 'Finance', 'N/A', 'N/A', 'Head Cashier / Security', 'Physical safe holding daily tuition fee collections.', 'N/A', 'Internal', 'Finance', 'N', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 'phys_theft', 'Theft or armed robbery targeting physical cash collections.', 2, 4, 'Moderate', 'Low', 'Transfer', 'Done', 'Insure the vault contents via third party.', 'Security', '${getDynamicDate(60)}'),
-        ('IA-002', 'IA', 'PLM Alumni Database', 'Alumni Office', 'ALUM-DB-01', 'Alumni Records DB', 'ITC Enterprise Systems Team', 'Contact info and employment history.', '10.50.2.20', 'Internal', 'Alumni Affairs', 'Y', 'N', 'N', 3, 2, 2, 7, 'Confidential', 'hr_insider', 'Unauthorized extraction of the database by an insider.', 3, 4, 'High', 'High', 'Mitigate', 'Pending', 'Enforce strict RBAC limiting export capabilities.', 'ITC SecOps', '${getDynamicDate(12)}'),
-        ('PhA-002', 'PhA', 'Campus Security CCTV NVR', 'Security', 'SEC-NVR-01', 'Video Storage Array', 'ITC Infrastructure Team', 'NVR storing 30 days of security footage.', '10.99.1.50', 'Internal', 'Campus Security', 'N', 'N', 'N', 3, 3, 3, 9, 'Restricted', 'phys_destruct', 'Hardware failure due to overheating in the security office closet.', 3, 4, 'High', 'Moderate', 'Mitigate', 'In Progress', 'Relocate the NVR to the main climate-controlled server room.', 'Chief of Security', '${getDynamicDate(45)}'),
-        ('SA-002', 'SA', 'HR Payroll & Benefits System', 'HR', 'HR-APP-01', 'Payroll Application', 'ITC Database Administrator', 'System calculating faculty salaries.', '10.30.1.10', 'Internal', 'Human Resources', 'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 'hr_insider', 'Disgruntled employee modifying salary bands (Insider Threat).', 2, 5, 'Moderate', 'Moderate', 'Mitigate', 'Pending', 'Implement strict segregation of duties.', 'HR Director', '${getDynamicDate(8)}'),
-        ('FA-002', 'FA', 'University Digital Banking Portal', 'Finance', 'BANK-GW-01', 'Banking Gateway', 'Finance IT Support', 'Online access to operational bank accounts.', '10.40.1.5', 'Internet Facing', 'Finance', 'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 'cyber_int_unauth', 'Unauthorized access to admin accounts via credential stuffing.', 3, 5, 'High', 'Low', 'Mitigate', 'Pending', 'Require physical hardware security keys for banking portal access.', 'VP for Finance', '${getDynamicDate(50)}'),
-        ('SV-002', 'SV', 'Cloud Student Email Services', 'ITC', 'CLOUD-MAIL', 'O365 Tenant', 'ITC Mail Admin', 'Student email hosting.', 'Cloud', 'Internet Facing', 'ITC', 'Y', 'N', 'N', 2, 2, 3, 7, 'Confidential', 'cyber_ext_supply', 'Supply chain breach of cloud provider.', 2, 4, 'Moderate', 'Moderate', 'Transfer', 'Done', 'Managed via Microsoft SLA.', 'ITC Dir', '${getDynamicDate(30)}'),
-        ('SA-003', 'SA', 'PLM E-Learning LMS', 'Academic', 'LMS-APP-01', 'Moodle Server', 'Academic IT', 'Online modules and quizzes.', '10.20.10.5', 'Hybrid', 'Academic Affairs', 'Y', 'N', 'N', 2, 3, 3, 8, 'Restricted', 'cyber_ext_ddos', 'Volumetric DDoS during finals week.', 3, 3, 'Moderate', 'Very Low', 'Accept', 'Done', 'Risk is accepted during off-peak seasons.', 'Dean', '${getDynamicDate(100)}')
+        ('IA-001', 'IA', 'University Clinic Medical Records', 'Clinic', 
+         'CLINIC-DB-01', 'Clinic Primary DB', 'Clinic Records Admin', 
+         'Physical and digital health records of students and faculty.', 
+         '10.50.1.10', 'Internal', 'Medical Services',
+         'Y', 'Y', 'N', 3, 3, 2, 8, 'Restricted', 
+         'cyber_ext_leak', 'Accidental data leak of sensitive health information via unsecured sharing or misplacement.', 
+         3, 5, 'High', 'Moderate', 
+         'Mitigate', 'In Progress', 'Enforce strict physical access to the clinic records room and implement DLP tools for digital health data.', 
+         'Head Physician', '${getDynamicDate(5)}'),
+
+        ('PhA-001', 'PhA', 'CET Engineering Lab Computers', 'CET', 
+         'CET-LAB-XX', 'Lab Workstations', 'CET Lab Technician', 
+         'High-performance desktops used for CAD and simulations.', 
+         'DHCP', 'Internal', 'Engineering',
+         'N', 'N', 'N', 1, 2, 2, 5, 'Internal Use', 
+         'phys_theft', 'Theft of physical hardware components during off-hours.', 
+         3, 3, 'Moderate', 'Moderate', 
+         'Mitigate', 'Pending', 'Install physical cable locks on all lab PCs and upgrade lab CCTV coverage.', 
+         'Security Office', '${getDynamicDate(10)}'),
+
+        ('SA-001', 'SA', 'PLM Library Management System', 'Library', 
+         'LIB-APP-01', 'Library App Server', 'ITC Database Administrator', 
+         'System managing book inventory and borrowing records.', 
+         '10.20.5.15', 'Hybrid', 'Library Services',
+         'Y', 'N', 'N', 2, 2, 3, 7, 'Confidential', 
+         'cyber_int_vuln', 'Unpatched software vulnerabilities leading to system disruption.', 
+         4, 3, 'High', 'Moderate', 
+         'Mitigate', 'Done', 'Establish a monthly patch management routine for the library server OS.', 
+         'ITC SecOps', '${getDynamicDate(-5)}'),
+
+        ('PA-001', 'PA', 'University President & Board', 'Admin', 
+         'EXEC-LPT-XX', 'Exec Endpoints', 'Office of the University Sec', 
+         'Top-level executive management with highest signing authority.', 
+         'DHCP', 'Hybrid', 'Administration',
+         'Y', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 
+         'hr_insider', 'Targeted spear-phishing (Whaling) attempting to authorize fraudulent wire transfers.', 
+         3, 5, 'High', 'High', 
+         'Avoid', 'Pending', 'Mandate executive anti-phishing training and enforce out-of-band verbal verification for transfers.', 
+         'CISO', '${getDynamicDate(40)}'),
+
+        ('SV-001', 'SV', 'PLM Official Website', 'ITC', 
+         'WEB-PROD-01', 'Public Web Server', 'ITC Web Development Team', 
+         'Primary public-facing portal for university info.', 
+         '203.177.X.X', 'Internet Facing', 'ITC',
+         'N', 'N', 'Y', 1, 2, 3, 6, 'Confidential', 
+         'cyber_ext_ddos', 'DDoS attack during admissions season rendering the site inaccessible.', 
+         4, 3, 'High', 'Moderate', 
+         'Transfer', 'In Progress', 'Route website traffic through a cloud-based DDoS mitigation and CDN service.', 
+         'ITC Infra', '${getDynamicDate(2)}'),
+
+        ('FA-001', 'FA', 'University Cashier Main Vault', 'Finance', 
+         'N/A', 'N/A', 'Head Cashier / Security', 
+         'Physical safe holding daily tuition fee collections.', 
+         'N/A', 'Internal', 'Finance',
+         'N', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 
+         'phys_theft', 'Theft or armed robbery targeting physical cash collections.', 
+         2, 4, 'Moderate', 'Low', 
+         'Transfer', 'Done', 'Insure the vault contents via third party.', 'Security', '${getDynamicDate(60)}'),
+
+        ('IA-002', 'IA', 'PLM Alumni Database', 'Alumni Office', 
+         'ALUM-DB-01', 'Alumni Records DB', 'ITC Enterprise Systems Team', 
+         'Contact info and employment history of former students.', 
+         '10.50.2.20', 'Internal', 'Alumni Affairs',
+         'Y', 'N', 'N', 3, 2, 2, 7, 'Confidential', 
+         'hr_insider', 'Unauthorized extraction of the database by an insider.', 
+         3, 4, 'High', 'High', 
+         'Mitigate', 'Pending', 'Enforce strict RBAC limiting export capabilities and monitor query logs.', 
+         'ITC SecOps', '${getDynamicDate(12)}'),
+
+        ('PhA-002', 'PhA', 'Campus Security CCTV NVR', 'Security', 
+         'SEC-NVR-01', 'Video Storage Array', 'ITC Infrastructure Team', 
+         'Network Video Recorder storing 30 days of security footage.', 
+         '10.99.1.50', 'Internal', 'Campus Security',
+         'N', 'N', 'N', 3, 3, 3, 9, 'Restricted', 
+         'phys_destruct', 'Hardware failure due to overheating in the security office closet.', 
+         3, 4, 'High', 'Moderate', 
+         'Mitigate', 'In Progress', 'Relocate the NVR to the main climate-controlled server room with RAID 5.', 
+         'Chief of Security', '${getDynamicDate(45)}'),
+
+        ('SA-002', 'SA', 'HR Payroll & Benefits System', 'HR', 
+         'HR-APP-01', 'Payroll Application', 'ITC Database Administrator', 
+         'System calculating faculty salaries and tax deductions.', 
+         '10.30.1.10', 'Internal', 'Human Resources',
+         'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 
+         'hr_insider', 'Disgruntled employee modifying salary bands (Insider Threat).', 
+         2, 5, 'Moderate', 'Moderate', 
+         'Mitigate', 'Pending', 'Implement strict segregation of duties (maker-checker rule) for payroll changes.', 
+         'HR Director', '${getDynamicDate(8)}'),
+
+        ('FA-002', 'FA', 'University Digital Banking Portal', 'Finance', 
+         'BANK-GW-01', 'Banking Gateway', 'Finance IT Support', 
+         'Online access to operational bank accounts for payments.', 
+         '10.40.1.5', 'Internet Facing', 'Finance',
+         'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 
+         'cyber_int_unauth', 'Unauthorized access to admin accounts via credential stuffing.', 
+         3, 5, 'High', 'Low', 
+         'Mitigate', 'Pending', 'Require physical hardware security keys for banking portal access.', 
+         'VP for Finance', '${getDynamicDate(50)}')
     `);
     
-    // Seed Control Checkboxes mapped correctly to the 13 controls
     alasql(`INSERT INTO AssetControls VALUES 
         ('IA-001', 1), ('IA-001', 3), ('IA-001', 7), ('IA-001', 12),
         ('PhA-001', 5), ('PhA-001', 8),
@@ -76,9 +159,7 @@ if (isInitialized) {
         ('IA-002', 1), ('IA-002', 3), ('IA-002', 12),
         ('PhA-002', 1), ('PhA-002', 5), ('PhA-002', 6),
         ('SA-002', 1), ('SA-002', 2), ('SA-002', 3), ('SA-002', 4),
-        ('FA-002', 3), ('FA-002', 4), ('FA-002', 10),
-        ('SV-002', 1), ('SV-002', 3), ('SV-002', 4),
-        ('SA-003', 1), ('SA-003', 6), ('SA-003', 10), ('SA-003', 13)
+        ('FA-002', 3), ('FA-002', 4), ('FA-002', 10)
     `);
     
     localStorage.setItem('impactlens_initialized', 'true');
@@ -100,7 +181,7 @@ function persistDB() {
 }
 
 // ==========================================
-// 2. CONSTANTS & IAS MAPPING
+// 2. CONSTANTS & LOOKUPS
 // ==========================================
 let editingId = null;
 
@@ -112,7 +193,10 @@ const INHERIT = {
   '1-1':'Very Low','1-2':'Low','1-3':'Low','1-4':'Low','1-5':'Moderate' 
 };
 
-const CIA_CLASS = { 3:'Public',4:'Internal Use',5:'Internal Use',6:'Confidential', 7:'Confidential',8:'Restricted',9:'Restricted' };
+const CIA_CLASS = {
+  3:'Public',4:'Internal Use',5:'Internal Use',6:'Confidential',
+  7:'Confidential',8:'Restricted',9:'Restricted'
+};
 
 const CTRL_NAMES = [
   'Documented procedures', 'Segregation of duties', 'Role-Based Access Control (RBAC)', 
@@ -171,22 +255,7 @@ function runEnforcementEngine() {
         }
     }
 
-    // 1. Force the Asset Type rules on Data Fields FIRST
-    if (type === 'PhA') {
-        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) { el.value = 'N'; el.disabled = true; } });
-    } else if (type === 'PA') {
-        ['f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) el.disabled = false; });
-        const elPii = document.getElementById('f-pii'); if(elPii) { elPii.value = 'Y'; elPii.disabled = true; }
-    } else if (type === 'FA') {
-        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) { el.value = 'Y'; el.disabled = true; } });
-    } else {
-        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) el.disabled = false; });
-    }
-
-    // 2. NOW read the dynamically updated DOM states for the CIA locks (FIXES THE DELAY BUG)
     const env = document.getElementById('f-environment') ? document.getElementById('f-environment').value : 'Internal';
-    const currentPii = document.getElementById('f-pii') ? document.getElementById('f-pii').value : 'N';
-    const currentSpi = document.getElementById('f-spi') ? document.getElementById('f-spi').value : 'N';
     
     // GUARDRAIL 1: Threat Restrictions based on Asset Type
     const optPhys = document.getElementById('opt-phys');
@@ -208,8 +277,24 @@ function runEnforcementEngine() {
     } else {
         [optPhys, optHr, optCyberExt, optCyberInt, optComp].forEach(el => { if(el) el.disabled = false; });
     }
+
+    // GUARDRAIL 2: Asset Type Data Overrides (Force Data values first)
+    if (type === 'PhA') {
+        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) { el.value = 'N'; el.disabled = true; } });
+    } else if (type === 'PA') {
+        ['f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) el.disabled = false; });
+        const elPii = document.getElementById('f-pii'); if(elPii) { elPii.value = 'Y'; elPii.disabled = true; }
+    } else if (type === 'FA') {
+        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) { el.value = 'Y'; el.disabled = true; } });
+    } else {
+        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) el.disabled = false; });
+    }
+
+    // Now read the dynamically updated DOM states for the CIA locks!
+    const currentPii = document.getElementById('f-pii') ? document.getElementById('f-pii').value : 'N';
+    const currentSpi = document.getElementById('f-spi') ? document.getElementById('f-spi').value : 'N';
     
-    // GUARDRAIL 2: Data Drives CIA
+    // GUARDRAIL 3: Data Drives CIA
     const lockC = document.getElementById('lock-c');
     const lockA = document.getElementById('lock-a');
     
@@ -234,7 +319,7 @@ function runEnforcementEngine() {
     const classEl = document.getElementById('cia-class');
     if(classEl) classEl.textContent = CIA_CLASS[score] || 'N/A';
 
-    // GUARDRAIL 3: Mistake-Proof Controls
+    // GUARDRAIL 4: Mistake-Proof Controls
     const threat = g('f-risk-category');
     const validControls = controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13];
 
@@ -262,7 +347,6 @@ function calculateRiskMath() {
     const currentPii = g('f-pii');
     const currentSpi = g('f-spi');
 
-    // GUARDRAIL 4: Risk Escalations
     if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.min(5, p + 1);
     if ((currentPii === 'Y' || currentSpi === 'Y') && (threat === 'cyber_ext_leak' || threat === 'legal_dpa')) s = 5;
 
@@ -341,10 +425,7 @@ function riskBadge(r) { const cls = { 'Very Low': 'badge-vl', 'Low': 'badge-lo',
 function showSection(name) {
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  
-  const sec = document.getElementById('sec-' + name);
-  if(sec) sec.classList.add('active');
-  
+  document.getElementById('sec-' + name).classList.add('active');
   document.querySelectorAll('.nav-item').forEach(n => {
     if (n.getAttribute('onclick') && n.getAttribute('onclick').includes("'" + name + "'")) n.classList.add('active');
   });
@@ -373,21 +454,31 @@ function g(id) { const el = document.getElementById(id); return el ? el.value : 
 document.addEventListener('click', function(event) {
     const wrapper = document.querySelector('.multi-select-wrapper');
     const dropdown = document.getElementById('ctrl-dropdown');
-    if (wrapper && dropdown && !wrapper.contains(event.target)) dropdown.classList.remove('show');
+    if (wrapper && dropdown && !wrapper.contains(event.target)) {
+        dropdown.classList.remove('show');
+    }
 });
 
 function updateTagsUI() {
-    const cont = document.getElementById('selected-controls-tags');
-    if (!cont) return; cont.innerHTML = '';
+    const container = document.getElementById('selected-controls-tags');
+    if (!container) return;
+    container.innerHTML = '';
+    
     [1,2,3,4,5,6,7,8,9,10,11,12,13].forEach(n => {
         const cb = document.getElementById('ctrl'+n);
         if (cb && cb.checked) {
-            cont.innerHTML += `<div class="tag">${CTRL_NAMES[n-1]} <span class="tag-close" onclick="removeTag(${n}, event)">×</span></div>`;
+            const tag = document.createElement('div');
+            tag.className = 'tag';
+            tag.innerHTML = `${CTRL_NAMES[n-1]} <span class="tag-close" onclick="removeTag(${n}, event)">×</span>`;
+            container.appendChild(tag);
         }
     });
 }
 
-function updateTags() { updateTagsUI(); runEnforcementEngine(); }
+function updateTags() {
+    updateTagsUI();
+    runEnforcementEngine(); 
+}
 
 function removeTag(n, event) {
     event.stopPropagation();
@@ -467,7 +558,6 @@ function editAsset(id) {
       const titleEl = document.getElementById('form-title');
       if(titleEl) titleEl.innerHTML = 'UPDATE <span>RECORD</span>';
 
-      // Flawless one-to-one mapping for accurate editing
       const map = { 
           'f-type':a.type, 'f-id':a.id, 'f-name':a.name, 'f-group':a.group_name, 'f-desc':a.description, 
           'f-hostname':a.hostname, 'f-server':a.server, 'f-custodian':a.custodian, 
@@ -735,8 +825,8 @@ function renderDashboard() {
   if(dmMod) dmMod.textContent = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE residual = 'Moderate'");
   if(dmPii) dmPii.textContent = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE pii = 'Y' OR spi = 'Y'");
 
-  // FIX: Make sure sidebar action count badge perfectly matches the filtered DB query
-  const actionsCount = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE residual IN ('High', 'Moderate') AND actionType != 'Accept'");
+  // Update the side navigation badge correctly
+  const actionsCount = alasql("SELECT * FROM Assets WHERE residual IN ('High', 'Moderate') AND actionType != 'Accept'").length;
   const navActions = document.getElementById('nav-actions');
   if(navActions) navActions.textContent = actionsCount;
 
@@ -832,45 +922,6 @@ function exportDataXLSX() {
     
     XLSX.writeFile(wb, "ImpactLens_IAR_Export.xlsx");
     notify("Exported to Excel successfully!");
-}
-
-// ==========================================
-// 7. MULTI-SELECT DROPDOWN LOGIC
-// ==========================================
-document.addEventListener('click', function(event) {
-    const wrapper = document.querySelector('.multi-select-wrapper');
-    const dropdown = document.getElementById('ctrl-dropdown');
-    if (wrapper && dropdown && !wrapper.contains(event.target)) {
-        dropdown.classList.remove('show');
-    }
-});
-
-function updateTagsUI() {
-    const container = document.getElementById('selected-controls-tags');
-    if (!container) return;
-    container.innerHTML = '';
-    
-    [1,2,3,4,5,6,7,8,9,10,11,12,13].forEach(n => {
-        const cb = document.getElementById('ctrl'+n);
-        if (cb && cb.checked) {
-            const tag = document.createElement('div');
-            tag.className = 'tag';
-            tag.innerHTML = `${CTRL_NAMES[n-1]} <span class="tag-close" onclick="removeTag(${n}, event)">×</span>`;
-            container.appendChild(tag);
-        }
-    });
-}
-
-function updateTags() {
-    updateTagsUI();
-    runEnforcementEngine(); 
-}
-
-function removeTag(n, event) {
-    event.stopPropagation();
-    const cb = document.getElementById('ctrl'+n);
-    if (cb) cb.checked = false;
-    updateTags();
 }
 
 // ==========================================
