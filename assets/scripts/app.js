@@ -1,6 +1,6 @@
 /* ==========================================
    IMPACTLENS - MAIN APPLICATION
-   Enterprise Risk Assessment (Supabase Cloud Version)
+   Enterprise Risk Assessment (Pure Supabase Cloud)
    ========================================== */
 
 // 1. SUPABASE INITIALIZATION
@@ -8,7 +8,7 @@ const supabaseUrl = 'https://haspklehikocqswmgmtk.supabase.co';
 const supabaseKey = 'sb_publishable_O1qHjWdSJ1hZYraL8mmxYQ_CPRr0Sv6';
 const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
 
-// Global State (Replaces AlaSQL in-memory tables)
+// Global Memory State (Replaces AlaSQL)
 let globalAssets = [];
 let globalControls = [];
 let globalReport = {};
@@ -63,11 +63,11 @@ const RISK_TEMPLATES = {
 
 // THE STRICT CYBERSECURITY PROFILES MATRIX
 const ASSET_PROFILES = {
-    'IA':  { pii: 'Y', spi: 'Y', corp: 'N', c: 3, i: 3, a: 2 },
-    'PhA': { pii: 'N', spi: 'N', corp: 'N', c: 1, i: 2, a: 2 },
-    'PA':  { pii: 'Y', spi: 'N', corp: 'Y', c: 3, i: 3, a: 3 },
-    'SA':  { pii: 'Y', spi: 'N', corp: 'N', c: 2, i: 2, a: 3 },
-    'SV':  { pii: 'N', spi: 'N', corp: 'Y', c: 1, i: 2, a: 3 },
+    'IA':  { pii: 'Y', spi: 'Y', corp: 'Y', c: 3, i: 3, a: 3 },
+    'PhA': { pii: 'N', spi: 'N', corp: 'N', c: 1, i: 1, a: 2 },
+    'PA':  { pii: 'Y', spi: 'N', corp: 'Y', c: 3, i: 2, a: 2 },
+    'SA':  { pii: 'N', spi: 'N', corp: 'Y', c: 2, i: 3, a: 3 },
+    'SV':  { pii: 'N', spi: 'N', corp: 'Y', c: 2, i: 2, a: 3 },
     'FA':  { pii: 'Y', spi: 'Y', corp: 'Y', c: 3, i: 3, a: 3 }
 };
 
@@ -102,7 +102,9 @@ function runEnforcementEngine(skipAutoTemplate = false) {
 
     const env = document.getElementById('f-environment') ? document.getElementById('f-environment').value : 'Internal';
     
+    // ---------------------------------------------------------
     // GUARDRAIL 1: STRICT CYBERSECURITY DATA & CIA LOCKS
+    // ---------------------------------------------------------
     const lockC = document.getElementById('lock-c');
     const lockI = document.getElementById('lock-i');
     const lockA = document.getElementById('lock-a');
@@ -116,10 +118,11 @@ function runEnforcementEngine(skipAutoTemplate = false) {
             if (el) {
                 const key = id.replace('f-', '');
                 el.value = profile[key];
-                el.disabled = true;
+                el.disabled = true; // Hardcoded completely
             }
         });
 
+        // Special Rule: Internet Facing always forces Availability to 3
         const elA = document.getElementById('f-a');
         if (env === 'Internet Facing' && elA) {
             elA.value = '3';
@@ -130,6 +133,7 @@ function runEnforcementEngine(skipAutoTemplate = false) {
         if(lockA) lockA.textContent = (env === 'Internet Facing') ? '🔒 Env Driven' : '🔒 System Enforced';
 
     } else {
+        // Unlock fields if no type is selected
         ['f-pii', 'f-spi', 'f-corp', 'f-c', 'f-i', 'f-a'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.disabled = false; 
@@ -143,7 +147,9 @@ function runEnforcementEngine(skipAutoTemplate = false) {
     const classEl = document.getElementById('cia-class');
     if(classEl) classEl.textContent = CIA_CLASS[score] || 'N/A';
 
+    // ---------------------------------------------------------
     // GUARDRAIL 2: Threat Restrictions based on Asset Type
+    // ---------------------------------------------------------
     const optPhys = document.getElementById('opt-phys');
     const optHr = document.getElementById('opt-hr');
     const optCyberExt = document.getElementById('opt-cyber-ext');
@@ -169,7 +175,9 @@ function runEnforcementEngine(skipAutoTemplate = false) {
         riskSelect.value = ""; 
     }
 
+    // ---------------------------------------------------------
     // GUARDRAIL 3: Mistake-Proof Controls
+    // ---------------------------------------------------------
     const threat = g('f-risk-category');
     const validControls = controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13];
 
@@ -249,7 +257,7 @@ function calculateRiskMath() {
     }
 }
 
-function applyRiskTemplate() {
+function applyRiskTemplate(skipEngineUpdate = false) {
     const key = g('f-risk-category');
     if (RISK_TEMPLATES[key]) {
         const descEl = document.getElementById('f-risk-desc');
@@ -262,9 +270,9 @@ function applyRiskTemplate() {
         if(sevEl) sevEl.value = RISK_TEMPLATES[key].sev;
         if(apEl && !apEl.value) apEl.value = RISK_TEMPLATES[key].action;
         
-        notify("Risk template applied.");
+        if(!skipEngineUpdate) notify("Risk template applied.");
     }
-    runEnforcementEngine();
+    if(!skipEngineUpdate) runEnforcementEngine();
 }
 
 function riskColor(r) { return { 'Very Low': 'var(--success)', 'Low': 'var(--accent2)', 'Moderate': 'var(--warn)', 'High': 'var(--danger)' }[r] || 'var(--text)'; }
@@ -288,12 +296,61 @@ async function syncFromCloud() {
         globalReport = rData || {};
     } catch (err) {
         console.error("Cloud Sync Error: ", err);
-        notify("Failed to connect to Supabase DB. Make sure your tables are created.", true);
+        notify("Failed to connect to Supabase DB.", true);
     }
 }
 
+// THE CLOUD AUTO-SEEDER: If Supabase is totally empty, push the 12 assets up!
+async function seedSupabaseIfEmpty() {
+    try {
+        const { data, error } = await supabase.from('Assets').select('id').limit(1);
+        if (error) return; // table might not exist yet
+        
+        if (data.length === 0) {
+            notify("Initializing Cloud Database with predefined assets...", false);
+            
+            const seedAssets = [
+                { id: 'IA-001', type: 'IA', name: 'University Clinic Medical Records', group_name: 'Clinic', hostname: 'CLINIC-DB-01', server: 'Clinic Primary DB', custodian: 'Clinic Records Admin', description: 'Physical and digital health records.', ip_address: '10.50.1.10', environment: 'Internal', department: 'Medical Services', pii: 'Y', spi: 'Y', corp: 'Y', ciaC: 3, ciaI: 3, ciaA: 3, ciaScore: 9, ciaClass: 'Restricted', riskCategory: 'cyber_ext_leak', riskDesc: 'Accidental data leak of sensitive health information.', prob: 3, sev: 5, inherit: 'High', residual: 'Moderate', actionType: 'Mitigate', actionStatus: 'In Progress', actionPlan: 'Enforce strict physical access and implement DLP tools.', actionOwner: 'Head Physician', actionDate: getDynamicDate(5) },
+                { id: 'PhA-001', type: 'PhA', name: 'CET Engineering Lab Computers', group_name: 'CET', hostname: 'CET-LAB-XX', server: 'Lab Workstations', custodian: 'CET Lab Technician', description: 'High-performance desktops used for CAD.', ip_address: 'DHCP', environment: 'Internal', department: 'Engineering', pii: 'N', spi: 'N', corp: 'N', ciaC: 1, ciaI: 1, ciaA: 2, ciaScore: 4, ciaClass: 'Internal Use', riskCategory: 'phys_theft', riskDesc: 'Theft of physical hardware components.', prob: 3, sev: 3, inherit: 'Moderate', residual: 'Moderate', actionType: 'Mitigate', actionStatus: 'Pending', actionPlan: 'Install physical cable locks on all lab PCs.', actionOwner: 'Security Office', actionDate: getDynamicDate(10) },
+                { id: 'SA-001', type: 'SA', name: 'PLM Library Management System', group_name: 'Library', hostname: 'LIB-APP-01', server: 'Library App Server', custodian: 'ITC Database Administrator', description: 'System managing book inventory.', ip_address: '10.20.5.15', environment: 'Hybrid', department: 'Library Services', pii: 'N', spi: 'N', corp: 'Y', ciaC: 2, ciaI: 3, ciaA: 3, ciaScore: 8, ciaClass: 'Restricted', riskCategory: 'cyber_int_vuln', riskDesc: 'Unpatched software vulnerabilities leading to system disruption.', prob: 4, sev: 3, inherit: 'High', residual: 'Moderate', actionType: 'Mitigate', actionStatus: 'Done', actionPlan: 'Establish a monthly patch management routine.', actionOwner: 'ITC SecOps', actionDate: getDynamicDate(-5) },
+                { id: 'PA-001', type: 'PA', name: 'University President & Board', group_name: 'Admin', hostname: 'EXEC-LPT-XX', server: 'Exec Endpoints', custodian: 'Office of the University Sec', description: 'Top-level executive management.', ip_address: 'DHCP', environment: 'Hybrid', department: 'Administration', pii: 'Y', spi: 'N', corp: 'Y', ciaC: 3, ciaI: 2, ciaA: 2, ciaScore: 7, ciaClass: 'Confidential', riskCategory: 'hr_insider', riskDesc: 'Targeted spear-phishing (Whaling) attempting to authorize wire transfers.', prob: 3, sev: 5, inherit: 'High', residual: 'High', actionType: 'Avoid', actionStatus: 'Pending', actionPlan: 'Cease email wire transfer authorizations entirely.', actionOwner: 'CISO', actionDate: getDynamicDate(40) },
+                { id: 'SV-001', type: 'SV', name: 'PLM Official Website', group_name: 'ITC', hostname: 'WEB-PROD-01', server: 'Public Web Server', custodian: 'ITC Web Development Team', description: 'Primary public-facing portal.', ip_address: '203.177.X.X', environment: 'Internet Facing', department: 'ITC', pii: 'N', spi: 'N', corp: 'Y', ciaC: 2, ciaI: 2, ciaA: 3, ciaScore: 7, ciaClass: 'Confidential', riskCategory: 'cyber_ext_ddos', riskDesc: 'DDoS attack rendering site inaccessible.', prob: 4, sev: 3, inherit: 'High', residual: 'Moderate', actionType: 'Transfer', actionStatus: 'In Progress', actionPlan: 'Route website traffic through a cloud DDoS mitigation service.', actionOwner: 'ITC Infra', actionDate: getDynamicDate(2) },
+                { id: 'FA-001', type: 'FA', name: 'University Cashier Main Vault', group_name: 'Finance', hostname: 'N/A', server: 'N/A', custodian: 'Head Cashier / Security', description: 'Physical safe holding daily collections.', ip_address: 'N/A', environment: 'Internal', department: 'Finance', pii: 'Y', spi: 'Y', corp: 'Y', ciaC: 3, ciaI: 3, ciaA: 3, ciaScore: 9, ciaClass: 'Restricted', riskCategory: 'phys_theft', riskDesc: 'Theft or armed robbery targeting physical cash collections.', prob: 2, sev: 4, inherit: 'Moderate', residual: 'Low', actionType: 'Transfer', actionStatus: 'Done', actionPlan: 'Insure the vault contents via third party.', actionOwner: 'Security', actionDate: getDynamicDate(60) },
+                { id: 'IA-002', type: 'IA', name: 'PLM Alumni Database', group_name: 'Alumni Office', hostname: 'ALUM-DB-01', server: 'Alumni Records DB', custodian: 'ITC Enterprise Systems Team', description: 'Contact info and employment history.', ip_address: '10.50.2.20', environment: 'Internal', department: 'Alumni Affairs', pii: 'Y', spi: 'Y', corp: 'Y', ciaC: 3, ciaI: 3, ciaA: 3, ciaScore: 9, ciaClass: 'Restricted', riskCategory: 'hr_insider', riskDesc: 'Unauthorized extraction of the database by an insider.', prob: 3, sev: 4, inherit: 'High', residual: 'High', actionType: 'Mitigate', actionStatus: 'Pending', actionPlan: 'Enforce strict RBAC limiting export capabilities.', actionOwner: 'ITC SecOps', actionDate: getDynamicDate(12) },
+                { id: 'PhA-002', type: 'PhA', name: 'Campus Security CCTV NVR', group_name: 'Security', hostname: 'SEC-NVR-01', server: 'Video Storage Array', custodian: 'ITC Infrastructure Team', description: 'NVR storing 30 days of security footage.', ip_address: '10.99.1.50', environment: 'Internal', department: 'Campus Security', pii: 'N', spi: 'N', corp: 'N', ciaC: 1, ciaI: 1, ciaA: 2, ciaScore: 4, ciaClass: 'Internal Use', riskCategory: 'phys_destruct', riskDesc: 'Hardware failure due to overheating in the security office closet.', prob: 3, sev: 4, inherit: 'High', residual: 'Moderate', actionType: 'Mitigate', actionStatus: 'In Progress', actionPlan: 'Relocate the NVR to the main climate-controlled server room.', actionOwner: 'Chief of Security', actionDate: getDynamicDate(45) },
+                { id: 'SA-002', type: 'SA', name: 'HR Payroll & Benefits System', group_name: 'HR', hostname: 'HR-APP-01', server: 'Payroll Application', custodian: 'ITC Database Administrator', description: 'System calculating faculty salaries.', ip_address: '10.30.1.10', environment: 'Internal', department: 'Human Resources', pii: 'N', spi: 'N', corp: 'Y', ciaC: 2, ciaI: 3, ciaA: 3, ciaScore: 8, ciaClass: 'Restricted', riskCategory: 'hr_insider', riskDesc: 'Disgruntled employee modifying salary bands.', prob: 2, sev: 5, inherit: 'Moderate', residual: 'Moderate', actionType: 'Mitigate', actionStatus: 'Pending', actionPlan: 'Implement strict segregation of duties (maker-checker rule).', actionOwner: 'HR Director', actionDate: getDynamicDate(8) },
+                { id: 'FA-002', type: 'FA', name: 'University Digital Banking Portal', group_name: 'Finance', hostname: 'BANK-GW-01', server: 'Banking Gateway', custodian: 'Finance IT Support', description: 'Online access to operational bank accounts.', ip_address: '10.40.1.5', environment: 'Internet Facing', department: 'Finance', pii: 'Y', spi: 'Y', corp: 'Y', ciaC: 3, ciaI: 3, ciaA: 3, ciaScore: 9, ciaClass: 'Restricted', riskCategory: 'cyber_int_unauth', riskDesc: 'Unauthorized access to admin accounts via credential stuffing.', prob: 3, sev: 5, inherit: 'High', residual: 'Low', actionType: 'Mitigate', actionStatus: 'Pending', actionPlan: 'Require physical hardware security keys for banking portal access.', actionOwner: 'VP for Finance', actionDate: getDynamicDate(50) },
+                { id: 'SV-002', type: 'SV', name: 'Cloud Student Email Services', group_name: 'ITC', hostname: 'CLOUD-MAIL', server: 'O365 Tenant', custodian: 'ITC Mail Admin', description: 'Student email hosting.', ip_address: 'Cloud', environment: 'Internet Facing', department: 'ITC', pii: 'N', spi: 'N', corp: 'Y', ciaC: 2, ciaI: 2, ciaA: 3, ciaScore: 7, ciaClass: 'Confidential', riskCategory: 'cyber_ext_supply', riskDesc: 'Supply chain breach of cloud provider.', prob: 2, sev: 4, inherit: 'Moderate', residual: 'Moderate', actionType: 'Transfer', actionStatus: 'Done', actionPlan: 'Managed via Microsoft SLA.', actionOwner: 'ITC Dir', actionDate: getDynamicDate(30) },
+                { id: 'SA-003', type: 'SA', name: 'PLM E-Learning LMS', group_name: 'Academic', hostname: 'LMS-APP-01', server: 'Moodle Server', custodian: 'Academic IT', description: 'Online modules and quizzes.', ip_address: '10.20.10.5', environment: 'Hybrid', department: 'Academic Affairs', pii: 'N', spi: 'N', corp: 'Y', ciaC: 2, ciaI: 3, ciaA: 3, ciaScore: 8, ciaClass: 'Restricted', riskCategory: 'cyber_ext_ddos', riskDesc: 'Volumetric DDoS during finals week.', prob: 3, sev: 3, inherit: 'Moderate', residual: 'Very Low', actionType: 'Accept', actionStatus: 'Done', actionPlan: 'Risk is accepted during off-peak seasons.', actionOwner: 'Dean', actionDate: getDynamicDate(100) }
+            ];
+            
+            const seedControls = [
+                { asset_id: 'IA-001', ctrl_id: 1 }, { asset_id: 'IA-001', ctrl_id: 3 }, { asset_id: 'IA-001', ctrl_id: 7 }, { asset_id: 'IA-001', ctrl_id: 12 },
+                { asset_id: 'PhA-001', ctrl_id: 5 }, { asset_id: 'PhA-001', ctrl_id: 8 },
+                { asset_id: 'SA-001', ctrl_id: 1 }, { asset_id: 'SA-001', ctrl_id: 11 },
+                { asset_id: 'PA-001', ctrl_id: 1 },
+                { asset_id: 'SV-001', ctrl_id: 10 }, { asset_id: 'SV-001', ctrl_id: 12 }, { asset_id: 'SV-001', ctrl_id: 13 },
+                { asset_id: 'FA-001', ctrl_id: 1 }, { asset_id: 'FA-001', ctrl_id: 2 }, { asset_id: 'FA-001', ctrl_id: 5 },
+                { asset_id: 'IA-002', ctrl_id: 1 }, { asset_id: 'IA-002', ctrl_id: 3 }, { asset_id: 'IA-002', ctrl_id: 12 },
+                { asset_id: 'PhA-002', ctrl_id: 1 }, { asset_id: 'PhA-002', ctrl_id: 5 }, { asset_id: 'PhA-002', ctrl_id: 6 },
+                { asset_id: 'SA-002', ctrl_id: 1 }, { asset_id: 'SA-002', ctrl_id: 2 }, { asset_id: 'SA-002', ctrl_id: 3 }, { asset_id: 'SA-002', ctrl_id: 4 },
+                { asset_id: 'FA-002', ctrl_id: 3 }, { asset_id: 'FA-002', ctrl_id: 4 }, { asset_id: 'FA-002', ctrl_id: 10 },
+                { asset_id: 'SV-002', ctrl_id: 1 }, { asset_id: 'SV-002', ctrl_id: 3 }, { asset_id: 'SV-002', ctrl_id: 4 },
+                { asset_id: 'SA-003', ctrl_id: 1 }, { asset_id: 'SA-003', ctrl_id: 6 }, { asset_id: 'SA-003', ctrl_id: 10 }, { asset_id: 'SA-003', ctrl_id: 13 }
+            ];
+
+            await supabase.from('Assets').insert(seedAssets);
+            await supabase.from('AssetControls').insert(seedControls);
+            await supabase.from('ReportData').insert([{ id: 1, docDate: '', docVersion: '', docAuthor: '', docApproval: '', docDesc: '', revHigh: '', initHigh: '', prepName: '', prepTitle: '', revName: '', revTitle: '', appName: '', appTitle: '' }]);
+
+            await syncFromCloud();
+            renderDashboard();
+        }
+    } catch(e) { console.error("Auto-Seed Failed:", e); }
+}
+
 async function showSection(name) {
-  // Sync before drawing UI to ensure fresh cloud data
+  // Pull from Cloud before showing page
   if (['dashboard', 'register', 'risk', 'controls', 'actions', 'report'].includes(name)) {
       await syncFromCloud();
   }
@@ -352,6 +409,12 @@ function removeTag(n, event) {
     updateTags();
 }
 
+function updateActionBadge() {
+    const actionsCount = globalAssets.filter(a => ['High', 'Moderate'].includes(a.residual) && a.actionType !== 'Accept').length;
+    const navActions = document.getElementById('nav-actions');
+    if(navActions) navActions.textContent = actionsCount;
+}
+
 function calculateDeadlines() {
     const today = new Date(); today.setHours(0,0,0,0);
     const limit = new Date(today); limit.setDate(today.getDate() + 14);
@@ -365,14 +428,17 @@ function calculateDeadlines() {
     });
     
     const hCount = globalAssets.filter(a => a.residual === 'High').length;
-    const actionsCount = globalAssets.filter(a => ['High', 'Moderate'].includes(a.residual) && a.actionType !== 'Accept').length;
     
-    if(document.getElementById('hdr-high')) document.getElementById('hdr-high').textContent = hCount;
-    if(document.getElementById('hdr-deadlines')) {
-        document.getElementById('hdr-deadlines').textContent = dCount;
-        document.getElementById('hdr-deadlines').style.color = dCount > 0 ? "var(--danger)" : "var(--warn)";
+    const highBadge = document.getElementById('hdr-high');
+    if(highBadge) highBadge.textContent = hCount;
+
+    const deadBadge = document.getElementById('hdr-deadlines');
+    if(deadBadge) {
+        deadBadge.textContent = dCount;
+        deadBadge.style.color = dCount > 0 ? "var(--danger)" : "var(--warn)";
     }
-    if(document.getElementById('nav-actions')) document.getElementById('nav-actions').textContent = actionsCount;
+    
+    updateActionBadge();
 }
 
 // ==========================================
@@ -391,7 +457,7 @@ async function saveAssetToDB() {
   const p = parseInt(g('f-prob')) || 3;
   const s = parseInt(g('f-sev')) || 3;
   
-  // Force retrieval of locked values directly
+  // Directly pull from HTML to respect hardcoded locked fields
   const c = parseInt(document.getElementById('f-c').value) || 2;
   const ii = parseInt(document.getElementById('f-i').value) || 2;
   const a = parseInt(document.getElementById('f-a').value) || 2;
@@ -410,11 +476,9 @@ async function saveAssetToDB() {
       actionType: g('f-action-type'), actionStatus: g('f-action-status'), actionPlan: g('f-action-plan'), actionOwner: g('f-action-owner'), actionDate: g('f-action-date')
   };
 
-  // 1. Upsert to Supabase
   const { error: assetErr } = await supabase.from('Assets').upsert(payload);
   if (assetErr) return notify('Cloud Error: ' + assetErr.message, true);
 
-  // 2. Clear old controls and insert new ones
   await supabase.from('AssetControls').delete().eq('asset_id', id);
 
   const controls = [];
@@ -422,15 +486,9 @@ async function saveAssetToDB() {
       const cb = document.getElementById('ctrl'+i);
       if(cb && cb.checked && !cb.disabled) { controls.push({ asset_id: id, ctrl_id: i }); }
   }
-  
-  if(controls.length > 0) {
-      const { error: ctrlErr } = await supabase.from('AssetControls').insert(controls);
-      if (ctrlErr) return notify('Cloud Error saving controls.', true);
-  }
+  if(controls.length > 0) await supabase.from('AssetControls').insert(controls);
 
-  editingId = null; 
-  clearForm(); 
-  notify(`Asset ${id} saved to Cloud!`);
+  editingId = null; clearForm(); notify(`Asset ${id} saved to Cloud!`);
   showSection('register'); 
 }
 
@@ -462,7 +520,7 @@ function editAsset(id) {
       const typeEl = document.getElementById('f-type');
       if(typeEl) typeEl.dataset.lastType = a.type;
 
-      const ctrls = globalControls.filter(x => x.asset_id === id).map(x => x.ctrl_id);
+      const ctrls = globalControls.filter(x => x.asset_id === id).map(r => r.ctrl_id);
       for(let i=1; i<=13; i++) { 
           const cb = document.getElementById('ctrl'+i); 
           if(cb) cb.checked = ctrls.includes(i); 
@@ -485,12 +543,11 @@ async function deleteAsset(id) {
   try {
       const { error } = await supabase.from('Assets').delete().eq('id', id);
       if (error) throw error;
-      
-      notify(`Asset ${id} deleted from Cloud.`);
-      showSection('register');
+      notify(`Asset ${id} deleted.`);
+      showSection('register'); 
   } catch(err) {
       console.error("Deletion Error:", err);
-      notify("Failed to delete asset from Cloud.", true);
+      notify("Failed to delete asset.", true);
   }
 }
 
@@ -781,23 +838,10 @@ function exportDataXLSX() {
     });
 
     const wsData = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
-
     const historyHeaders = ["DATE APPROVED", "VERSION NO.", "DESCRIPTION", "CREATED/MODIFIED BY", "APPROVAL"];
     const wsHistory = XLSX.utils.aoa_to_sheet([["DOCUMENT HISTORY"], [], historyHeaders, [rep.docDate||'', rep.docVersion||'', rep.docDesc||'', rep.docAuthor||'', rep.docApproval||'']]);
-
-    const wsHighlights = XLSX.utils.aoa_to_sheet([
-        ["INFORMATION SECURITY RISK ASSESSMENT - HIGHLIGHTS"], [],
-        ["Revision Highlights:"], [rep.revHigh||''], [],
-        ["Initial Overall Highlights:"], [rep.initHigh||'']
-    ]);
-
-    const wsSignoffs = XLSX.utils.aoa_to_sheet([
-        ["SIGN OFF SHEET"], [],
-        ["DESCRIPTION:", "Information Asset Register"], [],
-        ["PREPARED BY"], [rep.prepName||'', rep.prepTitle||''], [],
-        ["REVIEWED BY"], [rep.revName||'', rep.revTitle||''], [],
-        ["APPROVED BY"], [rep.appName||'', rep.appTitle||'']
-    ]);
+    const wsHighlights = XLSX.utils.aoa_to_sheet([["INFORMATION SECURITY RISK ASSESSMENT - HIGHLIGHTS"], [], ["Revision Highlights:"], [rep.revHigh||''], [], ["Initial Overall Highlights:"], [rep.initHigh||'']]);
+    const wsSignoffs = XLSX.utils.aoa_to_sheet([["SIGN OFF SHEET"], [], ["DESCRIPTION:", "Information Asset Register"], [], ["PREPARED BY"], [rep.prepName||'', rep.prepTitle||''], [], ["REVIEWED BY"], [rep.revName||'', rep.revTitle||''], [], ["APPROVED BY"], [rep.appName||'', rep.appTitle||'']]);
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, wsHistory, "Document History");
@@ -812,4 +856,9 @@ function exportDataXLSX() {
 // ==========================================
 // 8. INITIALIZATION
 // ==========================================
-setTimeout(() => { showSection('dashboard'); runEnforcementEngine(); }, 200);
+setTimeout(() => { 
+    syncFromCloud().then(() => {
+        seedSupabaseIfEmpty();
+        showSection('dashboard');
+    });
+}, 200);
