@@ -102,7 +102,9 @@ function runEnforcementEngine(skipAutoTemplate = false) {
 
     const env = document.getElementById('f-environment') ? document.getElementById('f-environment').value : 'Internal';
     
+    // ---------------------------------------------------------
     // GUARDRAIL 1: STRICT CYBERSECURITY DATA & CIA LOCKS
+    // ---------------------------------------------------------
     const lockC = document.getElementById('lock-c');
     const lockI = document.getElementById('lock-i');
     const lockA = document.getElementById('lock-a');
@@ -131,6 +133,7 @@ function runEnforcementEngine(skipAutoTemplate = false) {
         if(lockA) lockA.textContent = (env === 'Internet Facing') ? '🔒 Env Driven' : '🔒 System Enforced';
 
     } else {
+        // Unlock fields if no type is selected
         ['f-pii', 'f-spi', 'f-corp', 'f-c', 'f-i', 'f-a'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.disabled = false; 
@@ -144,7 +147,9 @@ function runEnforcementEngine(skipAutoTemplate = false) {
     const classEl = document.getElementById('cia-class');
     if(classEl) classEl.textContent = CIA_CLASS[score] || 'N/A';
 
+    // ---------------------------------------------------------
     // GUARDRAIL 2: Threat Restrictions based on Asset Type
+    // ---------------------------------------------------------
     const optPhys = document.getElementById('opt-phys');
     const optHr = document.getElementById('opt-hr');
     const optCyberExt = document.getElementById('opt-cyber-ext');
@@ -170,7 +175,9 @@ function runEnforcementEngine(skipAutoTemplate = false) {
         riskSelect.value = ""; 
     }
 
+    // ---------------------------------------------------------
     // GUARDRAIL 3: Mistake-Proof Controls
+    // ---------------------------------------------------------
     const threat = g('f-risk-category');
     const validControls = controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13];
 
@@ -277,26 +284,26 @@ function riskBadge(r) { const cls = { 'Very Low': 'badge-vl', 'Low': 'badge-lo',
 
 async function syncFromCloud() {
     try {
-        const { data: aData, error: aErr } = await supabase.from('assets').select('*');
+        const { data: aData, error: aErr } = await supabase.from('Assets').select('*');
         if (aErr) throw aErr;
         globalAssets = aData || [];
 
-        const { data: cData, error: cErr } = await supabase.from('asset_controls').select('*');
+        const { data: cData, error: cErr } = await supabase.from('AssetControls').select('*');
         if (cErr) throw cErr;
         globalControls = cData || [];
 
-        const { data: rData } = await supabase.from('report_data').select('*').eq('id', 1).single();
+        const { data: rData } = await supabase.from('ReportData').select('*').eq('id', 1).single();
         globalReport = rData || {};
     } catch (err) {
         console.error("Cloud Sync Error: ", err);
-        notify("Failed to connect to Supabase DB. Check API Keys.", true);
+        notify("Failed to connect to Supabase DB.", true);
     }
 }
 
 // THE CLOUD AUTO-SEEDER: If Supabase is totally empty, push the 12 assets up!
 async function seedSupabaseIfEmpty() {
     try {
-        const { data, error } = await supabase.from('assets').select('id').limit(1);
+        const { data, error } = await supabase.from('Assets').select('id').limit(1);
         if (error) return; // table might not exist yet
         
         if (data.length === 0) {
@@ -332,9 +339,9 @@ async function seedSupabaseIfEmpty() {
                 { asset_id: 'SA-003', ctrl_id: 1 }, { asset_id: 'SA-003', ctrl_id: 6 }, { asset_id: 'SA-003', ctrl_id: 10 }, { asset_id: 'SA-003', ctrl_id: 13 }
             ];
 
-            await supabase.from('assets').insert(seedAssets);
-            await supabase.from('asset_controls').insert(seedControls);
-            await supabase.from('report_data').insert([{ id: 1, docDate: '', docVersion: '', docAuthor: '', docApproval: '', docDesc: '', revHigh: '', initHigh: '', prepName: '', prepTitle: '', revName: '', revTitle: '', appName: '', appTitle: '' }]);
+            await supabase.from('Assets').insert(seedAssets);
+            await supabase.from('AssetControls').insert(seedControls);
+            await supabase.from('ReportData').insert([{ id: 1, docDate: '', docVersion: '', docAuthor: '', docApproval: '', docDesc: '', revHigh: '', initHigh: '', prepName: '', prepTitle: '', revName: '', revTitle: '', appName: '', appTitle: '' }]);
 
             await syncFromCloud();
             renderDashboard();
@@ -469,17 +476,17 @@ async function saveAssetToDB() {
       actionType: g('f-action-type'), actionStatus: g('f-action-status'), actionPlan: g('f-action-plan'), actionOwner: g('f-action-owner'), actionDate: g('f-action-date')
   };
 
-  const { error: assetErr } = await supabase.from('assets').upsert(payload);
+  const { error: assetErr } = await supabase.from('Assets').upsert(payload);
   if (assetErr) return notify('Cloud Error: ' + assetErr.message, true);
 
-  await supabase.from('asset_controls').delete().eq('asset_id', id);
+  await supabase.from('AssetControls').delete().eq('asset_id', id);
 
   const controls = [];
   for(let i=1; i<=13; i++) { 
       const cb = document.getElementById('ctrl'+i);
       if(cb && cb.checked && !cb.disabled) { controls.push({ asset_id: id, ctrl_id: i }); }
   }
-  if(controls.length > 0) await supabase.from('asset_controls').insert(controls);
+  if(controls.length > 0) await supabase.from('AssetControls').insert(controls);
 
   editingId = null; clearForm(); notify(`Asset ${id} saved to Cloud!`);
   showSection('register'); 
@@ -513,7 +520,7 @@ function editAsset(id) {
       const typeEl = document.getElementById('f-type');
       if(typeEl) typeEl.dataset.lastType = a.type;
 
-      const ctrls = globalControls.filter(x => x.asset_id === id).map(x => x.ctrl_id);
+      const ctrls = globalControls.filter(x => x.asset_id === id).map(r => r.ctrl_id);
       for(let i=1; i<=13; i++) { 
           const cb = document.getElementById('ctrl'+i); 
           if(cb) cb.checked = ctrls.includes(i); 
@@ -534,9 +541,8 @@ function editAsset(id) {
 async function deleteAsset(id) {
   if (!confirm(`Are you sure you want to permanently delete asset ${id} from Cloud?`)) return;
   try {
-      const { error } = await supabase.from('assets').delete().eq('id', id);
+      const { error } = await supabase.from('Assets').delete().eq('id', id);
       if (error) throw error;
-      
       notify(`Asset ${id} deleted.`);
       showSection('register'); 
   } catch(err) {
@@ -580,7 +586,7 @@ async function saveReportData() {
         revHigh: g('rep-rev-high'), initHigh: g('rep-init-high'),
         prepName: g('rep-prep-name'), prepTitle: g('rep-prep-title'), revName: g('rep-rev-name'), revTitle: g('rep-rev-title'), appName: g('rep-app-name'), appTitle: g('rep-app-title')
     };
-    const { error } = await supabase.from('report_data').upsert(payload);
+    const { error } = await supabase.from('ReportData').upsert(payload);
     if(error) notify("Cloud save failed.", true);
     else notify("Report Details Saved to Database!");
 }
@@ -847,7 +853,9 @@ function exportDataXLSX() {
     notify("Exported to Excel successfully!");
 }
 
-// Boot up
+// ==========================================
+// 8. INITIALIZATION
+// ==========================================
 setTimeout(() => { 
     syncFromCloud().then(() => {
         seedSupabaseIfEmpty();
