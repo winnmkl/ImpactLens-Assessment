@@ -187,9 +187,18 @@
         </div>
 
         <div class="form-row"><div class="field"><label>Identified Risk Description</label><textarea id="f-risk-desc" oninput="runEnforcementEngine()"></textarea></div></div>
+        
         <div class="form-row grid-2" style="margin-top:16px;">
-          <div class="field"><label>Probability (1-5)</label><select id="f-prob" onchange="runEnforcementEngine()"><option value="1">1 - Rare</option><option value="2">2 - Unlikely</option><option value="3" selected>3 - Possible</option><option value="4">4 - Likely</option><option value="5">5 - Almost Certain</option></select></div>
-          <div class="field"><label>Severity (1-5)</label><select id="f-sev" onchange="runEnforcementEngine()"><option value="1">1 - Insignificant</option><option value="2">2 - Minor</option><option value="3" selected>3 - Moderate</option><option value="4">4 - Major</option><option value="5">5 - High/Catastrophic</option></select></div>
+          <div class="field">
+              <label>Inherent Probability (1-5) 🔒</label>
+              <input type="hidden" id="f-prob" value="3">
+              <input type="text" id="f-prob-display" readonly style="background:var(--bg4); cursor:not-allowed; font-weight:600;" placeholder="Auto-calculated...">
+          </div>
+          <div class="field">
+              <label>Inherent Severity (1-5) 🔒</label>
+              <input type="hidden" id="f-sev" value="3">
+              <input type="text" id="f-sev-display" readonly style="background:var(--bg4); cursor:not-allowed; font-weight:600;" placeholder="Auto-calculated...">
+          </div>
         </div>
         
         <label style="margin-top: 20px;">Implemented Controls</label>
@@ -226,6 +235,18 @@
            <span class="badge badge-mo" id="r-residual" style="font-size:14px; padding:6px 12px;">Moderate</span>
            <span id="control-feedback" style="font-size:11px; color:var(--text2); margin-left:8px;"></span>
         </div>
+        
+        <div class="form-row grid-2" style="margin-bottom:16px; padding:12px; background:var(--bg3); border-radius:4px; border:1px solid var(--border);">
+            <div class="field" style="margin-bottom:0;">
+                <label>Residual Probability (Post-Controls) 🔒</label>
+                <input type="text" id="f-res-prob-display" readonly style="background:var(--bg4); cursor:not-allowed; font-weight:600;">
+            </div>
+            <div class="field" style="margin-bottom:0;">
+                <label>Residual Severity (Post-Controls) 🔒</label>
+                <input type="text" id="f-res-sev-display" readonly style="background:var(--bg4); cursor:not-allowed; font-weight:600;">
+            </div>
+        </div>
+
         <div id="action-plan-section">
           <div class="card-header" style="color:var(--danger); border-bottom:none; margin-bottom:10px; font-size:10px;">Action plan required for High/Moderate Risk</div>
           <div class="form-row grid-2" style="margin-bottom: 16px;">
