@@ -1,190 +1,28 @@
 /* ==========================================
    IMPACTLENS - MAIN APPLICATION
-   Comprehensive risk assessment system
+   Enterprise Risk Assessment (Supabase Cloud Version)
    ========================================== */
 
-// Helper to generate dynamic dates so the 14-day alert ALWAYS works during your presentation
+// 1. SUPABASE INITIALIZATION
+const supabaseUrl = 'https://haspklehikocqswmgmtk.supabase.co';
+const supabaseKey = 'sb_publishable_O1qHjWdSJ1hZYraL8mmxYQ_CPRr0Sv6';
+const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+
+// Global State (Replaces AlaSQL in-memory tables)
+let globalAssets = [];
+let globalControls = [];
+let globalReport = {};
+let editingId = null;
+
+// Helper to generate dynamic dates
 const getDynamicDate = (daysToAdd) => {
-    const d = new Date();
-    d.setDate(d.getDate() + daysToAdd);
+    const d = new Date(); d.setDate(d.getDate() + daysToAdd);
     return d.toISOString().split('T')[0];
 };
 
 // ==========================================
-// 1. SQL DATABASE INITIALIZATION (AlaSQL)
+// 2. CONSTANTS & IAS MAPPING
 // ==========================================
-alasql(`CREATE TABLE IF NOT EXISTS Assets (
-    id STRING PRIMARY KEY, type STRING, name STRING, group_name STRING, 
-    hostname STRING, server STRING, custodian STRING, description STRING, 
-    ip_address STRING, environment STRING, department STRING, 
-    pii STRING, spi STRING, corp STRING, 
-    ciaC INT, ciaI INT, ciaA INT, ciaScore INT, ciaClass STRING, 
-    riskCategory STRING, riskDesc STRING, prob INT, sev INT, inherit STRING, 
-    residual STRING,
-    actionType STRING, actionStatus STRING, actionPlan STRING, actionOwner STRING, actionDate STRING
-)`);
-
-alasql(`CREATE TABLE IF NOT EXISTS AssetControls (
-    asset_id STRING, ctrl_id INT
-)`);
-
-alasql(`CREATE TABLE IF NOT EXISTS ReportData (
-    id INT PRIMARY KEY, docDate STRING, docVersion STRING, docAuthor STRING, docApproval STRING, docDesc STRING,
-    revHigh STRING, initHigh STRING,
-    prepName STRING, prepTitle STRING, revName STRING, revTitle STRING, appName STRING, appTitle STRING
-)`);
-
-// Load persistence from LocalStorage
-const storedAssets = JSON.parse(localStorage.getItem('impactlens_assets')) || [];
-const storedControls = JSON.parse(localStorage.getItem('impactlens_controls')) || [];
-const storedReport = JSON.parse(localStorage.getItem('impactlens_report')) || [];
-
-// Check if this is the user's very first time opening the app
-const isInitialized = localStorage.getItem('impactlens_initialized');
-
-if (isInitialized) {
-    // If they have been here before, strictly load their saved data
-    alasql.tables.Assets.data = storedAssets;
-    alasql.tables.AssetControls.data = storedControls;
-} else {
-    // FIRST TIME ONLY: Seed Sample Data
-    alasql(`INSERT INTO Assets VALUES 
-        ('IA-001', 'IA', 'University Clinic Medical Records', 'Clinic', 
-         'CLINIC-DB-01', 'Clinic Primary DB', 'Clinic Records Admin', 
-         'Physical and digital health records of students and faculty.', 
-         '10.50.1.10', 'Internal', 'Medical Services',
-         'Y', 'Y', 'N', 3, 3, 2, 8, 'Restricted', 
-         'cyber_ext_leak', 'Accidental data leak of sensitive health information via unsecured sharing or misplacement.', 
-         3, 5, 'High', 'Moderate', 
-         'Mitigate', 'In Progress', 'Enforce strict physical access to the clinic records room and implement DLP tools for digital health data.', 
-         'Head Physician', '${getDynamicDate(5)}'),
-
-        ('PhA-001', 'PhA', 'CET Engineering Lab Computers', 'CET', 
-         'CET-LAB-XX', 'Lab Workstations', 'CET Lab Technician', 
-         'High-performance desktops used for CAD and simulations.', 
-         'DHCP', 'Internal', 'Engineering',
-         'N', 'N', 'N', 1, 2, 2, 5, 'Internal Use', 
-         'phys_theft', 'Theft of physical hardware components during off-hours.', 
-         3, 3, 'Moderate', 'Moderate', 
-         'Mitigate', 'Pending', 'Install physical cable locks on all lab PCs and upgrade lab CCTV coverage.', 
-         'Security Office', '${getDynamicDate(10)}'),
-
-        ('SA-001', 'SA', 'PLM Library Management System', 'Library', 
-         'LIB-APP-01', 'Library App Server', 'ITC Database Administrator', 
-         'System managing book inventory and borrowing records.', 
-         '10.20.5.15', 'Hybrid', 'Library Services',
-         'Y', 'N', 'N', 2, 2, 3, 7, 'Confidential', 
-         'cyber_int_vuln', 'Unpatched software vulnerabilities leading to system disruption.', 
-         4, 3, 'High', 'Moderate', 
-         'Mitigate', 'Done', 'Establish a monthly patch management routine for the library server OS.', 
-         'ITC SecOps', '${getDynamicDate(-5)}'),
-
-        ('PA-001', 'PA', 'University President & Board', 'Admin', 
-         'EXEC-LPT-XX', 'Exec Endpoints', 'Office of the University Sec', 
-         'Top-level executive management with highest signing authority.', 
-         'DHCP', 'Hybrid', 'Administration',
-         'Y', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 
-         'hr_insider', 'Targeted spear-phishing (Whaling) attempting to authorize fraudulent wire transfers.', 
-         3, 5, 'High', 'High', 
-         'Avoid', 'Pending', 'Mandate executive anti-phishing training and enforce out-of-band verbal verification for transfers.', 
-         'CISO', '${getDynamicDate(40)}'),
-
-        ('SV-001', 'SV', 'PLM Official Website', 'ITC', 
-         'WEB-PROD-01', 'Public Web Server', 'ITC Web Development Team', 
-         'Primary public-facing portal for university info.', 
-         '203.177.X.X', 'Internet Facing', 'ITC',
-         'N', 'N', 'Y', 1, 2, 3, 6, 'Confidential', 
-         'cyber_ext_ddos', 'DDoS attack during admissions season rendering the site inaccessible.', 
-         4, 3, 'High', 'Moderate', 
-         'Transfer', 'In Progress', 'Route website traffic through a cloud-based DDoS mitigation and CDN service.', 
-         'ITC Infra', '${getDynamicDate(2)}'),
-
-        ('FA-001', 'FA', 'University Cashier Main Vault', 'Finance', 
-         'N/A', 'N/A', 'Head Cashier / Security', 
-         'Physical safe holding daily tuition fee collections.', 
-         'N/A', 'Internal', 'Finance',
-         'N', 'N', 'Y', 3, 3, 3, 9, 'Restricted', 
-         'phys_theft', 'Theft or armed robbery targeting physical cash collections.', 
-         2, 4, 'Moderate', 'Low', 
-         'Transfer', 'Done', 'Insure the vault contents via third party.', 'Security', '${getDynamicDate(60)}'),
-
-        ('IA-002', 'IA', 'PLM Alumni Database', 'Alumni Office', 
-         'ALUM-DB-01', 'Alumni Records DB', 'ITC Enterprise Systems Team', 
-         'Contact info and employment history of former students.', 
-         '10.50.2.20', 'Internal', 'Alumni Affairs',
-         'Y', 'N', 'N', 3, 2, 2, 7, 'Confidential', 
-         'hr_insider', 'Unauthorized extraction of the database by an insider.', 
-         3, 4, 'High', 'High', 
-         'Mitigate', 'Pending', 'Enforce strict RBAC limiting export capabilities and monitor query logs.', 
-         'ITC SecOps', '${getDynamicDate(12)}'),
-
-        ('PhA-002', 'PhA', 'Campus Security CCTV NVR', 'Security', 
-         'SEC-NVR-01', 'Video Storage Array', 'ITC Infrastructure Team', 
-         'Network Video Recorder storing 30 days of security footage.', 
-         '10.99.1.50', 'Internal', 'Campus Security',
-         'N', 'N', 'N', 3, 3, 3, 9, 'Restricted', 
-         'phys_destruct', 'Hardware failure due to overheating in the security office closet.', 
-         3, 4, 'High', 'Moderate', 
-         'Mitigate', 'In Progress', 'Relocate the NVR to the main climate-controlled server room with RAID 5.', 
-         'Chief of Security', '${getDynamicDate(45)}'),
-
-        ('SA-002', 'SA', 'HR Payroll & Benefits System', 'HR', 
-         'HR-APP-01', 'Payroll Application', 'ITC Database Administrator', 
-         'System calculating faculty salaries and tax deductions.', 
-         '10.30.1.10', 'Internal', 'Human Resources',
-         'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 
-         'hr_insider', 'Disgruntled employee modifying salary bands (Insider Threat).', 
-         2, 5, 'Moderate', 'Moderate', 
-         'Mitigate', 'Pending', 'Implement strict segregation of duties (maker-checker rule) for payroll changes.', 
-         'HR Director', '${getDynamicDate(8)}'),
-
-        ('FA-002', 'FA', 'University Digital Banking Portal', 'Finance', 
-         'BANK-GW-01', 'Banking Gateway', 'Finance IT Support', 
-         'Online access to operational bank accounts for payments.', 
-         '10.40.1.5', 'Internet Facing', 'Finance',
-         'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 
-         'cyber_int_unauth', 'Unauthorized access to admin accounts via credential stuffing.', 
-         3, 5, 'High', 'Low', 
-         'Mitigate', 'Pending', 'Require physical hardware security keys for banking portal access.', 
-         'VP for Finance', '${getDynamicDate(50)}')
-    `);
-    
-    alasql(`INSERT INTO AssetControls VALUES 
-        ('IA-001', 1), ('IA-001', 3), ('IA-001', 7), ('IA-001', 12),
-        ('PhA-001', 5), ('PhA-001', 8),
-        ('SA-001', 1), ('SA-001', 11),
-        ('PA-001', 1),
-        ('SV-001', 10), ('SV-001', 12), ('SV-001', 13),
-        ('FA-001', 1), ('FA-001', 2), ('FA-001', 5),
-        ('IA-002', 1), ('IA-002', 3), ('IA-002', 12),
-        ('PhA-002', 1), ('PhA-002', 5), ('PhA-002', 6),
-        ('SA-002', 1), ('SA-002', 2), ('SA-002', 3), ('SA-002', 4),
-        ('FA-002', 3), ('FA-002', 4), ('FA-002', 10)
-    `);
-    
-    localStorage.setItem('impactlens_initialized', 'true');
-}
-
-if(storedReport.length > 0) {
-    alasql.tables.ReportData.data = storedReport;
-    loadReportDataToUI();
-} else {
-    alasql("INSERT INTO ReportData VALUES (1, '', '', '', '', '', '', '', '', '', '', '', '', '')");
-}
-
-persistDB();
-
-function persistDB() {
-    localStorage.setItem('impactlens_assets', JSON.stringify(alasql('SELECT * FROM Assets')));
-    localStorage.setItem('impactlens_controls', JSON.stringify(alasql('SELECT * FROM AssetControls')));
-    localStorage.setItem('impactlens_report', JSON.stringify(alasql('SELECT * FROM ReportData')));
-}
-
-// ==========================================
-// 2. CONSTANTS & LOOKUPS
-// ==========================================
-let editingId = null;
-
 const INHERIT = { 
   '5-1':'Moderate','5-2':'Moderate','5-3':'High','5-4':'High','5-5':'High', 
   '4-1':'Low','4-2':'Moderate','4-3':'Moderate','4-4':'High','4-5':'High', 
@@ -193,10 +31,7 @@ const INHERIT = {
   '1-1':'Very Low','1-2':'Low','1-3':'Low','1-4':'Low','1-5':'Moderate' 
 };
 
-const CIA_CLASS = {
-  3:'Public',4:'Internal Use',5:'Internal Use',6:'Confidential',
-  7:'Confidential',8:'Restricted',9:'Restricted'
-};
+const CIA_CLASS = { 3:'Public',4:'Internal Use',5:'Internal Use',6:'Confidential', 7:'Confidential',8:'Restricted',9:'Restricted' };
 
 const CTRL_NAMES = [
   'Documented procedures', 'Segregation of duties', 'Role-Based Access Control (RBAC)', 
@@ -226,9 +61,19 @@ const RISK_TEMPLATES = {
     "legal_dpa": { desc: "Non-compliance to Data Privacy Act (DPA)", prob: "3", sev: "5", action: "Appoint DPO, conduct regular Privacy Impact Assessments (PIA), and update privacy notices." }
 };
 
+// THE STRICT CYBERSECURITY PROFILES MATRIX
+const ASSET_PROFILES = {
+    'IA':  { pii: 'Y', spi: 'Y', corp: 'N', c: 3, i: 3, a: 2 },
+    'PhA': { pii: 'N', spi: 'N', corp: 'N', c: 1, i: 2, a: 2 },
+    'PA':  { pii: 'Y', spi: 'N', corp: 'Y', c: 3, i: 3, a: 3 },
+    'SA':  { pii: 'Y', spi: 'N', corp: 'N', c: 2, i: 2, a: 3 },
+    'SV':  { pii: 'N', spi: 'N', corp: 'Y', c: 1, i: 2, a: 3 },
+    'FA':  { pii: 'Y', spi: 'Y', corp: 'Y', c: 3, i: 3, a: 3 }
+};
+
 function generateSequentialId(type) {
     if (!type) return '';
-    const existing = alasql(`SELECT id FROM Assets WHERE type = '${type}'`);
+    const existing = globalAssets.filter(a => a.type === type);
     let maxNumber = 0;
     existing.forEach(row => {
         const parts = row.id.split('-');
@@ -243,7 +88,7 @@ function generateSequentialId(type) {
 // ==========================================
 // 3. MASTER IAS ENFORCEMENT ENGINE
 // ==========================================
-function runEnforcementEngine() {
+function runEnforcementEngine(skipAutoTemplate = false) {
     const type = document.getElementById('f-type').value;
 
     if (!editingId) {
@@ -257,7 +102,48 @@ function runEnforcementEngine() {
 
     const env = document.getElementById('f-environment') ? document.getElementById('f-environment').value : 'Internal';
     
-    // GUARDRAIL 1: Threat Restrictions based on Asset Type
+    // GUARDRAIL 1: STRICT CYBERSECURITY DATA & CIA LOCKS
+    const lockC = document.getElementById('lock-c');
+    const lockI = document.getElementById('lock-i');
+    const lockA = document.getElementById('lock-a');
+
+    if (type && ASSET_PROFILES[type]) {
+        const profile = ASSET_PROFILES[type];
+        
+        // Auto-fill and completely lock ALL 6 fields based on the selected Type
+        ['f-pii', 'f-spi', 'f-corp', 'f-c', 'f-i', 'f-a'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                const key = id.replace('f-', '');
+                el.value = profile[key];
+                el.disabled = true;
+            }
+        });
+
+        const elA = document.getElementById('f-a');
+        if (env === 'Internet Facing' && elA) {
+            elA.value = '3';
+        }
+
+        if(lockC) lockC.textContent = '🔒 System Enforced';
+        if(lockI) lockI.textContent = '🔒 System Enforced';
+        if(lockA) lockA.textContent = (env === 'Internet Facing') ? '🔒 Env Driven' : '🔒 System Enforced';
+
+    } else {
+        ['f-pii', 'f-spi', 'f-corp', 'f-c', 'f-i', 'f-a'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.disabled = false; 
+        });
+        if(lockC) lockC.textContent = '';
+        if(lockI) lockI.textContent = '';
+        if(lockA) lockA.textContent = '';
+    }
+
+    const score = (+g('f-c')) + (+g('f-i')) + (+g('f-a'));
+    const classEl = document.getElementById('cia-class');
+    if(classEl) classEl.textContent = CIA_CLASS[score] || 'N/A';
+
+    // GUARDRAIL 2: Threat Restrictions based on Asset Type
     const optPhys = document.getElementById('opt-phys');
     const optHr = document.getElementById('opt-hr');
     const optCyberExt = document.getElementById('opt-cyber-ext');
@@ -278,48 +164,12 @@ function runEnforcementEngine() {
         [optPhys, optHr, optCyberExt, optCyberInt, optComp].forEach(el => { if(el) el.disabled = false; });
     }
 
-    // GUARDRAIL 2: Asset Type Data Overrides
-    if (type === 'PhA') {
-        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) { el.value = 'N'; el.disabled = true; } });
-    } else if (type === 'PA') {
-        ['f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) el.disabled = false; });
-        const elPii = document.getElementById('f-pii'); if(elPii) { elPii.value = 'Y'; elPii.disabled = true; }
-    } else if (type === 'FA') {
-        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) { el.value = 'Y'; el.disabled = true; } });
-    } else {
-        ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) el.disabled = false; });
+    const riskSelect = document.getElementById('f-risk-category');
+    if (riskSelect && riskSelect.options[riskSelect.selectedIndex] && riskSelect.options[riskSelect.selectedIndex].disabled) {
+        riskSelect.value = ""; 
     }
 
-    // Now read the dynamically updated DOM states for the CIA locks!
-    const currentPii = document.getElementById('f-pii') ? document.getElementById('f-pii').value : 'N';
-    const currentSpi = document.getElementById('f-spi') ? document.getElementById('f-spi').value : 'N';
-    
-    // GUARDRAIL 3: Data Drives CIA
-    const lockC = document.getElementById('lock-c');
-    const lockA = document.getElementById('lock-a');
-    
-    if (type === 'FA') {
-        ['f-c','f-i','f-a'].forEach(id => { const el = document.getElementById(id); if(el) { el.value = '3'; el.disabled = true; } });
-        if(lockC) lockC.textContent = '🔒'; if(lockA) lockA.textContent = '🔒';
-    } else {
-        const hasPiiSpi = (currentPii === 'Y') || (currentSpi === 'Y');
-        const elC = document.getElementById('f-c');
-        if (hasPiiSpi && elC) { elC.value = '3'; elC.disabled = true; if(lockC) lockC.textContent = '🔒 Data Driven'; } 
-        else if(elC) { elC.disabled = false; if(lockC) lockC.textContent = ''; }
-
-        const elA = document.getElementById('f-a');
-        if (env === 'Internet Facing' && elA) { elA.value = '3'; elA.disabled = true; if(lockA) lockA.textContent = '🔒 Env Driven'; } 
-        else if(elA) { elA.disabled = false; if(lockA) lockA.textContent = ''; }
-        
-        const elI = document.getElementById('f-i');
-        if(elI) elI.disabled = false;
-    }
-
-    const score = (+g('f-c')) + (+g('f-i')) + (+g('f-a'));
-    const classEl = document.getElementById('cia-class');
-    if(classEl) classEl.textContent = CIA_CLASS[score] || 'N/A';
-
-    // GUARDRAIL 4: Mistake-Proof Controls
+    // GUARDRAIL 3: Mistake-Proof Controls
     const threat = g('f-risk-category');
     const validControls = controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13];
 
@@ -347,36 +197,9 @@ function calculateRiskMath() {
     const currentPii = g('f-pii');
     const currentSpi = g('f-spi');
 
-    // System logic overwriting base probabilities
+    // Risk Escalations
     if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.min(5, p + 1);
     if ((currentPii === 'Y' || currentSpi === 'Y') && (threat === 'cyber_ext_leak' || threat === 'legal_dpa')) s = 5;
-
-    // Map numbers to labels for our visual text boxes
-    const PROB_LABELS = {1:'1 - Rare', 2:'2 - Unlikely', 3:'3 - Possible', 4:'4 - Likely', 5:'5 - Almost Certain'};
-    const SEV_LABELS = {1:'1 - Insignificant', 2:'2 - Minor', 3:'3 - Moderate', 4:'4 - Major', 5:'5 - High/Catastrophic'};
-
-    // Dynamic Color function based on the 1-5 value
-    const getDynamicColor = (val) => {
-        if(val === 1) return 'var(--accent2)'; // Teal/Cyan
-        if(val === 2) return 'var(--success)'; // Green
-        if(val === 3) return '#ffcc00';        // Yellow
-        if(val === 4) return 'var(--warn)';    // Orange
-        if(val === 5) return 'var(--danger)';  // Red
-        return 'var(--text)';
-    };
-
-    // Update Section 3 Inherent visual boxes
-    const probDisp = document.getElementById('f-prob-display');
-    if(probDisp) {
-        probDisp.value = PROB_LABELS[p] || p;
-        probDisp.style.color = getDynamicColor(p);
-    }
-    
-    const sevDisp = document.getElementById('f-sev-display');
-    if(sevDisp) {
-        sevDisp.value = SEV_LABELS[s] || s;
-        sevDisp.style.color = getDynamicColor(s);
-    }
 
     const inherentRating = INHERIT[s + '-' + p] || 'Moderate';
     const rEl = document.getElementById('r-inherit');
@@ -395,31 +218,17 @@ function calculateRiskMath() {
         }
     }
 
-    // Residual values calculation
     let resP = Math.max(1, p - Math.floor(pRed / 1.5));
     let resS = Math.max(1, s - Math.floor(sRed / 1.5));
     const residualRating = INHERIT[resS + '-' + resP] || 'Low';
     
-    // Update Section 4 Residual visual boxes
-    const resProbDisp = document.getElementById('f-res-prob-display');
-    if(resProbDisp) {
-        resProbDisp.value = PROB_LABELS[resP] || resP;
-        resProbDisp.style.color = getDynamicColor(resP);
-    }
-    
-    const resSevDisp = document.getElementById('f-res-sev-display');
-    if(resSevDisp) {
-        resSevDisp.value = SEV_LABELS[resS] || resS;
-        resSevDisp.style.color = getDynamicColor(resS);
-    }
-
     const resEl = document.getElementById('r-residual');
     if(resEl) { resEl.textContent = residualRating; resEl.style.color = riskColor(residualRating); }
     
     const fbEl = document.getElementById('control-feedback');
     if (fbEl) fbEl.textContent = `(${activeValidCount} relevant mitigating controls applied)`;
 
-    // GUARDRAIL 5: Risk Appetite Enforcement
+    // Risk Appetite Enforcement
     const actTypeSelect = document.getElementById('f-action-type');
     const lockTreat = document.getElementById('lock-treat');
     
@@ -442,11 +251,10 @@ function calculateRiskMath() {
 
 function applyRiskTemplate() {
     const key = g('f-risk-category');
-    const probEl = document.getElementById('f-prob'); // Hidden input
-    const sevEl = document.getElementById('f-sev'); // Hidden input
-    
     if (RISK_TEMPLATES[key]) {
         const descEl = document.getElementById('f-risk-desc');
+        const probEl = document.getElementById('f-prob');
+        const sevEl = document.getElementById('f-sev');
         const apEl = document.getElementById('f-action-plan');
         
         if(descEl) descEl.value = RISK_TEMPLATES[key].desc;
@@ -455,10 +263,6 @@ function applyRiskTemplate() {
         if(apEl && !apEl.value) apEl.value = RISK_TEMPLATES[key].action;
         
         notify("Risk template applied.");
-    } else {
-        // Fallback default base metrics if the user selects "Custom"
-        if(probEl) probEl.value = "3";
-        if(sevEl) sevEl.value = "3";
     }
     runEnforcementEngine();
 }
@@ -467,9 +271,33 @@ function riskColor(r) { return { 'Very Low': 'var(--success)', 'Low': 'var(--acc
 function riskBadge(r) { const cls = { 'Very Low': 'badge-vl', 'Low': 'badge-lo', 'Moderate': 'badge-mo', 'High': 'badge-hi' }[r] || 'badge-lo'; return `<span class="badge ${cls}">${r||'—'}</span>`; }
 
 // ==========================================
-// 4. NAVIGATION & UTILS
+// 4. SUPABASE CLOUD SYNC & UI NAVIGATION
 // ==========================================
-function showSection(name) {
+
+async function syncFromCloud() {
+    try {
+        const { data: aData, error: aErr } = await supabase.from('Assets').select('*');
+        if (aErr) throw aErr;
+        globalAssets = aData || [];
+
+        const { data: cData, error: cErr } = await supabase.from('AssetControls').select('*');
+        if (cErr) throw cErr;
+        globalControls = cData || [];
+
+        const { data: rData } = await supabase.from('ReportData').select('*').eq('id', 1).single();
+        globalReport = rData || {};
+    } catch (err) {
+        console.error("Cloud Sync Error: ", err);
+        notify("Failed to connect to Supabase DB. Make sure your tables are created.", true);
+    }
+}
+
+async function showSection(name) {
+  // Sync before drawing UI to ensure fresh cloud data
+  if (['dashboard', 'register', 'risk', 'controls', 'actions', 'report'].includes(name)) {
+      await syncFromCloud();
+  }
+
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('sec-' + name).classList.add('active');
@@ -501,31 +329,21 @@ function g(id) { const el = document.getElementById(id); return el ? el.value : 
 document.addEventListener('click', function(event) {
     const wrapper = document.querySelector('.multi-select-wrapper');
     const dropdown = document.getElementById('ctrl-dropdown');
-    if (wrapper && dropdown && !wrapper.contains(event.target)) {
-        dropdown.classList.remove('show');
-    }
+    if (wrapper && dropdown && !wrapper.contains(event.target)) dropdown.classList.remove('show');
 });
 
 function updateTagsUI() {
-    const container = document.getElementById('selected-controls-tags');
-    if (!container) return;
-    container.innerHTML = '';
-    
+    const cont = document.getElementById('selected-controls-tags');
+    if (!cont) return; cont.innerHTML = '';
     [1,2,3,4,5,6,7,8,9,10,11,12,13].forEach(n => {
         const cb = document.getElementById('ctrl'+n);
         if (cb && cb.checked) {
-            const tag = document.createElement('div');
-            tag.className = 'tag';
-            tag.innerHTML = `${CTRL_NAMES[n-1]} <span class="tag-close" onclick="removeTag(${n}, event)">×</span>`;
-            container.appendChild(tag);
+            cont.innerHTML += `<div class="tag">${CTRL_NAMES[n-1]} <span class="tag-close" onclick="removeTag(${n}, event)">×</span></div>`;
         }
     });
 }
 
-function updateTags() {
-    updateTagsUI();
-    runEnforcementEngine(); 
-}
+function updateTags() { updateTagsUI(); runEnforcementEngine(); }
 
 function removeTag(n, event) {
     event.stopPropagation();
@@ -538,29 +356,29 @@ function calculateDeadlines() {
     const today = new Date(); today.setHours(0,0,0,0);
     const limit = new Date(today); limit.setDate(today.getDate() + 14);
     let dCount = 0;
-    alasql("SELECT actionDate, actionStatus, actionType FROM Assets").forEach(a => {
+    
+    globalAssets.forEach(a => {
         if (a.actionDate && a.actionStatus !== 'Done' && a.actionType !== 'Accept') {
             const target = new Date(a.actionDate); target.setHours(0,0,0,0);
             if (target <= limit) dCount++;
         }
     });
     
-    const hCount = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE residual = 'High'");
+    const hCount = globalAssets.filter(a => a.residual === 'High').length;
+    const actionsCount = globalAssets.filter(a => ['High', 'Moderate'].includes(a.residual) && a.actionType !== 'Accept').length;
     
-    const highBadge = document.getElementById('hdr-high');
-    if(highBadge) highBadge.textContent = hCount;
-
-    const deadBadge = document.getElementById('hdr-deadlines');
-    if(deadBadge) {
-        deadBadge.textContent = dCount;
-        deadBadge.style.color = dCount > 0 ? "var(--danger)" : "var(--warn)";
+    if(document.getElementById('hdr-high')) document.getElementById('hdr-high').textContent = hCount;
+    if(document.getElementById('hdr-deadlines')) {
+        document.getElementById('hdr-deadlines').textContent = dCount;
+        document.getElementById('hdr-deadlines').style.color = dCount > 0 ? "var(--danger)" : "var(--warn)";
     }
+    if(document.getElementById('nav-actions')) document.getElementById('nav-actions').textContent = actionsCount;
 }
 
 // ==========================================
-// 6. SQL CRUD OPERATIONS
+// 6. SUPABASE CRUD OPERATIONS
 // ==========================================
-function saveAssetToDB() {
+async function saveAssetToDB() {
   const type = g('f-type');
   const name = g('f-name').trim();
   if (!type) return notify('Error: Select an asset type', true);
@@ -572,33 +390,53 @@ function saveAssetToDB() {
   
   const p = parseInt(g('f-prob')) || 3;
   const s = parseInt(g('f-sev')) || 3;
-  const c = +g('f-c'), ii = +g('f-i'), a = +g('f-a');
+  
+  // Force retrieval of locked values directly
+  const c = parseInt(document.getElementById('f-c').value) || 2;
+  const ii = parseInt(document.getElementById('f-i').value) || 2;
+  const a = parseInt(document.getElementById('f-a').value) || 2;
+  
+  const pii = document.getElementById('f-pii').value;
+  const spi = document.getElementById('f-spi').value;
+  const corp = document.getElementById('f-corp').value;
 
-  alasql(`DELETE FROM Assets WHERE id = '${id}'`);
-  alasql(`DELETE FROM AssetControls WHERE asset_id = '${id}'`);
+  const payload = {
+      id: id, type: type, name: name, group_name: g('f-group'), 
+      hostname: g('f-hostname'), server: g('f-server'), custodian: g('f-custodian'), description: g('f-desc'), 
+      ip_address: g('f-ip'), environment: g('f-environment'), department: g('f-department'),
+      pii: pii, spi: spi, corp: corp,
+      ciaC: c, ciaI: ii, ciaA: a, ciaScore: c+ii+a, ciaClass: document.getElementById('cia-class').textContent, 
+      riskCategory: g('f-risk-category'), riskDesc: g('f-risk-desc'), prob: p, sev: s, inherit: inherit, residual: residual, 
+      actionType: g('f-action-type'), actionStatus: g('f-action-status'), actionPlan: g('f-action-plan'), actionOwner: g('f-action-owner'), actionDate: g('f-action-date')
+  };
 
-  alasql(`INSERT INTO Assets VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
-      id, type, name, g('f-group'), 
-      g('f-hostname'), g('f-server'), g('f-custodian'), g('f-desc'), 
-      g('f-ip'), g('f-environment'), g('f-department'),
-      g('f-pii'), g('f-spi'), g('f-corp'),
-      c, ii, a, c+ii+a, document.getElementById('cia-class').textContent, 
-      g('f-risk-category'), g('f-risk-desc'), p, s, inherit, residual, 
-      g('f-action-type'), g('f-action-status'), g('f-action-plan'), g('f-action-owner'), g('f-action-date')
-  ]);
+  // 1. Upsert to Supabase
+  const { error: assetErr } = await supabase.from('Assets').upsert(payload);
+  if (assetErr) return notify('Cloud Error: ' + assetErr.message, true);
 
+  // 2. Clear old controls and insert new ones
+  await supabase.from('AssetControls').delete().eq('asset_id', id);
+
+  const controls = [];
   for(let i=1; i<=13; i++) { 
       const cb = document.getElementById('ctrl'+i);
-      if(cb && cb.checked && !cb.disabled) { alasql("INSERT INTO AssetControls VALUES (?,?)", [id, i]); }
+      if(cb && cb.checked && !cb.disabled) { controls.push({ asset_id: id, ctrl_id: i }); }
+  }
+  
+  if(controls.length > 0) {
+      const { error: ctrlErr } = await supabase.from('AssetControls').insert(controls);
+      if (ctrlErr) return notify('Cloud Error saving controls.', true);
   }
 
-  persistDB(); editingId = null; clearForm(); notify(`Asset ${id} saved successfully!`);
-  showSection('register'); renderDashboard();
+  editingId = null; 
+  clearForm(); 
+  notify(`Asset ${id} saved to Cloud!`);
+  showSection('register'); 
 }
 
 function editAsset(id) {
   try {
-      const a = alasql(`SELECT * FROM Assets WHERE id = '${id}'`)[0];
+      const a = globalAssets.find(x => x.id === id);
       if (!a) return notify("Error finding asset.", true);
 
       editingId = id;
@@ -620,39 +458,39 @@ function editAsset(id) {
           const el = document.getElementById(key);
           if(el !== null) el.value = map[key] || ''; 
       }
+      
+      const typeEl = document.getElementById('f-type');
+      if(typeEl) typeEl.dataset.lastType = a.type;
 
-      const ctrls = alasql(`SELECT ctrl_id FROM AssetControls WHERE asset_id = '${id}'`).map(r => r.ctrl_id);
+      const ctrls = globalControls.filter(x => x.asset_id === id).map(x => x.ctrl_id);
       for(let i=1; i<=13; i++) { 
           const cb = document.getElementById('ctrl'+i); 
           if(cb) cb.checked = ctrls.includes(i); 
       }
 
-      runEnforcementEngine(); 
+      runEnforcementEngine(true); 
       setTimeout(updateTagsUI, 50); 
-      showSection('add'); window.scrollTo(0,0);
+      
+      document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+      document.getElementById('sec-add').classList.add('active');
+      window.scrollTo(0,0);
   } catch (err) {
       console.error("Edit Error:", err);
       notify("Failed to open asset for editing.", true);
   }
 }
 
-function deleteAsset(id) {
-  if (!confirm(`Are you sure you want to permanently delete asset ${id}?`)) return;
+async function deleteAsset(id) {
+  if (!confirm(`Are you sure you want to permanently delete asset ${id} from Cloud?`)) return;
   try {
-      alasql(`DELETE FROM Assets WHERE id = '${id}'`);
-      alasql(`DELETE FROM AssetControls WHERE asset_id = '${id}'`);
-      persistDB(); 
+      const { error } = await supabase.from('Assets').delete().eq('id', id);
+      if (error) throw error;
       
-      if (typeof renderRegister === "function") renderRegister(); 
-      if (typeof renderRiskRegister === "function") renderRiskRegister();
-      if (typeof renderDashboard === "function") renderDashboard(); 
-      if (typeof renderControls === "function") renderControls();
-      if (typeof renderActions === "function") renderActions();
-      
-      notify(`Asset ${id} deleted successfully.`);
+      notify(`Asset ${id} deleted from Cloud.`);
+      showSection('register');
   } catch(err) {
       console.error("Deletion Error:", err);
-      notify("Failed to delete asset. Check console.", true);
+      notify("Failed to delete asset from Cloud.", true);
   }
 }
 
@@ -661,7 +499,7 @@ function clearForm() {
   fields.forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   
   const selects = ['f-type', 'f-id'];
-  selects.forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+  selects.forEach(id => { const el = document.getElementById(id); if(el) { el.value = ''; el.dataset.lastType = ''; } });
 
   if(document.getElementById('f-environment')) document.getElementById('f-environment').value = 'Internal';
   if(document.getElementById('f-pii')) document.getElementById('f-pii').value = 'N';
@@ -670,11 +508,8 @@ function clearForm() {
   if(document.getElementById('f-c')) document.getElementById('f-c').value = '2';
   if(document.getElementById('f-i')) document.getElementById('f-i').value = '2';
   if(document.getElementById('f-a')) document.getElementById('f-a').value = '2';
-  
-  // Reset base probabilities to 3
   if(document.getElementById('f-prob')) document.getElementById('f-prob').value = '3';
   if(document.getElementById('f-sev')) document.getElementById('f-sev').value = '3';
-  
   if(document.getElementById('f-action-type')) document.getElementById('f-action-type').value = 'Mitigate';
   if(document.getElementById('f-action-status')) document.getElementById('f-action-status').value = 'Pending';
   
@@ -688,19 +523,19 @@ function clearForm() {
   updateTagsUI();
 }
 
-function saveReportData() {
-    alasql("DELETE FROM ReportData WHERE id = 1");
-    alasql(`INSERT INTO ReportData VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-        g('doc-date'), g('doc-version'), g('doc-author'), g('doc-approval'), g('doc-desc'),
-        g('rep-rev-high'), g('rep-init-high'),
-        g('rep-prep-name'), g('rep-prep-title'), g('rep-rev-name'), g('rep-rev-title'), g('rep-app-name'), g('rep-app-title')
-    ]);
-    persistDB();
-    notify("Report Details Saved to Database!");
+async function saveReportData() {
+    const payload = {
+        id: 1, docDate: g('doc-date'), docVersion: g('doc-version'), docAuthor: g('doc-author'), docApproval: g('doc-approval'), docDesc: g('doc-desc'),
+        revHigh: g('rep-rev-high'), initHigh: g('rep-init-high'),
+        prepName: g('rep-prep-name'), prepTitle: g('rep-prep-title'), revName: g('rep-rev-name'), revTitle: g('rep-rev-title'), appName: g('rep-app-name'), appTitle: g('rep-app-title')
+    };
+    const { error } = await supabase.from('ReportData').upsert(payload);
+    if(error) notify("Cloud save failed.", true);
+    else notify("Report Details Saved to Database!");
 }
 
 function loadReportDataToUI() {
-    const r = alasql("SELECT * FROM ReportData WHERE id = 1")[0];
+    const r = globalReport;
     if(!r) return;
     const mapping = {
         'doc-date': r.docDate, 'doc-version': r.docVersion, 'doc-author': r.docAuthor, 'doc-approval': r.docApproval, 'doc-desc': r.docDesc,
@@ -714,16 +549,15 @@ function loadReportDataToUI() {
 }
 
 // ==========================================
-// 7. UI RENDERING (SQL Driven)
+// 7. UI RENDERING (From Cloud Memory)
 // ==========================================
 function renderRegister() {
-  let data = alasql("SELECT * FROM Assets");
   const tbody = document.getElementById('reg-body');
   if(!tbody) return;
 
-  if (!data.length) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;">No records in DB.</td></tr>`; return; }
+  if (!globalAssets.length) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;">No records in DB.</td></tr>`; return; }
 
-  tbody.innerHTML = data.map(a => `
+  tbody.innerHTML = globalAssets.map(a => `
     <tr>
       <td><span class="badge badge-id">${a.id}</span></td>
       <td><strong>${a.name}</strong></td>
@@ -739,7 +573,7 @@ function renderRegister() {
 }
 
 function renderRiskRegister() {
-  let data = alasql("SELECT * FROM Assets");
+  let data = [...globalAssets];
   data.sort((a,b) => {
     const order = {High:0, Moderate:1, Low:2, 'Very Low':3};
     return (order[a.residual]||4) - (order[b.residual]||4);
@@ -751,7 +585,7 @@ function renderRiskRegister() {
   if (!data.length) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;">No records in DB.</td></tr>`; return; }
 
   tbody.innerHTML = data.map(a => {
-    const ctrls = alasql("SELECT ctrl_id FROM AssetControls WHERE asset_id = ?", [a.id]).length;
+    const ctrls = globalControls.filter(c => c.asset_id === a.id).length;
     return `
     <tr>
       <td><span class="badge badge-id">${a.id}</span></td>
@@ -766,9 +600,17 @@ function renderRiskRegister() {
 
 function updateMatrixHeatmap() {
   document.querySelectorAll('.mx-count').forEach(el => { el.textContent = ''; el.classList.remove('active'); el.style.opacity = "0"; });
-  const riskCounts = alasql("SELECT prob, sev, COUNT(*) as c FROM Assets WHERE prob IS NOT NULL AND sev IS NOT NULL GROUP BY prob, sev");
-  riskCounts.forEach(row => {
-     const cellId = `mx-${row.prob}-${row.sev}`;
+  
+  const riskCounts = {};
+  globalAssets.forEach(a => {
+      if(a.prob && a.sev) {
+          const key = `${a.prob}-${a.sev}`;
+          riskCounts[key] = (riskCounts[key] || 0) + 1;
+      }
+  });
+
+  for(const [key, count] of Object.entries(riskCounts)) {
+     const cellId = `mx-${key}`;
      const cell = document.getElementById(cellId);
      if(cell) {
          let existingCount = cell.querySelector('.mx-count');
@@ -777,23 +619,26 @@ function updateMatrixHeatmap() {
              existingCount.className = 'mx-count';
              cell.appendChild(existingCount);
          }
-         existingCount.textContent = row.c;
+         existingCount.textContent = count;
          existingCount.style.opacity = "1";
          existingCount.classList.add('active');
      }
-  });
+  }
 }
 
 function renderControls() {
-  const total = alasql("SELECT VALUE COUNT(*) FROM Assets") || 1;
-  const ctrlCounts = alasql("SELECT ctrl_id, COUNT(*) as c FROM AssetControls GROUP BY ctrl_id");
+  const total = globalAssets.length || 1;
+  const ctrlCounts = {};
+  globalControls.forEach(c => {
+      ctrlCounts[c.ctrl_id] = (ctrlCounts[c.ctrl_id] || 0) + 1;
+  });
+  
   const colors = ['var(--accent)','var(--accent2)','var(--success)','var(--warn)','var(--purple)','var(--danger)','var(--info)','var(--accent)', 'var(--accent2)','var(--success)','var(--warn)','var(--purple)','var(--danger)'];
   
   const barsEl = document.getElementById('ctrl-bars');
   if(barsEl) {
       barsEl.innerHTML = CTRL_NAMES.map((name,i) => {
-        const dbRow = ctrlCounts.find(row => row.ctrl_id === (i+1));
-        const count = dbRow ? dbRow.c : 0;
+        const count = ctrlCounts[i+1] || 0;
         const pct = Math.round((count/total)*100);
         return `<div class="chart-bar-row">
           <div class="chart-bar-label" style="width:250px; text-align:left;">${name} <span style="color:var(--text3); margin-left:8px;">${count} / ${total} (${pct}%)</span></div>
@@ -803,9 +648,9 @@ function renderControls() {
   }
 }
 
-// GROUPED ACTIONS UI (Mitigate, Transfer, Avoid)
 function renderActions() {
-    const items = alasql("SELECT * FROM Assets WHERE residual IN ('High', 'Moderate') AND actionType != 'Accept' ORDER BY actionDate ASC");
+    const items = globalAssets.filter(a => ['High', 'Moderate'].includes(a.residual) && a.actionType !== 'Accept')
+                              .sort((a,b) => new Date(a.actionDate||'2099-01-01') - new Date(b.actionDate||'2099-01-01'));
     const el = document.getElementById('actions-content');
     if(!el) return;
 
@@ -858,62 +703,54 @@ function renderActions() {
 }
 
 function renderDashboard() {
-  const total = alasql("SELECT VALUE COUNT(*) FROM Assets");
+  const total = globalAssets.length;
   
-  const headerTotal = document.getElementById('hdr-total');
-  const navTotal = document.getElementById('nav-total');
-  if(headerTotal) headerTotal.textContent = total;
-  if(navTotal) navTotal.textContent = total;
+  if(document.getElementById('hdr-total')) document.getElementById('hdr-total').textContent = total;
+  if(document.getElementById('nav-total')) document.getElementById('nav-total').textContent = total;
+  if(document.getElementById('dm-total')) document.getElementById('dm-total').textContent = total;
   
-  const dmTotal = document.getElementById('dm-total');
-  const dmHigh = document.getElementById('dm-high');
-  const dmMod = document.getElementById('dm-mod');
-  const dmPii = document.getElementById('dm-pii');
+  const highRisk = globalAssets.filter(a => a.residual === 'High').length;
+  const modRisk = globalAssets.filter(a => a.residual === 'Moderate').length;
+  const piiCount = globalAssets.filter(a => a.pii === 'Y' || a.spi === 'Y').length;
   
-  if(dmTotal) dmTotal.textContent = total;
-  if(dmHigh) dmHigh.textContent = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE residual = 'High'");
-  if(dmMod) dmMod.textContent = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE residual = 'Moderate'");
-  if(dmPii) dmPii.textContent = alasql("SELECT VALUE COUNT(*) FROM Assets WHERE pii = 'Y' OR spi = 'Y'");
+  if(document.getElementById('dm-high')) document.getElementById('dm-high').textContent = highRisk;
+  if(document.getElementById('dm-mod')) document.getElementById('dm-mod').textContent = modRisk;
+  if(document.getElementById('dm-pii')) document.getElementById('dm-pii').textContent = piiCount;
 
-  // Update the side navigation badge correctly
-  const actionsCount = alasql("SELECT * FROM Assets WHERE residual IN ('High', 'Moderate') AND actionType != 'Accept'").length;
-  const navActions = document.getElementById('nav-actions');
-  if(navActions) navActions.textContent = actionsCount;
-
-  const totalAssets = total || 1;
   const barHtml = (label, val, t, color) => {
     if(!val) return ''; 
     const pct = Math.round((val/t)*100);
     return `<div class="chart-bar-row"><div class="chart-bar-label">${label}</div><div class="chart-bar-track"><div class="chart-bar-fill" style="width:${pct}%;background:${color};color:#000">${pct>10?pct+'%':''}</div></div><div class="chart-bar-count" style="width:24px;text-align:right;">${val}</div></div>`;
   };
 
-  const byType = alasql("SELECT type, COUNT(*) as c FROM Assets GROUP BY type");
+  const byType = {}; globalAssets.forEach(a => byType[a.type] = (byType[a.type] || 0) + 1);
   const typeColors = {IA:'var(--accent)',PhA:'var(--accent2)',PA:'var(--success)',SA:'var(--warn)',SV:'var(--purple)', 'FA':'var(--info)'};
   const typeEl = document.getElementById('dash-types');
   if(typeEl) {
-      if(!byType.length) typeEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No data</p>';
-      else typeEl.innerHTML = byType.map(r => barHtml(r.type, r.c, totalAssets, typeColors[r.type])).join('');
+      if(Object.keys(byType).length === 0) typeEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No data</p>';
+      else typeEl.innerHTML = Object.keys(byType).map(t => barHtml(t, byType[t], total || 1, typeColors[t])).join('');
   }
 
-  const byRes = alasql("SELECT residual, COUNT(*) as c FROM Assets GROUP BY residual");
+  const byRes = {}; globalAssets.forEach(a => byRes[a.residual] = (byRes[a.residual] || 0) + 1);
   const rColors = {'High':'var(--danger)','Moderate':'var(--warn)','Low':'var(--accent2)','Very Low':'var(--success)'};
   const resEl = document.getElementById('dash-residual');
   if(resEl) {
-      if(!byRes.length) resEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No data</p>';
-      else resEl.innerHTML = byRes.map(r => barHtml(r.residual, r.c, totalAssets, rColors[r.residual])).join('');
+      if(Object.keys(byRes).length === 0) resEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No data</p>';
+      else resEl.innerHTML = Object.keys(byRes).map(r => barHtml(r, byRes[r], total || 1, rColors[r])).join('');
   }
 
-  const byClass = alasql("SELECT ciaClass, COUNT(*) as c FROM Assets GROUP BY ciaClass");
+  const byClass = {}; globalAssets.forEach(a => byClass[a.ciaClass] = (byClass[a.ciaClass] || 0) + 1);
   const cColors = {'Public':'var(--success)','Internal Use':'var(--accent2)','Confidential':'var(--warn)','Restricted':'var(--danger)'};
   const classEl = document.getElementById('dash-class');
   if(classEl) {
-      if(!byClass.length) classEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No data</p>';
-      else classEl.innerHTML = byClass.map(r => barHtml(r.ciaClass, r.c, totalAssets, cColors[r.ciaClass])).join('');
+      if(Object.keys(byClass).length === 0) classEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No data</p>';
+      else classEl.innerHTML = Object.keys(byClass).map(c => barHtml(c, byClass[c], total || 1, cColors[c])).join('');
   }
 
   const trEl = document.getElementById('dash-top-risk');
   if(trEl) {
-      const topRisks = alasql("SELECT id, name, residual FROM Assets ORDER BY CASE residual WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Moderate' THEN 3 WHEN 'Low' THEN 4 ELSE 5 END LIMIT 5");
+      const sevMap = { 'Critical': 1, 'High': 2, 'Moderate': 3, 'Low': 4, 'Very Low': 5 };
+      const topRisks = [...globalAssets].sort((a, b) => (sevMap[a.residual] || 6) - (sevMap[b.residual] || 6)).slice(0, 5);
       if(!topRisks.length) trEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No data</p>';
       else trEl.innerHTML = topRisks.map(a => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
@@ -928,13 +765,11 @@ function renderDashboard() {
 function exportDataXLSX() {
     if (typeof XLSX === 'undefined') { notify("Excel library loading...", true); return; }
     
-    const dbAssets = alasql("SELECT * FROM Assets");
-    const rep = alasql("SELECT * FROM ReportData WHERE id = 1")[0] || {};
-    
+    const rep = globalReport;
     const headers = [ "Asset ID", "Name of Information Asset", "Description", "Group", "Hostname", "Server", "Custodian", "IP Address", "Environment", "Department", "Type", "PII", "SPI", "Corp Info", "C", "I", "A", "Valuation", "Class", "Risk Threat", "Prob", "Sev", "Inherent", "C1 (Procedures)", "C2 (Segregation)", "C3 (RBAC)", "C4 (MFA)", "C5 (Physical)", "C6 (Backup)", "C7 (Encryption)", "C8 (Disposal)", "C9 (EDR)", "C10 (Firewall)", "C11 (Patching)", "C12 (VLANs)", "C13 (IR Plan)", "Residual", "Strategy", "Status", "Action Plan", "Action Owner", "Target Date" ];
 
-    const dataRows = dbAssets.map(a => {
-        const ctrls = alasql("SELECT ctrl_id FROM AssetControls WHERE asset_id = ?", [a.id]).map(r => r.ctrl_id);
+    const dataRows = globalAssets.map(a => {
+        const ctrls = globalControls.filter(c => c.asset_id === a.id).map(c => c.ctrl_id);
         return [
             a.id, a.name, a.description, a.group_name, a.hostname, a.server, a.custodian, a.ip_address, a.environment, a.department, a.type, a.pii, a.spi, a.corp,
             a.ciaC, a.ciaI, a.ciaA, a.ciaScore, a.ciaClass, a.riskDesc, a.prob, a.sev, a.inherit,
@@ -977,5 +812,4 @@ function exportDataXLSX() {
 // ==========================================
 // 8. INITIALIZATION
 // ==========================================
-setTimeout(() => { runEnforcementEngine(); renderDashboard(); }, 200); 
-showSection('dashboard');
+setTimeout(() => { showSection('dashboard'); runEnforcementEngine(); }, 200);
