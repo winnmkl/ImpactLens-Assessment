@@ -47,7 +47,7 @@ if (isInitialized) {
     alasql.tables.Assets.data = storedAssets;
     alasql.tables.AssetControls.data = storedControls;
 } else {
-    // FIRST TIME ONLY: Seed Sample Data (Updated with Hostname, Server, IP, Environment, Department)
+    // FIRST TIME ONLY: Seed Sample Data
     alasql(`INSERT INTO Assets VALUES 
         ('IA-001', 'IA', 'University Clinic Medical Records', 'Clinic', 
          'CLINIC-DB-01', 'Clinic Primary DB', 'Clinic Records Admin', 
@@ -278,7 +278,7 @@ function runEnforcementEngine() {
         [optPhys, optHr, optCyberExt, optCyberInt, optComp].forEach(el => { if(el) el.disabled = false; });
     }
 
-    // GUARDRAIL 2: Asset Type Data Overrides (Force Data values first)
+    // GUARDRAIL 2: Asset Type Data Overrides
     if (type === 'PhA') {
         ['f-pii','f-spi','f-corp'].forEach(id => { const el = document.getElementById(id); if(el) { el.value = 'N'; el.disabled = true; } });
     } else if (type === 'PA') {
@@ -347,8 +347,36 @@ function calculateRiskMath() {
     const currentPii = g('f-pii');
     const currentSpi = g('f-spi');
 
+    // System logic overwriting base probabilities
     if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.min(5, p + 1);
     if ((currentPii === 'Y' || currentSpi === 'Y') && (threat === 'cyber_ext_leak' || threat === 'legal_dpa')) s = 5;
+
+    // Map numbers to labels for our visual text boxes
+    const PROB_LABELS = {1:'1 - Rare', 2:'2 - Unlikely', 3:'3 - Possible', 4:'4 - Likely', 5:'5 - Almost Certain'};
+    const SEV_LABELS = {1:'1 - Insignificant', 2:'2 - Minor', 3:'3 - Moderate', 4:'4 - Major', 5:'5 - High/Catastrophic'};
+
+    // Dynamic Color function based on the 1-5 value
+    const getDynamicColor = (val) => {
+        if(val === 1) return 'var(--accent2)'; // Teal/Cyan
+        if(val === 2) return 'var(--success)'; // Green
+        if(val === 3) return '#ffcc00';        // Yellow
+        if(val === 4) return 'var(--warn)';    // Orange
+        if(val === 5) return 'var(--danger)';  // Red
+        return 'var(--text)';
+    };
+
+    // Update Section 3 Inherent visual boxes
+    const probDisp = document.getElementById('f-prob-display');
+    if(probDisp) {
+        probDisp.value = PROB_LABELS[p] || p;
+        probDisp.style.color = getDynamicColor(p);
+    }
+    
+    const sevDisp = document.getElementById('f-sev-display');
+    if(sevDisp) {
+        sevDisp.value = SEV_LABELS[s] || s;
+        sevDisp.style.color = getDynamicColor(s);
+    }
 
     const inherentRating = INHERIT[s + '-' + p] || 'Moderate';
     const rEl = document.getElementById('r-inherit');
@@ -367,10 +395,24 @@ function calculateRiskMath() {
         }
     }
 
+    // Residual values calculation
     let resP = Math.max(1, p - Math.floor(pRed / 1.5));
     let resS = Math.max(1, s - Math.floor(sRed / 1.5));
     const residualRating = INHERIT[resS + '-' + resP] || 'Low';
     
+    // Update Section 4 Residual visual boxes
+    const resProbDisp = document.getElementById('f-res-prob-display');
+    if(resProbDisp) {
+        resProbDisp.value = PROB_LABELS[resP] || resP;
+        resProbDisp.style.color = getDynamicColor(resP);
+    }
+    
+    const resSevDisp = document.getElementById('f-res-sev-display');
+    if(resSevDisp) {
+        resSevDisp.value = SEV_LABELS[resS] || resS;
+        resSevDisp.style.color = getDynamicColor(resS);
+    }
+
     const resEl = document.getElementById('r-residual');
     if(resEl) { resEl.textContent = residualRating; resEl.style.color = riskColor(residualRating); }
     
@@ -400,10 +442,11 @@ function calculateRiskMath() {
 
 function applyRiskTemplate() {
     const key = g('f-risk-category');
+    const probEl = document.getElementById('f-prob'); // Hidden input
+    const sevEl = document.getElementById('f-sev'); // Hidden input
+    
     if (RISK_TEMPLATES[key]) {
         const descEl = document.getElementById('f-risk-desc');
-        const probEl = document.getElementById('f-prob');
-        const sevEl = document.getElementById('f-sev');
         const apEl = document.getElementById('f-action-plan');
         
         if(descEl) descEl.value = RISK_TEMPLATES[key].desc;
@@ -412,6 +455,10 @@ function applyRiskTemplate() {
         if(apEl && !apEl.value) apEl.value = RISK_TEMPLATES[key].action;
         
         notify("Risk template applied.");
+    } else {
+        // Fallback default base metrics if the user selects "Custom"
+        if(probEl) probEl.value = "3";
+        if(sevEl) sevEl.value = "3";
     }
     runEnforcementEngine();
 }
@@ -623,8 +670,11 @@ function clearForm() {
   if(document.getElementById('f-c')) document.getElementById('f-c').value = '2';
   if(document.getElementById('f-i')) document.getElementById('f-i').value = '2';
   if(document.getElementById('f-a')) document.getElementById('f-a').value = '2';
+  
+  // Reset base probabilities to 3
   if(document.getElementById('f-prob')) document.getElementById('f-prob').value = '3';
   if(document.getElementById('f-sev')) document.getElementById('f-sev').value = '3';
+  
   if(document.getElementById('f-action-type')) document.getElementById('f-action-type').value = 'Mitigate';
   if(document.getElementById('f-action-status')) document.getElementById('f-action-status').value = 'Pending';
   
