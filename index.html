@@ -8,12 +8,35 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap" rel="stylesheet">
   
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   
   <link rel="stylesheet" href="./assets/styles/main.css">
 </head>
 <body>
+
+<div id="auth-screen" class="auth-screen">
+  <div class="auth-panel">
+    <div class="auth-brand">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="filter: drop-shadow(0 0 8px rgba(200,255,0,0.5));">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+      </svg>
+      <div>
+        <div class="auth-title">IMPACTLENS</div>
+        <div class="auth-subtitle">Phase 2 — Enterprise Risk Assessment</div>
+      </div>
+    </div>
+    <form id="login-form" onsubmit="handleLogin(event)">
+      <div class="field"><label>Email</label><input type="email" id="login-email" required placeholder="you@organization.local" autocomplete="username"></div>
+      <div class="field"><label>Password</label><input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password"></div>
+      <button type="submit" class="btn btn-primary auth-submit" id="login-btn">Sign In →</button>
+    </form>
+    <p class="auth-hint">Demo roles: <code>user@</code> Standard · <code>infosec@</code> Info Sec · <code>admin@</code> or <code>ciso@</code> CISO</p>
+    <p id="login-error" class="auth-error" hidden></p>
+  </div>
+</div>
+
+<div id="app-shell" class="app-shell hidden">
 
 <header>
   <div class="logo">
