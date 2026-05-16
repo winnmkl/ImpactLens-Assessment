@@ -938,3 +938,86 @@ tbody td strong {
 .form-row.grid-4 { 
   grid-template-columns: 1fr 1fr 1fr 1fr; 
 }
+
+/* ========================================== PHASE 2 — AUTH & RBAC ========================================== */
+.hidden { display: none !important; }
+
+.auth-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(ellipse at 30% 20%, rgba(200, 255, 0, 0.08), transparent 50%), var(--bg);
+}
+
+.auth-panel {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 40px 36px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.auth-title {
+  font-family: var(--display);
+  font-size: 36px;
+  letter-spacing: 2px;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.auth-subtitle {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text3);
+  margin-top: 4px;
+}
+
+.auth-submit { width: 100%; margin-top: 8px; }
+
+.auth-hint {
+  margin-top: 20px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text3);
+  line-height: 1.6;
+}
+
+.auth-hint code {
+  color: var(--accent2);
+  background: var(--bg3);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.auth-error {
+  margin-top: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.role-pill span, .user-pill span { color: var(--accent2); }
+
+.section-hidden {
+  display: none !important;
+}
+
+.queue-card {
+  background: var(--bg2);
+}
+
+body[data-role="user"] .header-stat:not(.role-pill):not(.user-pill),
+body[data-role="user"] .status-dot {
+  display: none;
+}

@@ -70,30 +70,18 @@
 
 <div class="layout">
   <nav id="main-nav">
-    <div class="nav-section">
-      <div class="nav-label">Overview</div>
-      <div class="nav-item active" onclick="showSection('dashboard')"><span class="nav-icon">[■]</span> Dashboard</div>
-    </div>
-    <div class="nav-section">
-      <div class="nav-label">Assets</div>
-      <div class="nav-item" onclick="showSection('add')"><span class="nav-icon">[+]</span> Add Asset</div>
-      <div class="nav-item" onclick="showSection('register')"><span class="nav-icon">[≡]</span> Asset Table <span class="nav-badge" id="nav-total">0</span></div>
-    </div>
-    <div class="nav-section">
-      <div class="nav-label">Analysis</div>
-      <div class="nav-item" onclick="showSection('risk')"><span class="nav-icon">[△]</span> Risk Register</div>
-      <div class="nav-item" onclick="showSection('controls')"><span class="nav-icon">[✓]</span> Control Metrics</div>
-      <div class="nav-item" onclick="showSection('actions')"><span class="nav-icon">[!]</span> Action Plans <span class="nav-badge" id="nav-actions" style="color:var(--warn)">0</span></div>
-    </div>
-    <div class="nav-section">
-      <div class="nav-label">Documentation</div>
-      <div class="nav-item" onclick="showSection('report')"><span class="nav-icon">[✎]</span> Reporting & Sign-offs</div>
-      <div class="nav-item" onclick="showSection('guidelines')"><span class="nav-icon">[?]</span> Risk Guidelines</div>
-    </div>
+    <div class="nav-section nav-admin-only"><div class="nav-label">Overview</div><div class="nav-item" data-section="dashboard" onclick="showSection('dashboard')"><span class="nav-icon">[■]</span> Dashboard</div></div>
+    <div class="nav-section nav-user-only nav-infosec-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="add" onclick="showSection('add')"><span class="nav-icon">[+]</span> Add Asset</div></div>
+    <div class="nav-section nav-infosec-only"><div class="nav-label">Workflow</div><div class="nav-item" data-section="draft-queue" onclick="showSection('draft-queue')"><span class="nav-icon">[◷]</span> Draft Queue <span class="nav-badge" id="nav-drafts">0</span></div></div>
+    <div class="nav-section nav-admin-only"><div class="nav-label">Approval</div><div class="nav-item" data-section="pending-queue" onclick="showSection('pending-queue')"><span class="nav-icon">[◎]</span> Pending Approval <span class="nav-badge" id="nav-pending" style="color:var(--warn)">0</span></div></div>
+    <div class="nav-section nav-admin-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="register" onclick="showSection('register')"><span class="nav-icon">[≡]</span> Asset Table <span class="nav-badge" id="nav-total">0</span></div></div>
+    <div class="nav-section nav-admin-only"><div class="nav-label">Analysis</div><div class="nav-item" data-section="risk" onclick="showSection('risk')"><span class="nav-icon">[△]</span> Risk Register</div><div class="nav-item" data-section="controls" onclick="showSection('controls')"><span class="nav-icon">[✓]</span> Control Metrics</div><div class="nav-item" data-section="actions" onclick="showSection('actions')"><span class="nav-icon">[!]</span> Action Plans <span class="nav-badge" id="nav-actions" style="color:var(--warn)">0</span></div></div>
+    <div class="nav-section nav-infosec-only"><div class="nav-label">Audit</div><div class="nav-item" data-section="logs" onclick="showSection('logs')"><span class="nav-icon">[⌗]</span> System Logs</div></div>
+    <div class="nav-section"><div class="nav-label">Documentation</div><div class="nav-item nav-admin-only" data-section="report" onclick="showSection('report')"><span class="nav-icon">[✎]</span> Reporting & Sign-offs</div><div class="nav-item" data-section="guidelines" onclick="showSection('guidelines')"><span class="nav-icon">[?]</span> Risk Guidelines</div></div>
   </nav>
 
   <main>
-    <div id="sec-dashboard" class="section active">
+    <div id="sec-dashboard" class="section">
       <div class="page-header">
         <div>
           <div class="page-title">DASH<span>BOARD</span></div>
@@ -120,7 +108,7 @@
     </div>
 
     <div id="sec-add" class="section">
-      <div class="page-header"><div><div class="page-title" id="form-title">INSERT <span>RECORD</span></div></div></div>
+      <div class="page-header"><div><div class="page-title" id="form-title">INSERT <span>RECORD</span></div></div><p class="page-desc">Workflow: <span id="form-workflow-status" class="badge badge-type">Draft</span></p></div></div>
       
       <div class="card">
         <div class="card-header">01 — Primary Details & Network Context</div>
@@ -164,7 +152,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card role-locked-section" id="sec-classification">
         <div class="card-header">02 — Data & Classification <span style="font-size:9px; color:var(--text3); margin-left:auto;">🔒 System Enforced</span></div>
         <div class="form-row grid-3">
           <div class="field"><label>Personal info (PI)?</label><select id="f-pii" onchange="runEnforcementEngine()"><option value="N">No</option><option value="Y">Yes</option></select></div>
@@ -179,7 +167,7 @@
         <p style="margin-top: 10px; font-family: var(--mono); color: var(--accent);">Class: <span id="cia-class">Confidential</span></p>
       </div>
 
-      <div class="card">
+      <div class="card role-locked-section" id="sec-risk-controls">
         <div class="card-header">03 — Threat & Controls <span style="font-size:9px; color:var(--text3); margin-left:auto;">🔒 Defense-in-Depth Enforced</span></div>
         
         <div class="form-row" style="margin-bottom:16px;">
@@ -254,7 +242,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card role-locked-section" id="sec-action-plan">
         <div class="card-header">04 — Residual risk & action plan</div>
         <div style="display:flex; gap:16px; margin-bottom:16px; align-items:center;">
            <span style="font-family:var(--mono); color:var(--text3); text-transform:uppercase; font-size:10px;">Calculated Residual Risk:</span>
@@ -302,10 +290,23 @@
 
       <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:20px;">
         <button class="btn" onclick="clearForm()">Clear form</button>
-        <button class="btn btn-primary" onclick="saveAssetToDB()">Save Asset →</button>
+        <button class="btn btn-primary" id="btn-save-asset" onclick="saveAssetToDB()">Save Asset →</button>
       </div>
     </div>
 
+
+    <div id="sec-draft-queue" class="section">
+      <div class="page-header"><div><div class="page-title">DRAFT <span>QUEUE</span></div><div class="page-desc">// Assets awaiting Info Sec profiling</div></div></div>
+      <div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Submitted By</th><th>Actions</th></tr></thead><tbody id="draft-queue-body"></tbody></table></div>
+    </div>
+    <div id="sec-pending-queue" class="section">
+      <div class="page-header"><div><div class="page-title">PENDING <span>APPROVAL</span></div><div class="page-desc">// CISO review queue</div></div></div>
+      <div id="pending-queue-content"></div>
+    </div>
+    <div id="sec-logs" class="section">
+      <div class="page-header"><div><div class="page-title">SYSTEM <span>LOGS</span></div><div class="page-desc">// Audit trail</div></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Time</th><th>User</th><th>Role</th><th>Action</th><th>Asset</th><th>Details</th></tr></thead><tbody id="logs-body"></tbody></table></div>
+    </div>
     <div id="sec-register" class="section">
       <div class="page-header"><div><div class="page-title">ASSET <span>TABLE</span></div><div class="page-desc">// Comprehensive inventory of all registered information assets</div></div></div>
       <div class="table-wrap">
@@ -498,6 +499,7 @@
       </div>
     </div>
   </main>
+</div>
 </div>
 
 <div id="notification" class="notification"></div>
