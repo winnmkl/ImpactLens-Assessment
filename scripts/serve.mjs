@@ -44,6 +44,16 @@ const server = http.createServer((req, res) => {
   });
 });
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${port} is already in use.`);
+    console.error(`  → Open http://localhost:${port} (server may already be running)`);
+    console.error(`  → Or run: node scripts/serve.mjs ${port + 1}`);
+    process.exit(1);
+  }
+  throw err;
+});
+
 server.listen(port, () => {
   console.log(`ImpactLens running at http://localhost:${port}`);
   console.log('Press Ctrl+C to stop.');
