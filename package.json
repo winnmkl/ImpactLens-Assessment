@@ -1,26 +1,33 @@
 {
   "name": "impactlens-assessment",
-  "version": "1.0.0",
-  "description": "Information Security Risk Assessment (IAR) management system",
+  "version": "2.0.0",
+  "description": "Multi-role, standards-aligned Information Security Risk Assessment (IAR) platform built on Supabase. Implements NIST SP 800-30, ISO 27001:2022, CIS v8, SOC 2 TSC and PCI-DSS v4.0 with 3-tier workflow, mandatory-control floors and rich Excel audit exports.",
   "main": "index.html",
   "type": "module",
   "keywords": [
     "risk-assessment",
-    "security",
+    "isms",
     "information-security",
-    "iam",
+    "supabase",
+    "nist-sp-800-30",
+    "iso-27001",
+    "cis-controls-v8",
+    "soc2",
+    "pci-dss",
+    "ra-10173",
+    "exceljs",
     "compliance",
     "audit"
   ],
-  "author": "ImpactLens Team",
+  "author": "Pamantasan ng Lungsod ng Maynila — BSCS 2-4 Group 3 Students for Information Security Assessment",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/impactlens-assessment"
+    "url": "https://github.com/winnmkl/ImpactLens-Assessment.git"
   },
-  "homepage": "https://github.com/yourusername/impactlens-assessment#readme",
+  "homepage": "https://github.com/winnmkl/ImpactLens-Assessment#readme",
   "bugs": {
-    "url": "https://github.com/yourusername/impactlens-assessment/issues"
+    "url": "https://github.com/winnmkl/ImpactLens-Assessment/issues"
   },
   "scripts": {
     "start": "node scripts/serve.mjs 8000",

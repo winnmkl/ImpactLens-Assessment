@@ -1,266 +1,322 @@
-# ImpactLens — Risk Assessment Tool
+# ImpactLens — Multi-Role Risk Assessment Platform
 
-A comprehensive Information Security Risk Assessment (IAR) management system for tracking, analyzing, and mitigating security risks across organizational assets.
+A standards-aligned, multi-tenant Information Security Risk Assessment (IAR) platform built for the **Pamantasan ng Lungsod ng Maynila (PLM) ISMS**. Implements the full NIST SP 800-30 Rev. 1 risk-management lifecycle with ISO/IEC 27001:2022, CIS Controls v8, SOC 2 Trust Services Criteria, PCI-DSS v4.0 and RA 10173 (Philippine Data Privacy Act) compliance baked in.
 
-## 🎯 Overview
-
-**ImpactLens** is a standalone web-based risk assessment platform that enables security professionals to:
-
-- Register and categorize information and physical assets
-- Conduct inherent and residual risk assessments using probability/severity matrices
-- Track implemented security controls and their effectiveness
-- Generate action plans for high and moderate residual risks
-- Export comprehensive Excel reports for management review and sign-offs
-
-## 📁 Project Structure
-
-```
-ImpactLens-Assessment/
-├── index.html                    # Main HTML entry point
-├── assets/
-│   ├── styles/
-│   │   └── main.css             # All styling (5000+ lines, organized by section)
-│   ├── scripts/
-│   │   └── app.js               # Complete application logic
-│   └── images/                  # Reserved for future icons/assets
-├── docs/                        # Documentation
-├── .gitignore                   # Git ignore rules
-└── README.md                    # This file
-```
-
-## 🚀 Quick Start
-
-### 1. Clone or Download
-```bash
-git clone <repository-url>
-cd ImpactLens-Assessment
-```
-
-### 2. Run Locally
-No build step required! Simply open `index.html` in a modern web browser:
-```bash
-# Using Python 3
-python -m http.server 8000
-
-# Using Node.js
-npx http-server
-
-# Or just double-click index.html
-```
-
-### 3. Access the App
-Navigate to `http://localhost:8000` or open the file directly in your browser.
-
-## 🏗️ Architecture
-
-### **Frontend Stack**
-- **HTML5**: Semantic markup with section-based navigation
-- **CSS3**: Modern design with CSS variables for theming
-- **JavaScript (ES6)**: Vanilla JS, no frameworks required
-- **AlaSQL**: In-browser SQL database for asset management
-- **XLSX**: Excel export functionality
-- **Google Fonts**: IBM Plex (Mono/Sans) + Bebas Neue
-
-### **Data Storage**
-All data is stored **locally in browser localStorage** (no server required):
-- `impactlens_assets` — Asset registry
-- `impactlens_controls` — Control implementation tracking
-- `impactlens_report` — Report metadata and sign-offs
-
-## 📊 Core Features
-
-### **Dashboard**
-- Real-time metric cards (Total Assets, High Risk Count, Moderate Risk Count, PII Assets)
-- Asset Type Breakdown (bar charts)
-- Residual Risk Distribution
-- Information Classification analysis
-- Top 5 Risk Assets widget
-
-### **Asset Management**
-- Add/Edit/Delete information, physical, software, service, people, and financial assets
-- Classify assets by Confidentiality, Integrity, and Availability (CIA)
-- Identify and track risks for each asset
-- Select and track implemented controls
-- Calculate control effectiveness
-
-### **Risk Assessment**
-- **Inherent Risk Matrix**: 5×5 probability/severity heatmap
-- **Risk Templates**: Pre-populated risk scenarios from standards-based categories
-- **Residual Risk Calculation**: Based on inherent risk + control effectiveness
-- **Action Planning**: Required for High and Moderate residual risks
-
-### **Control Metrics**
-- Track control implementation coverage across all assets
-- Visualize control effectiveness distribution
-- Aggregate security posture metrics
-
-### **Reporting**
-- Document history (version, author, approval dates)
-- Executive highlights (revision and initial)
-- Official sign-off sheet (Prepared By / Reviewed By / Approved By)
-- **Export to Excel**: Multi-sheet workbook with IAR data, history, highlights, and sign-offs
-
-## 🔐 Risk Assessment Framework
-
-### **Inherent Risk Calculation**
-Risk Score = Probability (1–5) × Severity (1–5)
-
-### **Residual Risk Matrix**
-Residual Risk = f(Inherent Risk, Control Effectiveness)
-
-| Control Effectiveness | Very Low | Low | Moderate | High |
-|-|-|-|-|-|
-| **Fully Effective** | V.Low | Low | Low | Low |
-| **Substantially Effective** | Low | Low | Moderate | Moderate |
-| **Partially Effective** | Low | Moderate | Moderate | High |
-| **Ineffective** | Low | Moderate | High | High |
-
-### **Pre-Defined Risk Templates**
-- **Physical Security**: Theft, facility destruction
-- **Human Resources**: Insider threats, accidental deletion
-- **Cyber External**: Ransomware, data breaches, DDoS, supply chain
-- **Cyber Internal**: Unauthorized admin access, unpatched vulnerabilities
-- **Compliance**: Data Privacy Act violations
-
-## 🎨 Design System
-
-### **Color Palette**
-- **Accent**: `#c8ff00` (Neon Lime)
-- **Accent2**: `#00d4ff` (Cyan)
-- **Danger**: `#ff4444` (Red)
-- **Warn**: `#ff9900` (Orange)
-- **Success**: `#00cc77` (Green)
-- **Purple**: `#aa44ff`
-
-### **Typography**
-- **Display**: Bebas Neue (headings)
-- **Sans**: IBM Plex Sans (body)
-- **Mono**: IBM Plex Mono (data, labels)
-
-## 📋 Asset Types
-
-| ID | Type | Examples |
-|-|-|-|
-| **IA** | Information Asset | Databases, documentation, business processes |
-| **PhA** | Physical Asset | Servers, magnetic media, facilities |
-| **PA** | People Asset | Employees, contractors, consultants |
-| **SA** | Software Asset | Applications, development tools |
-| **SV** | Service Asset | Cloud services, technical services |
-| **FA** | Financial Asset | Cash, stocks, intellectual property |
-
-## 📤 Export Format
-
-**Excel Workbook** (`ImpactLens_IAR_Export.xlsx`) includes:
-1. **Document History** — Versioning and approval metadata
-2. **Highlights** — Executive summary and revision notes
-3. **IAR Data** — Complete asset register with risk assessments
-4. **Sign-Off** — Official approvals (Prepared/Reviewed/Approved)
-
-## 🛠️ Development Guide
-
-### **File Organization**
-- `index.html` — DOM structure only (no inline styles or scripts)
-- `assets/styles/main.css` — All CSS (~3500 lines, well-organized)
-- `assets/scripts/app.js` — All JavaScript (~1000+ lines, modular functions)
-
-### **Adding New Features**
-1. **New page section**: Add a `<div id="sec-name" class="section">` to HTML
-2. **Navigation**: Add nav item that calls `showSection('name')`
-3. **Logic**: Add rendering functions to `app.js`
-4. **Styling**: Update `main.css` with new component classes
-
-### **Key Functions in `app.js`**
-- `showSection(name)` — Navigate between pages
-- `saveAssetToDB()` — Create/update asset
-- `deleteAsset(id)` — Remove asset
-- `renderDashboard()`, `renderRegister()`, `renderRiskRegister()` — UI rendering
-- `exportDataXLSX()` — Excel export
-- `applyRiskTemplate()` — Pre-populate risk scenarios
-
-## 🔄 Data Flow
-
-```
-User Input → Form Validation → AlaSQL Insert → localStorage Sync → UI Re-render → Visual Feedback
-```
-
-## 💾 Persistence
-
-- **Auto-save**: All changes save to browser localStorage immediately
-- **Data survives**: Page reloads, browser restarts (until cache cleared)
-- **Sample data**: Pre-populated on first run (one time only)
-
-## 🌐 Browser Support
-
-- ✅ Chrome/Edge (90+)
-- ✅ Firefox (88+)
-- ✅ Safari (14+)
-- ✅ Mobile browsers (iOS Safari, Chrome Android)
-
-## 📝 Sample Data
-
-On first launch, the app seeds with:
-- **Asset**: PLM Student Registry System (IA-001)
-- **Risk**: Potential SQL injection vulnerability
-- **Inherent Risk**: High (Probability: 3, Severity: 4)
-- **Controls**: Documented procedures, Access restriction, Backup
-- **Residual Risk**: High (control effectiveness: Partially)
-
-## 🚀 Deployment Options
-
-### **Option 1: GitHub Pages**
-```bash
-git add .
-git commit -m "Initial commit"
-git push origin main
-# Enable GitHub Pages in repository settings
-```
-
-### **Option 2: Static Hosting**
-- Netlify, Vercel, Firebase Hosting
-- AWS S3 + CloudFront
-- Any static file server
-
-### **Option 3: Self-Hosted**
-```bash
-# Docker example
-docker run -v $(pwd):/usr/share/nginx/html -p 8080:80 nginx
-```
-
-## 📚 Documentation
-
-Additional guides available in `/docs/`:
-- `ARCHITECTURE.md` — System design and data model
-- `USER_GUIDE.md` — Step-by-step usage instructions
-- `API_REFERENCE.md` — Function documentation
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License — see `LICENSE` file for details.
-
-## 🆘 Support
-
-- **Issues**: GitHub Issues tracker
-- **Email**: support@impactlens.io
-- **Documentation**: Full guides in `/docs/`
-
-## 🎓 References
-
-This tool aligns with:
-- ISO 27005:2022 (Information security risk management)
-- NIST Cybersecurity Framework (Risk Assessment)
-- Information Asset Register (IAR) standards
-- Data Privacy Act (DPA) compliance
+> **v2.0 — major rewrite (May 2026).** The v1 single-user prototype has been replaced by a 3-tier role-based application backed by Supabase Auth, PostgreSQL triggers, mandatory-control floors and a 7–10 sheet ExcelJS audit export. If you are looking for the localStorage prototype, check the v1 tag.
 
 ---
 
-**Built with ❤️ for security professionals.**
+## Table of Contents
+1. [What's new in v2.0](#whats-new-in-v20)
+2. [Architecture](#architecture)
+3. [Quick start](#quick-start)
+4. [Roles & permissions](#roles--permissions)
+5. [Risk-math engine](#risk-math-engine)
+6. [Compliance mapping](#compliance-mapping)
+7. [Workflow](#workflow)
+8. [Reject / Delete with reason capture](#reject--delete-with-reason-capture)
+9. [Excel export](#excel-export)
+10. [Project structure](#project-structure)
+11. [Operations](#operations)
+12. [Browser support](#browser-support)
+13. [References](#references)
 
-*Last Updated: April 2026*
+---
+
+## What's new in v2.0
+
+| Area | v1 (prototype) | v2 (current) |
+|---|---|---|
+| **Auth** | None / single user | Supabase Auth with real email verification + DB trigger for `user_profiles` |
+| **Roles** | Single | Standard User / Info Sec / Admin (CISO) — RBAC at UI, API and RLS layers |
+| **Workflow** | Direct save | Draft → Pending Approval → Approved (3-tier with reject reasons) |
+| **Storage** | localStorage + AlaSQL | Supabase Postgres (5 tables, RLS-enforced) |
+| **Risk math** | Probability × Severity matrix only | NIST SP 800-30 inherent escalations + weighted defense-in-depth + synergy bonuses + saturating diminishing returns + mandatory control floors |
+| **Compliance** | Implicit | 13 controls explicitly mapped to NIST CSF 2.0, ISO 27001:2022 Annex A, CIS v8, SOC 2 TSC and PCI-DSS v4.0 with concrete clause IDs |
+| **Excel export** | 4 sheets, SheetJS | 7–10 sheets (role-aware), ExcelJS, PDF-template aesthetic, dedicated Rejected & Deleted audit sheet |
+| **Notifications** | None | Bell-icon inbox, role-scoped, surfaces approve/reject/delete with reasons |
+| **Compliance gap UI** | None | Live "Mandatory Control Gaps" panel with framework citations |
+| **Reason capture** | `confirm()`/`prompt()` | Branded modal with curated framework-aware presets + free-text essay |
+
+---
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                        Browser (vanilla JS)                    │
+│  index.html → assets/scripts/app.js → assets/styles/main.css   │
+│  Vendored: assets/vendor/{supabase,exceljs}.min.js             │
+└────────────┬───────────────────────────────────────────────────┘
+             │ HTTPS + JWT
+             ▼
+┌────────────────────────────────────────────────────────────────┐
+│                     Supabase (haspklehikocqswmgmtk)            │
+│   • auth.users  ──trigger──▶ public.user_profiles              │
+│   • Assets / AssetControls / SystemLogs / ReportData           │
+│   • RLS policies + SECURITY DEFINER current_user_role()        │
+│   • il_inherit() helper + risk-math realignment migration      │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Frontend stack:** vanilla ES2020 JavaScript (no framework, single `app.js` ~3.2k lines), CSS custom-properties theme (`main.css` ~1.5k lines), ExcelJS for branded multi-sheet workbooks, Supabase JS for auth + REST. Both vendor libraries are served first-party (`assets/vendor/*.min.js`) to bypass strict-tracking-prevention browsers (Edge / Brave) that otherwise block storage access.
+
+**Server:** lightweight `scripts/serve.mjs` (Node 18+) static server with `Cache-Control: no-store` headers and an explicit `?v=YYYYMMDDx` cache marker on every CSS/JS reference.
+
+---
+
+## Quick start
+
+### Prerequisites
+- **Node 18+** (LTS recommended).
+- A Supabase project (the production one is `haspklehikocqswmgmtk`).
+- A modern browser (Chrome, Edge, Firefox, Safari).
+
+### 1. Clone & install
+```bash
+git clone https://github.com/winnmkl/ImpactLens-Assessment.git
+cd ImpactLens-Assessment
+npm install
+```
+
+### 2. Bootstrap the Supabase database
+Open the Supabase SQL Editor for your project and run the scripts in order:
+
+| Step | File | Purpose | Idempotent? |
+|---|---|---|---|
+| 1 | `supabase/master_setup.sql` | Tables, RLS, triggers, seed of 57 PLM assets, risk-math realignment | yes |
+| 2 *(optional)* | `supabase/hotfix_demo_accounts.sql` | Pre-provision `infosec@plm.edu.ph` / `user@plm.edu.ph` (skip the email-verification step) | yes |
+| 3 *(optional)* | `supabase/hotfix_realign_risk_math.sql` | Re-derives risk math + adds `user_profiles.rejection_reason` for legacy databases | yes |
+
+In **Authentication → Providers** make sure Email is enabled and **Confirm email** is ON. The `master_setup.sql` trigger auto-promotes any verified `admin@plm.edu.ph`, `infosec@plm.edu.ph`, or `user@plm.edu.ph` to an active profile.
+
+### 3. Run the dev server
+```bash
+npm start
+# → http://localhost:8000
+```
+
+The server automatically falls back to a free port if 8000 is occupied. Hard-refresh (`Ctrl-F5`) any time `?v=YYYYMMDDx` changes.
+
+### 4. Sign in
+- **Master Admin (CISO):** create `admin@plm.edu.ph` from Supabase Dashboard with **Auto Confirm User** *or* register through the app and verify the email.
+- **Info Sec:** `infosec@plm.edu.ph` (auto-approved by trigger).
+- **Standard User:** `user@plm.edu.ph` (auto-approved by trigger).
+- **Anyone else:** registers from the app, waits for Info Sec or Admin to approve their requested role.
+
+---
+
+## Roles & permissions
+
+| Capability | Standard User | Info Sec | Admin (CISO) |
+|---|---|---|---|
+| Add new asset (saves as Draft) | yes | yes | yes |
+| Open a Draft for cybersecurity profiling | — | yes | yes |
+| Edit Approved asset (re-triggers approval) | — | yes | yes |
+| Submit Pending → CISO | — | yes | implicit |
+| Approve / Reject Pending | — | — | yes |
+| Reject Draft (discard with reason) | — | yes | yes |
+| Delete asset (with reason) | — | yes | yes |
+| Approve / Reject user accounts | — | yes (Standard User only) | yes (any role) |
+| View Dashboard | — | yes | yes |
+| View System Logs | — | yes | yes |
+| View Risk Register | — | yes | yes |
+| Export Excel | — | 7-sheet workbook | 10-sheet workbook |
+| Reporting & Sign-offs page | — | — | yes |
+
+UI elements are filtered three ways:
+
+1. **Section-level** — `showSection()` checks an `allowed` map per role.
+2. **Body class** — `data-role` attribute drives CSS rules that hide nav items.
+3. **RLS** — Postgres rejects any out-of-scope read/write at the database boundary.
+
+---
+
+## Risk-math engine
+
+The engine in `assets/scripts/app.js` (`calculateRiskMath`, `getApplicableMandatorySets`) is grounded in **NIST SP 800-30 Rev. 1** with the controls vocabulary of **ISO/IEC 27001:2022 Annex A**.
+
+### 1. Inherent risk escalations
+Triggered by adversarial likelihood / impact factors before any control reduction is applied.
+
+- Internet-Facing + cyber-external threat → `prob = max(prob+1, 3)` (capped 5).
+- PII/SPI + (data leak | DPA breach) threat → `sev = 5`.
+- CIA score ≥ 8 + cyber/insider threat → `sev ≥ 4`.
+- Asset type = FA + cyber threat → `sev = 5` (PCI-DSS CHD breach is total loss).
+
+### 2. Residual reduction
+- Each of the 13 controls has a `(p, s)` weight in `CONTROL_WEIGHTS` (e.g. MFA `{p:1.0, s:0.4}`, Backup `{p:0.0, s:1.2}`).
+- Only **threat-relevant** controls (per `controlMap`) contribute to the reduction.
+- **Synergy bonuses** stack when paired controls are both active: RBAC+MFA, Backup+IRP, EDR+Firewall, Encryption+Segmentation, Vuln+EDR+IRP.
+- **Saturating diminishing-returns curve:** `reduction = (score − 1) × (1 − e^(−rawSum / 2))` — prevents "10 controls = score of 1" gaming.
+
+### 3. Mandatory-control floors
+After residual is computed, the engine applies a non-negotiable floor when an asset is missing baseline controls:
+
+| Trigger | Required controls | Floor | Citation |
+|---|---|---|---|
+| Restricted (CIA ≥ 8) | RBAC, MFA, Backup, Encryption, IRP | Moderate | ISO 27001:2022 §A.5.10–A.5.15 + NIST CSF PR.AA + PR.DS |
+| Confidential (CIA 6–7) | RBAC, Encryption, IRP | Moderate | ISO 27001:2022 §A.8.2 + NIST CSF PR.DS |
+| FA (PCI-DSS scope) | MFA, Encryption, Vuln Mgmt, Segmentation | **High** | PCI-DSS v4.0 Req 3, 4, 8.4, 11.3, 1.4.4 |
+| PII / SPI | Procedures, RBAC, Backup, Encryption | Moderate | RA 10173 §20 + ISO 27701 + GDPR Art. 32 |
+| Internet-Facing | Firewall/WAF, Vuln Mgmt, IRP | Moderate | CIS v8 §12 + §17 + NIST PR.IR-01, DE.CM-01 |
+
+A live **Mandatory Control Gaps** panel surfaces every unmet baseline with the framework citation.
+
+### 4. Risk-appetite enforcement
+The Treatment Type dropdown is locked to deny `Accept` when:
+- Residual = High (ISO 27001:2022 §6.1.3 — outside risk appetite),
+- FA + residual ≠ Low (PCI-DSS scoped CHD risk),
+- CIA ≥ 8 + residual = Moderate (Restricted classification — CISO sign-off territory).
+
+### 5. Compliance-aware control picker
+The control checkbox list classifies each control into one of four states based on the chosen threat AND the active baselines:
+
+- **Relevant** — defense-in-depth applicable, lowers P/S.
+- **Compliance baseline** (amber ribbon) — required by an active baseline, doesn't reduce P/S for this threat but lifts the floor when checked.
+- **Both** (green ribbon) — lowers P/S *and* lifts the floor.
+- **Disabled** (struck through) — neither relevant nor required.
+
+This was a deliberate fix in v2 — v1 had restricted the picker only to threat-relevant controls, which made it impossible to satisfy a baseline whose controls fell outside the threat's relevance set.
+
+---
+
+## Compliance mapping
+
+Each of the 13 ImpactLens controls is mapped to concrete framework IDs (see `CONTROL_COMPLIANCE` in `app.js`).
+
+| # | Control | NIST CSF 2.0 | ISO 27001:2022 | CIS v8 | SOC 2 | PCI-DSS v4.0 |
+|---|---|---|---|---|---|---|
+| 1 | Documented procedures | GV.PO-01/02, ID.GV-01 | A.5.1, A.5.36–37 | 14.1, 14.2 | CC1.1, CC2.2 | 12.1 |
+| 2 | Segregation of duties | GV.RR-02, PR.AA-05 | A.5.3, A.5.16 | 6.8 | CC5.1, CC6.3 | 7.2.4 |
+| 3 | RBAC | PR.AA-01/05 | A.5.15, A.5.18 | 6.7, 6.8 | CC6.1 | 7.2 |
+| 4 | MFA | PR.AA-03 | A.8.5 | 6.3, 6.4, 6.5 | CC6.6, CC6.7 | 8.4 |
+| … | *(see `CONTROL_COMPLIANCE` for all 13)* | | | | | |
+
+The Excel export (sheet 6) materialises this mapping per asset, listing only the IDs whose controls are actually active. PCI-DSS columns are populated only for `type = FA` assets.
+
+---
+
+## Workflow
+
+```
+┌────────────┐       ┌──────────────┐       ┌──────────────────────────┐       ┌──────────┐
+│ Std. User  │ ───▶  │ Draft        │ ───▶  │ Pending Approval         │ ───▶  │ Approved │
+│ (form fill)│       │ (Info Sec    │       │ (CISO review/approve/    │       │          │
+│            │       │  enriches)   │       │  reject with reason)     │       │          │
+└────────────┘       └──────────────┘       └──────────────────────────┘       └──────────┘
+                            │                            │
+                            │ reject                     │ reject (returns to Draft)
+                            ▼                            ▼
+                          Deleted                   Draft (with reason notification)
+```
+
+Every state transition writes a `SystemLogs` row that drives:
+
+1. The bell-icon notification inbox (parsed reasons, role-scoped messages, click-to-jump).
+2. The "Document History" Excel sheet.
+3. The "Rejected & Deleted" audit Excel sheet.
+
+---
+
+## Reject / Delete with reason capture
+
+A reusable `promptReason()` modal renders a curated dropdown plus a free-text essay box. Presets are framework-aware per action:
+
+- **Reject Pending submission** — Insufficient controls vs ISO 27001 Annex A; CIA misalignment vs NIST SP 800-60; inherent escalation unjustified; action plan unrealistic; PCI-DSS / RA 10173 / SOC 2 control still missing; duplicate; Other.
+- **Reject Draft submission** — Incomplete; not in ISMS scope; duplicate; mis-classified; sensitive data instructions not followed; Other.
+- **Delete asset** — Decommissioned; out of scope; duplicate / consolidated; test data; owner request with sign-off; replaced; Other.
+- **Reject user account** — Not affiliated with PLM; role inappropriate; already has account; awaiting HR verification; suspected automated registration; Other.
+
+The combined reason (preset + essay) is written to `SystemLogs.details` in the canonical form `Reason: <text> · originator=<email> · prior_status=<status>` and parsed by `parseLogDetails()` everywhere it's displayed.
+
+---
+
+## Excel export
+
+Powered by ExcelJS with a dark-themed brand palette (Pantone-style neon green on charcoal title bars, deep forest green body accents, mid-grey gridlines for legibility on white cells).
+
+| # | Sheet | Info Sec | Admin |
+|---|---|---|---|
+| 1 | Asset Identification | yes | yes |
+| 2 | Sensitivity & Valuation | yes | yes |
+| 3 | Risk Assessment | yes | yes |
+| 4 | Controls C1–C13 | yes | yes |
+| 5 | Residual & Treatment | yes | yes |
+| 6 | Compliance Mapping (NIST/ISO/CIS/SOC 2/PCI) | yes | yes |
+| 7 | **Rejected & Deleted (audit)** | yes | yes |
+| 8 | Document History (from SystemLogs) | — | yes |
+| 9 | Highlights (KPIs + reason-aware narrative) | — | yes |
+| 10 | Sign Off (Prepared / Reviewed / Approved + signature lines) | — | yes |
+
+Risk-rating cells use a fixed colour code (High = red, Moderate = amber, Low = cyan, Very Low = green) so the workbook reads the same way the dashboard does.
+
+---
+
+## Project structure
+
+```
+ImpactLens-Assessment/
+├── index.html                              # DOM only, cache-busted asset references
+├── package.json                            # Node deps, npm scripts
+├── README.md                               # this file
+├── scripts/
+│   ├── serve.mjs                           # static dev server with no-store headers
+│   └── patch_index2.mjs                    # one-shot helper for HTML cache markers
+├── assets/
+│   ├── styles/main.css                     # ~1.5k lines, theme + components
+│   ├── scripts/app.js                      # ~3.2k lines, full app logic
+│   └── vendor/
+│       ├── supabase.min.js                 # vendored to bypass tracking prevention
+│       └── exceljs.min.js                  # vendored, same reason
+├── supabase/
+│   ├── master_setup.sql                    # tables + RLS + triggers + seed + realignment
+│   ├── hotfix_demo_accounts.sql            # optional: pre-provision demo accounts
+│   ├── hotfix_realign_risk_math.sql        # optional: re-derive seeded math + add column
+│   ├── hotfix_action_plans.sql             # optional: diversify seed action-plan dates
+│   └── hotfix_user_profiles_rls.sql        # legacy: RLS recursion fix (already in master)
+└── docs/                                   # (optional) supplementary guides
+```
+
+---
+
+## Operations
+
+### Cache busting
+Every `<link>`/`<script>` referencing local CSS/JS carries a `?v=YYYYMMDDx` marker. Bump the trailing letter whenever you ship a substantive change so the browser pulls the new bytes immediately. Current marker: **`v=20260517o`**.
+
+### Re-running database scripts
+All SQL files use `IF NOT EXISTS`, `CREATE OR REPLACE`, and idempotent `ADD COLUMN IF NOT EXISTS` so they can be re-run any number of times without side effects.
+
+### Bypassing tracking prevention
+If a browser blocks `localStorage` for the Supabase SDK (Edge "Tracking Prevention", Brave, etc.), the app uses a `directFetch()` helper that hits the PostgREST API with the explicit access token instead of relying on the SDK's locked session — sign-ins and saves complete in <1s instead of timing out at 15s.
+
+### Resetting a stale session
+A **Reset session** button on the login screen clears `localStorage` and reloads. Useful if the SDK state got corrupted between deployments.
+
+---
+
+## Browser support
+
+- Chrome / Edge 90+, Firefox 88+, Safari 14+, modern mobile browsers.
+- No Internet Explorer support.
+
+---
+
+## References
+
+- **NIST SP 800-30 Rev. 1** — Guide for Conducting Risk Assessments.
+- **NIST CSF 2.0** (Feb 2024) — Govern / Identify / Protect / Detect / Respond / Recover.
+- **ISO/IEC 27001:2022** + Annex A controls (93 control set).
+- **ISO/IEC 27005:2022** — Information security risk management.
+- **CIS Controls v8** (May 2021) — 18 controls + 153 safeguards.
+- **SOC 2 / TSC 2017** (rev. 2022) — Common Criteria CC1–CC9 + supplemental.
+- **PCI-DSS v4.0** (March 2022) — applied to all `type=FA` assets.
+- **RA 10173** (PH Data Privacy Act) + IRR + NPC Circulars — applied to all PII/SPI assets.
+- **ISO/IEC 27701** + GDPR Art. 32 — Privacy management baseline.
+
+---
+
+**Built for the Pamantasan ng Lungsod ng Maynila Information Security Office.**
+
+*v2.0 — May 2026*
