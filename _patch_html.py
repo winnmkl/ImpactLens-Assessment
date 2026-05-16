@@ -10,18 +10,23 @@ def el(cls, content, attrs=""):
     extra = (" " + attrs.strip()) if attrs else ""
     return f"{open_tag}{a}{extra}>{content}{close_tag}"
 
+def nav_item(section, icon, label, badge=""):
+    attrs = f'data-section="{section}" onclick="showSection(\'{section}\')"'
+    inner = f'<span class="nav-icon">{icon}</span> {label}{badge}'
+    return el("nav-item", inner, attrs)
+
 p = Path("index.html")
 t = p.read_text(encoding="utf-8")
 
 new_nav = f"""  <nav id="main-nav">
-    {el("nav-section nav-admin-only", el("nav-label", "Overview") + el("nav-item", '<span class="nav-icon">[■]</span> Dashboard', 'data-section="dashboard" onclick="showSection(\\'dashboard\\')"'))}
-    {el("nav-section nav-user-only nav-infosec-only", el("nav-label", "Assets") + el("nav-item", '<span class="nav-icon">[+]</span> Add Asset', 'data-section="add" onclick="showSection(\\'add\\')"'))}
-    {el("nav-section nav-infosec-only", el("nav-label", "Workflow") + el("nav-item", '<span class="nav-icon">[◷]</span> Draft Queue <span class="nav-badge" id="nav-drafts">0</span>', 'data-section="draft-queue" onclick="showSection(\\'draft-queue\\')"'))}
-    {el("nav-section nav-admin-only", el("nav-label", "Approval") + el("nav-item", '<span class="nav-icon">[◎]</span> Pending Approval <span class="nav-badge" id="nav-pending" style="color:var(--warn)">0</span>', 'data-section="pending-queue" onclick="showSection(\\'pending-queue\\')"'))}
-    {el("nav-section nav-admin-only", el("nav-label", "Assets") + el("nav-item", '<span class="nav-icon">[≡]</span> Asset Table <span class="nav-badge" id="nav-total">0</span>', 'data-section="register" onclick="showSection(\\'register\\')"'))}
-    {el("nav-section nav-admin-only", el("nav-label", "Analysis") + el("nav-item", '<span class="nav-icon">[△]</span> Risk Register', 'data-section="risk" onclick="showSection(\\'risk\\')"') + el("nav-item", '<span class="nav-icon">[✓]</span> Control Metrics', 'data-section="controls" onclick="showSection(\\'controls\\')"') + el("nav-item", '<span class="nav-icon">[!]</span> Action Plans <span class="nav-badge" id="nav-actions" style="color:var(--warn)">0</span>', 'data-section="actions" onclick="showSection(\\'actions\\')"'))}
-    {el("nav-section nav-infosec-only", el("nav-label", "Audit") + el("nav-item", '<span class="nav-icon">[⌗]</span> System Logs', 'data-section="logs" onclick="showSection(\\'logs\\')"'))}
-    {el("nav-section", el("nav-label", "Documentation") + el("nav-item nav-admin-only", '<span class="nav-icon">[✎]</span> Reporting & Sign-offs', 'data-section="report" onclick="showSection(\\'report\\')"') + el("nav-item", '<span class="nav-icon">[?]</span> Risk Guidelines', 'data-section="guidelines" onclick="showSection(\\'guidelines\\')"'))}
+    {el("nav-section nav-admin-only", el("nav-label", "Overview") + nav_item("dashboard", "[■]", "Dashboard"))}
+    {el("nav-section nav-user-only nav-infosec-only", el("nav-label", "Assets") + nav_item("add", "[+]", "Add Asset"))}
+    {el("nav-section nav-infosec-only", el("nav-label", "Workflow") + nav_item("draft-queue", "[◷]", "Draft Queue", ' <span class="nav-badge" id="nav-drafts">0</span>'))}
+    {el("nav-section nav-admin-only", el("nav-label", "Approval") + nav_item("pending-queue", "[◎]", "Pending Approval", ' <span class="nav-badge" id="nav-pending" style="color:var(--warn)">0</span>'))}
+    {el("nav-section nav-admin-only", el("nav-label", "Assets") + nav_item("register", "[≡]", "Asset Table", ' <span class="nav-badge" id="nav-total">0</span>'))}
+    {el("nav-section nav-admin-only", el("nav-label", "Analysis") + nav_item("risk", "[△]", "Risk Register") + nav_item("controls", "[✓]", "Control Metrics") + nav_item("actions", "[!]", "Action Plans", ' <span class="nav-badge" id="nav-actions" style="color:var(--warn)">0</span>'))}
+    {el("nav-section nav-infosec-only", el("nav-label", "Audit") + nav_item("logs", "[⌗]", "System Logs"))}
+    {el("nav-section", el("nav-label", "Documentation") + el("nav-item nav-admin-only", '<span class="nav-icon">[✎]</span> Reporting & Sign-offs', 'data-section="report" onclick="showSection(\'report\')"') + nav_item("guidelines", "[?]", "Risk Guidelines"))}
   </nav>"""
 
 t2, n = re.subn(r"  <nav>.*?</nav>", new_nav, t, count=1, flags=re.DOTALL)
