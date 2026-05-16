@@ -6,7 +6,34 @@
 // 1. SUPABASE INITIALIZATION
 const supabaseUrl = 'https://haspklehikocqswmgmtk.supabase.co';
 const supabaseKey = 'sb_publishable_O1qHjWdSJ1hZYraL8mmxYQ_CPRr0Sv6';
-const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+
+let supabase = null;
+function initSupabaseClient() {
+    const lib = window.supabase;
+    if (!lib?.createClient) {
+        throw new Error('Supabase SDK failed to load. Check your network and refresh the page.');
+    }
+    return lib.createClient(supabaseUrl, supabaseKey, {
+        auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            detectSessionInUrl: true
+        }
+    });
+}
+
+try {
+    supabase = initSupabaseClient();
+} catch (err) {
+    console.error(err);
+    document.addEventListener('DOMContentLoaded', () => {
+        const el = document.getElementById('login-error');
+        if (el) {
+            el.textContent = err.message;
+            el.hidden = false;
+        }
+    });
+}
 
 // Global Memory State
 let globalAssets = [];
@@ -308,8 +335,26 @@ function showAppShell() {
     document.getElementById('app-shell')?.classList.remove('hidden');
 }
 
+function formatAuthError(err) {
+    const msg = err?.message || String(err);
+    if (/invalid login credentials/i.test(msg)) {
+        return 'Invalid email or password. Create users in Supabase → Authentication → Users (enable Email provider).';
+    }
+    if (/email not confirmed/i.test(msg)) {
+        return 'Email not confirmed. In Supabase, create the user with “Auto Confirm” checked, or confirm via email.';
+    }
+    if (/signup is disabled/i.test(msg)) {
+        return 'Email sign-in is disabled. Enable Email provider under Authentication → Providers.';
+    }
+    return msg;
+}
+
 async function handleLogin(event) {
     event.preventDefault();
+    if (!supabase) {
+        notify('Supabase is not initialized. Refresh the page.', true);
+        return;
+    }
     const email = document.getElementById('login-email')?.value?.trim();
     const password = document.getElementById('login-password')?.value;
     const errEl = document.getElementById('login-error');
@@ -319,23 +364,28 @@ async function handleLogin(event) {
     try {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        await onAuthSession(data.session);
+        if (!data.session) throw new Error('No session returned. Check Auth settings in Supabase.');
+        await enterAuthenticatedApp(data.session);
     } catch (err) {
-        if (errEl) { errEl.textContent = err.message || 'Sign-in failed'; errEl.hidden = false; }
+        const text = formatAuthError(err);
+        if (errEl) { errEl.textContent = text; errEl.hidden = false; }
+        notify(text, true);
     } finally {
         if (btn) { btn.disabled = false; btn.textContent = 'Sign In →'; }
     }
 }
 
 async function handleLogout() {
-    await supabase.auth.signOut();
+    if (supabase) await supabase.auth.signOut();
     currentUser = null;
     currentRole = null;
     showAuthScreen();
     notify('Signed out.');
 }
 
-async function onAuthSession(session) {
+let authUiReady = false;
+
+async function enterAuthenticatedApp(session) {
     if (!session?.user) return;
     currentUser = session.user;
     currentRole = resolveRole(currentUser);
@@ -345,11 +395,18 @@ async function onAuthSession(session) {
     if (roleEl) roleEl.textContent = roleLabel(currentRole);
     if (userEl) userEl.textContent = currentUser.email || '—';
     applyRoleUI();
-    await syncFromCloud();
-    seedSupabaseIfEmpty();
-    updateWorkflowBadges();
     const landing = { user: 'add', infosec: 'draft-queue', admin: 'dashboard' }[currentRole] || 'add';
     showSection(landing);
+    try {
+        await syncFromCloud(true);
+        await seedSupabaseIfEmpty();
+        updateWorkflowBadges();
+        renderSectionContent(document.querySelector('.section.active')?.id?.replace('sec-', '') || landing);
+    } catch (err) {
+        console.error('Post-login data sync:', err);
+        notify('Signed in, but some data failed to load. Check database tables and RLS.', true);
+    }
+    authUiReady = true;
 }
 
 function applyRoleUI() {
@@ -410,6 +467,7 @@ async function logSystemEvent(action, details = '', assetId = null) {
 }
 
 async function syncFromCloud(silent = false) {
+    if (!supabase) return;
     try {
         const { data: aData, error: aErr } = await supabase.from('Assets').select('*');
         if (aErr) throw aErr;
@@ -1261,16 +1319,29 @@ async function exportDataXLSX() {
 // 8. INITIALIZATION
 // ==========================================
 (async function initApp() {
+    if (!supabase) {
+        showAuthScreen();
+        return;
+    }
+
     const { data: { session } } = await supabase.auth.getSession();
-    if (session) await onAuthSession(session);
+    if (session) await enterAuthenticatedApp(session);
     else showAuthScreen();
 
-    supabase.auth.onAuthStateChange(async (_event, session) => {
-        if (session) await onAuthSession(session);
-        else {
+    supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'INITIAL_SESSION') return;
+        if (event === 'SIGNED_IN' && session) {
+            await enterAuthenticatedApp(session);
+            return;
+        }
+        if (event === 'SIGNED_OUT' || (event === 'TOKEN_REFRESHED' && !session)) {
             currentUser = null;
             currentRole = null;
+            authUiReady = false;
             showAuthScreen();
         }
     });
 })();
+
+window.handleLogin = handleLogin;
+window.handleLogout = handleLogout;

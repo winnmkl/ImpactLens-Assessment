@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap" rel="stylesheet">
   
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8/dist/umd/supabase.js"></script>
   
   <link rel="stylesheet" href="./assets/styles/main.css">
 </head>
@@ -31,7 +31,7 @@
       <div class="field"><label>Password</label><input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password"></div>
       <button type="submit" class="btn btn-primary auth-submit" id="login-btn">Sign In →</button>
     </form>
-    <p class="auth-hint">Demo roles: <code>user@</code> Standard · <code>infosec@</code> Info Sec · <code>admin@</code> or <code>ciso@</code> CISO</p>
+    <p class="auth-hint">Create users in <a href="https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/users" target="_blank" rel="noopener">Supabase → Authentication → Users</a> (check <strong>Auto Confirm</strong>). Role by email: <code>user@</code> · <code>infosec@</code> · <code>admin@</code> / <code>ciso@</code></p>
     <p id="login-error" class="auth-error" hidden></p>
   </div>
 </div>
