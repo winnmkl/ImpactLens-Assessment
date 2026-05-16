@@ -8,10 +8,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap" rel="stylesheet">
   
-  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8/dist/umd/supabase.js"></script>
+  <!-- Vendor libs served locally so Edge Tracking Prevention doesn't block storage access. -->
+  <script src="./assets/vendor/exceljs.min.js?v=20260517b"></script>
+  <script src="./assets/vendor/supabase.min.js?v=20260517b"></script>
   
-  <link rel="stylesheet" href="./assets/styles/main.css">
+  <link rel="stylesheet" href="./assets/styles/main.css?v=20260517n">
 </head>
 <body>
 
@@ -40,8 +41,13 @@
           </select>
         </div>
         <div class="field"><label>Email</label><input type="email" id="login-email" required placeholder="name@plm.edu.ph" autocomplete="username"></div>
-        <div class="field"><label>Password</label><input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password"></div>
-        <button type="submit" class="btn btn-primary auth-submit" id="login-btn">Continue →</button>
+        <div class="field"><label>Password</label>
+          <div class="pw-wrap">
+            <input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password">
+            <button type="button" class="pw-toggle" data-target="login-password" aria-label="Show password" onclick="togglePassword(this)">Show</button>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary auth-submit" id="login-btn">Sign In →</button>
       </form>
       <form id="register-form" class="hidden" onsubmit="handleRegister(event)">
         <div class="field"><label>Requested Role</label>
@@ -51,26 +57,41 @@
             <option value="admin">Admin (CISO)</option>
           </select>
         </div>
-        <div class="field"><label>PLM Email</label><input type="email" id="register-email" required placeholder="name@plm.edu.ph"></div>
-        <div class="field"><label>Password</label><input type="password" id="register-password" required minlength="8" placeholder="Min. 8 characters"></div>
-        <div class="field"><label>Confirm Password</label><input type="password" id="register-password2" required placeholder="Repeat password"></div>
-        <p class="auth-hint auth-hint-inline">Standard Users need Info Sec or Admin approval. Info Sec accounts need Admin approval.</p>
+        <div class="field"><label>Email</label><input type="email" id="register-email" required placeholder="name@plm.edu.ph"></div>
+        <div class="field"><label>Password</label>
+          <div class="pw-wrap">
+            <input type="password" id="register-password" required minlength="8" placeholder="Min. 8 characters" autocomplete="new-password">
+            <button type="button" class="pw-toggle" data-target="register-password" aria-label="Show password" onclick="togglePassword(this)">Show</button>
+          </div>
+        </div>
+        <div class="field"><label>Confirm Password</label>
+          <div class="pw-wrap">
+            <input type="password" id="register-password2" required placeholder="Repeat password" autocomplete="new-password">
+            <button type="button" class="pw-toggle" data-target="register-password2" aria-label="Show password" onclick="togglePassword(this)">Show</button>
+          </div>
+        </div>
+        <p class="auth-hint auth-hint-inline">Supabase will email a verification link. Confirm it before signing in. Standard Users need Info Sec / Admin approval; Info Sec needs Admin approval.</p>
         <button type="submit" class="btn btn-primary auth-submit" id="register-btn">Create Account →</button>
       </form>
     </div>
-    <div id="auth-step-mfa" class="hidden">
-      <p class="auth-mfa-msg">A verification code was sent to your email.<br><strong>Demo code:</strong> <code id="mfa-demo-code">123456</code></p>
-      <div class="field"><label>6-Digit MFA Code</label><input type="text" id="mfa-code" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" placeholder="000000" autocomplete="one-time-code"></div>
-      <button type="button" class="btn btn-primary auth-submit" id="mfa-btn" onclick="completeMfaStep()">Verify & Enter →</button>
-      <button type="button" class="btn btn-sm auth-back" onclick="cancelMfaStep()">← Back</button>
+    <div id="auth-step-verify" class="hidden auth-info-box">
+      <h3>Check Your Email</h3>
+      <p>We sent a verification link to <strong id="verify-email-target">your inbox</strong>.</p>
+      <p>Click the link to confirm your email. Your account will then enter the approval queue automatically.</p>
+      <button type="button" class="btn btn-sm" onclick="resendVerificationEmail()">Resend verification email</button>
+      <button type="button" class="btn btn-sm auth-back" onclick="resetAuthSteps()">← Back to sign in</button>
     </div>
     <div id="auth-step-pending" class="hidden auth-pending-box">
       <h3>Account Pending Approval</h3>
       <p id="pending-approval-msg">Your account is awaiting approval.</p>
       <button type="button" class="btn" onclick="handleLogout()">Sign Out</button>
     </div>
-    <p class="auth-hint">Master admin: <code>admin@plm.edu.ph</code> — create in <a href="https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/users" target="_blank" rel="noopener">Supabase Auth</a>, then run <code>enterprise_setup.sql</code>.</p>
+    <p class="auth-hint">Master admin <code>admin@plm.edu.ph</code> is auto-promoted on email verification (see <code>supabase/master_setup.sql</code>).</p>
     <p id="login-error" class="auth-error" hidden></p>
+    <p class="auth-hint" style="margin-top:14px;">
+      Stuck on a stale session?
+      <button type="button" class="btn btn-sm" onclick="forceResetSession()">Reset session</button>
+    </p>
   </div>
 </div>
 
@@ -99,7 +120,18 @@
     </div>
     <div class="header-stat role-pill">Role: <span id="hdr-role">—</span></div>
     <div class="header-stat user-pill">User: <span id="hdr-user">—</span></div>
-    <div style="display: flex; gap: 8px; margin-left: 12px;">
+    <div style="display: flex; gap: 8px; margin-left: 12px; position: relative;">
+      <button class="btn btn-sm notif-trigger" onclick="toggleNotifications(event)" title="Notifications" id="notif-trigger">
+        <span class="notif-icon">⌬</span>
+        <span class="notif-count hidden" id="notif-count">0</span>
+      </button>
+      <div class="notif-dropdown hidden" id="notif-dropdown" role="dialog" aria-label="Notifications">
+        <div class="notif-header">
+          <span>Inbox</span>
+          <button class="btn btn-sm" onclick="markAllNotificationsRead()" id="notif-mark-read">Mark all read</button>
+        </div>
+        <div id="notif-list" class="notif-list"></div>
+      </div>
       <button class="btn btn-sm btn-success nav-export-only hidden" onclick="exportDataXLSX()">▤ Export</button>
       <button class="btn btn-sm" onclick="handleLogout()">Sign Out</button>
     </div>
@@ -108,12 +140,12 @@
 
 <div class="layout">
   <nav id="main-nav">
-    <div class="nav-section nav-admin-only"><div class="nav-label">Overview</div><div class="nav-item" data-section="dashboard" onclick="showSection('dashboard')"><span class="nav-icon">[■]</span> Dashboard</div></div>
-    <div class="nav-section nav-user-only nav-infosec-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="add" onclick="showSection('add')"><span class="nav-icon">[+]</span> Add Asset</div></div>
+    <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Overview</div><div class="nav-item" data-section="dashboard" onclick="showSection('dashboard')"><span class="nav-icon">[■]</span> Dashboard</div></div>
+    <div class="nav-section nav-user-only nav-infosec-only nav-admin-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="add" onclick="showSection('add')"><span class="nav-icon">[+]</span> Add Asset</div></div>
     <div class="nav-section nav-infosec-only"><div class="nav-label">Workflow</div><div class="nav-item" data-section="draft-queue" onclick="showSection('draft-queue')"><span class="nav-icon">[◷]</span> Draft Queue <span class="nav-badge" id="nav-drafts">0</span></div></div>
-    <div class="nav-section nav-admin-only"><div class="nav-label">Approval</div><div class="nav-item" data-section="pending-queue" onclick="showSection('pending-queue')"><span class="nav-icon">[◎]</span> Pending Approval <span class="nav-badge" id="nav-pending" style="color:var(--warn)">0</span></div></div>
-    <div class="nav-section nav-admin-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="register" onclick="showSection('register')"><span class="nav-icon">[≡]</span> Asset Table <span class="nav-badge" id="nav-total">0</span></div></div>
-    <div class="nav-section nav-admin-only"><div class="nav-label">Analysis</div><div class="nav-item" data-section="risk" onclick="showSection('risk')"><span class="nav-icon">[△]</span> Risk Register</div><div class="nav-item" data-section="controls" onclick="showSection('controls')"><span class="nav-icon">[✓]</span> Control Metrics</div><div class="nav-item" data-section="actions" onclick="showSection('actions')"><span class="nav-icon">[!]</span> Action Plans <span class="nav-badge" id="nav-actions" style="color:var(--warn)">0</span></div></div>
+    <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Approval</div><div class="nav-item" data-section="pending-queue" onclick="showSection('pending-queue')"><span class="nav-icon">[◎]</span> Pending Approval <span class="nav-badge" id="nav-pending" style="color:var(--warn)">0</span></div></div>
+    <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="register" onclick="showSection('register')"><span class="nav-icon">[≡]</span> Asset Table <span class="nav-badge" id="nav-total">0</span></div></div>
+    <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Analysis</div><div class="nav-item" data-section="risk" onclick="showSection('risk')"><span class="nav-icon">[△]</span> Risk Register</div><div class="nav-item" data-section="controls" onclick="showSection('controls')"><span class="nav-icon">[✓]</span> Control Metrics</div><div class="nav-item" data-section="actions" onclick="showSection('actions')"><span class="nav-icon">[!]</span> Action Plans <span class="nav-badge" id="nav-actions" style="color:var(--warn)">0</span></div></div>
     <div class="nav-section nav-infosec-only nav-admin-users"><div class="nav-label">Governance</div><div class="nav-item" data-section="users" onclick="showSection('users')"><span class="nav-icon">[◎]</span> User Management</div><div class="nav-item" data-section="logs" onclick="showSection('logs')"><span class="nav-icon">[⌗]</span> System Logs</div></div>
     <div class="nav-section"><div class="nav-label">Documentation</div><div class="nav-item nav-admin-only" data-section="report" onclick="showSection('report')"><span class="nav-icon">[✎]</span> Reporting & Sign-offs</div><div class="nav-item" data-section="guidelines" onclick="showSection('guidelines')"><span class="nav-icon">[?]</span> Risk Guidelines</div></div>
   </nav>
@@ -146,7 +178,7 @@
     </div>
 
     <div id="sec-add" class="section">
-      <div class="page-header"><div><div class="page-title" id="form-title">INSERT <span>RECORD</span></div><p class="page-desc">Workflow: <span id="form-workflow-status" class="badge badge-type">Draft</span></p></div>
+      <div class="page-header"><div><div class="page-title" id="form-title">INSERT <span>RECORD</span></div><p class="page-desc">Workflow: <span id="form-workflow-status" class="badge badge-type">Draft</span></p></div></div>
       
       <div class="card">
         <div class="card-header">01 — Primary Details & Network Context</div>
@@ -339,8 +371,11 @@
       </div>
 
       <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:20px;">
-        <button class="btn" onclick="clearForm()">Clear form</button>
-        <button class="btn btn-primary" id="btn-save-asset" onclick="saveAssetToDB()">Save Asset →</button>
+        <button type="button" class="btn" onclick="clearForm()">Clear form</button>
+        <button type="button" class="btn btn-primary" id="btn-save-asset"
+                onclick="(window.saveAssetToDB||function(){alert('saveAssetToDB not loaded — hard-refresh (Ctrl+F5).');})()">
+          Save Asset →
+        </button>
       </div>
     </div>
 
@@ -559,7 +594,7 @@
 
 <div id="notification" class="notification"></div>
 
-<script src="./assets/scripts/app.js"></script>
+<script src="./assets/scripts/app.js?v=20260517o"></script>
 
 </body>
 </html>

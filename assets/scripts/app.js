@@ -44,9 +44,56 @@ let editingId = null;
 let currentUser = null;
 let currentRole = null; // 'user' | 'infosec' | 'admin'
 let currentProfile = null;
-let pendingMfaSession = null;
+let pendingVerifyEmail = null;
 let syncInFlight = null;
+let currentAccessToken = null; // Captured on sign-in; used for direct REST calls.
 const ASSET_STATUS = { DRAFT: 'Draft', PENDING: 'Pending Approval', APPROVED: 'Approved', REJECTED: 'Rejected' };
+
+// ---------------------------------------------------------------
+// Direct PostgREST fetch helper. Bypasses supabase-js's internal
+// builder + lock machinery so a stuck SDK never blocks the UI.
+// ---------------------------------------------------------------
+async function directFetch(path, { method = 'GET', body, params, prefer, timeoutMs = 12000 } = {}) {
+    if (!currentAccessToken) {
+        throw new Error('Not signed in (no access token).');
+    }
+    const url = new URL(supabaseUrl + '/rest/v1/' + path);
+    if (params) Object.entries(params).forEach(([k, v]) => v != null && url.searchParams.set(k, v));
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let res;
+    try {
+        res = await fetch(url.toString(), {
+            method,
+            headers: {
+                'apikey': supabaseKey,
+                'Authorization': 'Bearer ' + currentAccessToken,
+                'Content-Type': 'application/json',
+                ...(prefer ? { 'Prefer': prefer } : {})
+            },
+            body: body ? JSON.stringify(body) : undefined,
+            signal: ctrl.signal
+        });
+    } catch (err) {
+        clearTimeout(timer);
+        if (err?.name === 'AbortError') {
+            throw new Error('Network timeout — Supabase did not respond within ' + (timeoutMs / 1000) + 's. Check your internet connection or Edge Tracking Prevention settings for *.supabase.co.');
+        }
+        throw err;
+    }
+    clearTimeout(timer);
+    const text = await res.text();
+    let data = null;
+    if (text) { try { data = JSON.parse(text); } catch (_) { data = text; } }
+    if (!res.ok) {
+        const msg = (data && (data.message || data.hint || data.details)) || `HTTP ${res.status}`;
+        const err = new Error(msg);
+        err.status = res.status;
+        err.body   = data;
+        throw err;
+    }
+    return data;
+}
 
 // Helper to generate dynamic dates
 const getDynamicDate = (daysToAdd) => {
@@ -74,31 +121,191 @@ const CTRL_NAMES = [
   'Network Firewall / WAF', 'Vulnerability Scanning & Patching', 'Network Segmentation (VLANs)', 'Incident Response Plan'
 ];
 
-/** Per-control framework mapping (1–13). PCI-DSS applies when asset type is FA. */
+/**
+ * Per-control framework mapping (1–13) with SPECIFIC clause / subcategory IDs.
+ * Sources:
+ *   - NIST CSF 2.0 (Feb 2024) — subcategories within GV/ID/PR/DE/RS/RC functions.
+ *   - ISO/IEC 27001:2022 Annex A + ISO/IEC 27002:2022 (93 controls reorganized
+ *     into 4 themes: Organizational, People, Physical, Technological).
+ *   - CIS Controls v8 (May 2021) — 18 controls and 153 safeguards.
+ *   - SOC 2 / TSC 2017 (revised 2022) — Common Criteria CC1–CC9 + Availability,
+ *     Confidentiality, Privacy, Processing Integrity supplemental criteria.
+ *   - PCI-DSS v4.0 (Mar 2022) — applies when asset type = FA (Financial Asset).
+ */
 const CONTROL_COMPLIANCE = {
-  1:  { nist: 'Identify', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
-  2:  { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
-  3:  { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
-  4:  { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
-  5:  { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: null },
-  6:  { nist: 'Recover', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
-  7:  { nist: 'Protect', iso: 'ISMS Implementation', cis: null, soc2: 'Trust Services Criteria', pci: 'PCI-DSS (FA)' },
-  8:  { nist: 'Protect', iso: 'ISMS Implementation', cis: null, soc2: null },
-  9:  { nist: 'Detect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
-  10: { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
-  11: { nist: 'Detect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: null },
-  12: { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: null },
-  13: { nist: 'Respond', iso: 'ISMS Implementation', cis: null, soc2: 'Trust Services Criteria' }
+  1:  { name: 'Documented procedures',
+        nist: ['GV.PO-01', 'GV.PO-02', 'ID.GV-01'],
+        iso:  ['A.5.1', 'A.5.36', 'A.5.37'],
+        cis:  ['14.1', '14.2'],
+        soc2: ['CC1.1', 'CC2.2'],
+        pci:  ['12.1'] },
+  2:  { name: 'Segregation of duties',
+        nist: ['GV.RR-02', 'PR.AA-05'],
+        iso:  ['A.5.3', 'A.5.16'],
+        cis:  ['6.8'],
+        soc2: ['CC5.1', 'CC6.3'],
+        pci:  ['7.2.4'] },
+  3:  { name: 'Role-Based Access Control (RBAC)',
+        nist: ['PR.AA-01', 'PR.AA-05'],
+        iso:  ['A.5.15', 'A.5.18', 'A.8.2', 'A.8.3'],
+        cis:  ['6.1', '6.2', '6.5', '6.6', '6.8'],
+        soc2: ['CC6.1', 'CC6.2', 'CC6.3'],
+        pci:  ['7.2', '7.3'] },
+  4:  { name: 'Multi-Factor Authentication (MFA)',
+        nist: ['PR.AA-03'],
+        iso:  ['A.8.5'],
+        cis:  ['6.3', '6.4', '6.5'],
+        soc2: ['CC6.1'],
+        pci:  ['8.4.2', '8.5.1'] },
+  5:  { name: 'Physical controls (CCTV, Locks)',
+        nist: ['PR.AA-06'],
+        iso:  ['A.7.1', 'A.7.2', 'A.7.4', 'A.7.6'],
+        cis:  ['1.1'],
+        soc2: ['CC6.4'],
+        pci:  ['9.1', '9.2', '9.3'] },
+  6:  { name: 'Automated Information backup',
+        nist: ['PR.DS-11', 'RC.RP-01'],
+        iso:  ['A.8.13'],
+        cis:  ['11.1', '11.2', '11.3', '11.4'],
+        soc2: ['A1.2', 'CC9.1'],
+        pci:  ['12.10.5'] },
+  7:  { name: 'Encryption (At Rest / In Transit)',
+        nist: ['PR.DS-01', 'PR.DS-02'],
+        iso:  ['A.8.24'],
+        cis:  ['3.10', '3.11'],
+        soc2: ['CC6.1', 'CC6.7'],
+        pci:  ['3.5', '3.6', '4.2'] },
+  8:  { name: 'Asset disposal procedures',
+        nist: ['PR.DS-10'],
+        iso:  ['A.7.14', 'A.8.10'],
+        cis:  ['3.5'],
+        soc2: ['CC6.5'],
+        pci:  ['3.2.1', '9.4.7'] },
+  9:  { name: 'Endpoint Detection & Response (EDR)',
+        nist: ['DE.CM-01', 'DE.CM-09', 'RS.MA-01'],
+        iso:  ['A.8.7', 'A.8.16'],
+        cis:  ['10.1', '10.2', '10.6', '13.1'],
+        soc2: ['CC7.2', 'CC7.3'],
+        pci:  ['5.2', '5.3', '11.5'] },
+  10: { name: 'Network Firewall / WAF',
+        nist: ['PR.IR-01', 'PR.PS-01'],
+        iso:  ['A.8.20', 'A.8.21', 'A.8.22'],
+        cis:  ['12.1', '12.2', '13.4'],
+        soc2: ['CC6.1', 'CC6.6'],
+        pci:  ['1.2', '1.3', '1.4'] },
+  11: { name: 'Vulnerability Scanning & Patching',
+        nist: ['ID.RA-01', 'PR.PS-02'],
+        iso:  ['A.8.8'],
+        cis:  ['7.1', '7.3', '7.4', '7.6'],
+        soc2: ['CC7.1'],
+        pci:  ['6.3.3', '11.3'] },
+  12: { name: 'Network Segmentation (VLANs)',
+        nist: ['PR.IR-02', 'PR.AA-05'],
+        iso:  ['A.8.22'],
+        cis:  ['12.2', '13.4'],
+        soc2: ['CC6.6'],
+        pci:  ['1.4.4', '11.4.5'] },
+  13: { name: 'Incident Response Plan',
+        nist: ['RS.MA-01', 'RS.MA-02', 'RC.RP-01', 'RC.RP-04'],
+        iso:  ['A.5.24', 'A.5.25', 'A.5.26', 'A.5.27'],
+        cis:  ['17.1', '17.2', '17.3', '17.4'],
+        soc2: ['CC7.3', 'CC7.4', 'CC7.5'],
+        pci:  ['12.10'] }
 };
 
-const MFA_DEMO_CODE = '123456';
-
+/**
+ * Threat → relevant controls (defense-in-depth applicability).
+ * NIST SP 800-30 Rev. 1 threat-source → mitigation mapping.
+ * A control is "relevant" if its activation reduces probability or severity
+ * for that threat source. Other controls remain checkable but offer no
+ * mathematical reduction for this threat.
+ */
 const controlMap = {
-    'phys_theft': [5, 7, 8], 'phys_destruct': [5, 6, 13], 'hr_insider': [2, 3, 4, 12],
-    'hr_accidental': [1, 3, 6], 'cyber_ext_ransomware': [4, 6, 9, 10, 11, 13], 
-    'cyber_ext_leak': [3, 4, 7, 9, 10], 'cyber_ext_ddos': [10, 12, 13], 'cyber_ext_supply': [1, 3, 4, 10, 13],
-    'cyber_int_unauth': [2, 3, 4, 9], 'cyber_int_vuln': [9, 10, 11, 12], 'legal_dpa': [1, 7, 8]
+    'phys_theft':           [1, 5, 7, 8],               // Procedures, Phys, Crypto, Disposal
+    'phys_destruct':        [1, 5, 6, 12, 13],          // + DR plan, segmentation
+    'hr_insider':           [1, 2, 3, 4, 9, 12],        // SoD, RBAC, MFA, EDR, Seg
+    'hr_accidental':        [1, 3, 6, 13],              // Procedures, RBAC, Backup, IR
+    'cyber_ext_ransomware': [1, 4, 6, 7, 9, 10, 11, 13],
+    'cyber_ext_leak':       [1, 3, 4, 7, 9, 10, 12],
+    'cyber_ext_ddos':       [10, 11, 12, 13],
+    'cyber_ext_supply':     [1, 3, 4, 7, 10, 11, 13],
+    'cyber_int_unauth':     [1, 2, 3, 4, 9, 13],
+    'cyber_int_vuln':       [1, 9, 10, 11, 12],
+    'legal_dpa':            [1, 3, 7, 8, 13]
 };
+
+/**
+ * NIST SP 800-30 / ISO 27005-aligned weighting per control. Each weight
+ * represents how much a fully-implemented instance of the control reduces
+ * Probability vs. Severity for the threats it applies to. Weights are then
+ * combined with diminishing returns and synergy bonuses in calculateRiskMath.
+ */
+const CONTROL_WEIGHTS = {
+    1:  { p: 0.5, s: 0.3 },   // Documented procedures (governance)
+    2:  { p: 0.6, s: 0.3 },   // Segregation of duties
+    3:  { p: 0.9, s: 0.4 },   // RBAC
+    4:  { p: 1.0, s: 0.4 },   // MFA — strongest preventive control vs. account takeover
+    5:  { p: 0.7, s: 0.4 },   // Physical
+    6:  { p: 0.0, s: 1.2 },   // Backup — pure recovery; reduces severity not probability
+    7:  { p: 0.0, s: 1.4 },   // Encryption — limits impact even if breached
+    8:  { p: 0.3, s: 0.5 },   // Disposal
+    9:  { p: 0.6, s: 0.7 },   // EDR — early detection limits dwell time and impact
+    10: { p: 0.9, s: 0.4 },   // Firewall / WAF
+    11: { p: 0.9, s: 0.3 },   // Vulnerability mgmt
+    12: { p: 0.7, s: 0.5 },   // Network segmentation
+    13: { p: 0.0, s: 1.1 }    // IRP — recovery / containment
+};
+
+/**
+ * Synergy bonuses — paired controls reinforce each other beyond simple sum.
+ * Each entry: when ALL listed controls are active, add the bonus to the
+ * cumulative reduction.
+ */
+const CONTROL_SYNERGIES = [
+    { ids: [3, 4],     pBonus: 0.5, sBonus: 0.0, label: 'RBAC + MFA' },
+    { ids: [6, 13],    pBonus: 0.0, sBonus: 0.5, label: 'Backup + IRP (BCP-DR)' },
+    { ids: [9, 10],    pBonus: 0.4, sBonus: 0.0, label: 'EDR + Firewall (network defense in depth)' },
+    { ids: [7, 12],    pBonus: 0.0, sBonus: 0.4, label: 'Encryption + Segmentation (zero-trust pattern)' },
+    { ids: [11, 9, 13],pBonus: 0.3, sBonus: 0.3, label: 'Vuln Mgmt + EDR + IRP (NIST detect–respond loop)' }
+];
+
+/**
+ * MANDATORY control sets — when ANY of these baselines is unmet, the system
+ * floors the residual rating at 'Moderate' (or 'High' for PCI-DSS gaps) and
+ * surfaces the missing controls with framework citations in the gap panel.
+ */
+const MANDATORY_CONTROLS = {
+    // Asset-class minima (CIA score ≥ 8 → Restricted)
+    restrictedClass:   { ids: [3, 4, 6, 7, 13], floor: 'Moderate',
+        rationale: 'ISO 27001:2022 §A.5.10–A.5.15 + NIST CSF PR.AA + PR.DS require RBAC, MFA, Backup, Encryption and Incident Response for Restricted-class data.' },
+    // Confidential class (score 6–7) — slightly relaxed
+    confidentialClass: { ids: [3, 7, 13], floor: 'Moderate',
+        rationale: 'ISO 27001:2022 §A.8.2 + NIST CSF PR.DS-01/02 require RBAC, Encryption and an Incident Response capability for Confidential data.' },
+    // Financial Asset → PCI-DSS minimums
+    fa:                { ids: [4, 7, 11, 12], floor: 'High',
+        rationale: 'PCI-DSS v4.0 Req 3 (encrypt stored CHD), Req 4 (encrypt transmission), Req 8.4 (MFA), Req 11.3 (vuln scan) and Req 1.4.4 (segmentation) are mandatory for any asset that processes, stores or transmits cardholder data.' },
+    // PII / SPI → Philippine DPA + GDPR equivalents
+    pii:               { ids: [1, 3, 6, 7], floor: 'Moderate',
+        rationale: 'RA 10173 (PH Data Privacy Act) §20 + ISO 27701 + GDPR Art. 32 require documented privacy procedures, access control, secure backup and encryption for PII / SPI processing.' },
+    // Internet-facing assets → exposure baseline
+    internetFacing:    { ids: [10, 11, 13], floor: 'Moderate',
+        rationale: 'CIS Controls v8 §12 + §17 + NIST CSF PR.IR-01, DE.CM-01 require boundary defense (WAF), continuous vulnerability management and an Incident Response Plan for any Internet-exposed asset.' }
+};
+
+const RESIDUAL_FLOOR_RANK = { 'Very Low': 0, 'Low': 1, 'Moderate': 2, 'High': 3 };
+const RESIDUAL_FLOOR_NAME = ['Very Low', 'Low', 'Moderate', 'High'];
+
+/** Resolve which mandatory baselines apply to the current asset state. */
+function getApplicableMandatorySets(ctx) {
+    const sets = [];
+    const ciaScore = (parseInt(ctx.c) || 0) + (parseInt(ctx.i) || 0) + (parseInt(ctx.a) || 0);
+    if (ciaScore >= 8)            sets.push({ key: 'restrictedClass', ...MANDATORY_CONTROLS.restrictedClass });
+    else if (ciaScore >= 6)       sets.push({ key: 'confidentialClass', ...MANDATORY_CONTROLS.confidentialClass });
+    if (ctx.type === 'FA')        sets.push({ key: 'fa', ...MANDATORY_CONTROLS.fa });
+    if (ctx.pii === 'Y' || ctx.spi === 'Y') sets.push({ key: 'pii', ...MANDATORY_CONTROLS.pii });
+    if (ctx.environment === 'Internet Facing') sets.push({ key: 'internetFacing', ...MANDATORY_CONTROLS.internetFacing });
+    return sets;
+}
 
 const RISK_TEMPLATES = {
     "phys_theft": { desc: "Theft of storage devices or printed documents", prob: "3", sev: "4", action: "Enforce physical access controls, clean desk policy, and full disk encryption (FDE)." },
@@ -230,22 +437,78 @@ function runEnforcementEngine(skipAutoTemplate = false) {
 
     // ---------------------------------------------------------
     // GUARDRAIL 3: Mistake-Proof Controls
+    //
+    // A control gets enabled if it is EITHER:
+    //   (a) threat-relevant — defense-in-depth applicability per
+    //       NIST SP 800-30 (controlMap), so it lowers P/S, OR
+    //   (b) compliance-mandatory — required by an applicable baseline
+    //       (Restricted/Confidential class, FA/PCI-DSS, PII, Internet
+    //       Facing) so unchecking it floors residual risk.
+    //
+    // Previously only (a) was enabled, which made it impossible to
+    // satisfy a mandatory baseline whose controls fell outside the
+    // threat's relevant set (e.g. ddos threat + Restricted-class asset
+    // disabled the very controls — RBAC/MFA/Backup/Encryption — that
+    // the standards-based floor demands).
     // ---------------------------------------------------------
     const threat = g('f-risk-category');
-    const validControls = controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13];
+    const relevantControls = new Set(controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13]);
 
-    for(let i=1; i<=13; i++) {
-        const cb = document.getElementById('ctrl'+i);
+    const mandatoryCtx = {
+        type,
+        c: parseInt(g('f-c')) || 0,
+        i: parseInt(g('f-i')) || 0,
+        a: parseInt(g('f-a')) || 0,
+        pii: g('f-pii'),
+        spi: g('f-spi'),
+        environment: g('f-environment')
+    };
+    const mandatoryIds = new Set();
+    getApplicableMandatorySets(mandatoryCtx).forEach(set => set.ids.forEach(id => mandatoryIds.add(id)));
+
+    for (let i = 1; i <= 13; i++) {
+        const cb = document.getElementById('ctrl' + i);
         const label = cb ? cb.parentElement : null;
-        if(cb && label) {
-            if(validControls.includes(i)) {
-                cb.disabled = false; label.style.opacity = '1'; label.style.textDecoration = 'none'; label.style.cursor = 'pointer';
-            } else {
-                cb.disabled = true; cb.checked = false; label.style.opacity = '0.3'; label.style.textDecoration = 'line-through'; label.style.cursor = 'not-allowed';
-            }
+        if (!cb || !label) continue;
+        const isRelevant  = relevantControls.has(i);
+        const isMandatory = mandatoryIds.has(i);
+        // strip prior modifier classes
+        label.classList.remove('ctrl-relevant', 'ctrl-mandatory', 'ctrl-both', 'ctrl-disabled');
+
+        if (isRelevant && isMandatory) {
+            cb.disabled = false;
+            label.classList.add('ctrl-both');
+            label.style.opacity = '1';
+            label.style.textDecoration = 'none';
+            label.style.cursor = 'pointer';
+            label.title = 'Mitigates this threat AND required by a compliance baseline.';
+        } else if (isRelevant) {
+            cb.disabled = false;
+            label.classList.add('ctrl-relevant');
+            label.style.opacity = '1';
+            label.style.textDecoration = 'none';
+            label.style.cursor = 'pointer';
+            label.title = 'Effective control for the selected threat (lowers Probability / Severity).';
+        } else if (isMandatory) {
+            // Compliance baseline overrides the threat-relevance restriction so
+            // the user can actually satisfy the standards-based floor.
+            cb.disabled = false;
+            label.classList.add('ctrl-mandatory');
+            label.style.opacity = '0.85';
+            label.style.textDecoration = 'none';
+            label.style.cursor = 'pointer';
+            label.title = 'Not threat-relevant — does not reduce P/S for this threat — but REQUIRED to lift the compliance residual floor.';
+        } else {
+            cb.disabled = true;
+            cb.checked = false;
+            label.classList.add('ctrl-disabled');
+            label.style.opacity = '0.3';
+            label.style.textDecoration = 'line-through';
+            label.style.cursor = 'not-allowed';
+            label.title = 'Not relevant for the selected threat and not part of any active compliance baseline.';
         }
     }
-    
+
     if (typeof updateTagsUI === "function") updateTagsUI();
     calculateRiskMath();
 }
@@ -253,74 +516,156 @@ function runEnforcementEngine(skipAutoTemplate = false) {
 function calculateRiskMath() {
     let p = parseInt(g('f-prob')) || 3;
     let s = parseInt(g('f-sev')) || 3;
-    const threat = g('f-risk-category');
-    const env = g('f-environment');
-    const currentPii = g('f-pii');
-    const currentSpi = g('f-spi');
+    const threat        = g('f-risk-category');
+    const env           = g('f-environment');
+    const currentPii    = g('f-pii');
+    const currentSpi    = g('f-spi');
+    const type          = g('f-type');
+    const cVal          = parseInt(g('f-c')) || 0;
+    const iVal          = parseInt(g('f-i')) || 0;
+    const aVal          = parseInt(g('f-a')) || 0;
+    const ciaScore      = cVal + iVal + aVal;
 
-    // Risk Escalations
+    // -----------------------------------------------------------
+    // INHERENT-RISK ESCALATIONS (NIST SP 800-30 Rev.1 — adversarial
+    // factors + ISO 27005 likelihood-impact adjustments)
+    // -----------------------------------------------------------
     if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.min(5, p + 1);
     if ((currentPii === 'Y' || currentSpi === 'Y') && (threat === 'cyber_ext_leak' || threat === 'legal_dpa')) s = 5;
+    // Restricted-class cyber/insider threats inherit max severity automatically.
+    if (ciaScore >= 8 && (threat.startsWith('cyber_') || threat === 'hr_insider')) s = Math.max(s, 4);
+    // PCI-DSS scoped assets always carry max severity for cyber threats (CHD breach is total loss).
+    if (type === 'FA' && threat.startsWith('cyber_')) s = 5;
+    // Internet-facing assets always face credible probability — never below 3 for cyber-external.
+    if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.max(p, 3);
 
     const inherentRating = INHERIT[s + '-' + p] || 'Moderate';
     const probDisp = document.getElementById('f-prob-display');
-    const sevDisp = document.getElementById('f-sev-display');
-    const probH = document.getElementById('f-prob');
-    const sevH = document.getElementById('f-sev');
-    if (probH) probH.value = String(p);
-    if (sevH) sevH.value = String(s);
+    const sevDisp  = document.getElementById('f-sev-display');
+    const probH    = document.getElementById('f-prob');
+    const sevH     = document.getElementById('f-sev');
+    if (probH)    probH.value = String(p);
+    if (sevH)     sevH.value = String(s);
     if (probDisp) probDisp.value = String(p);
-    if (sevDisp) sevDisp.value = String(s);
+    if (sevDisp)  sevDisp.value = String(s);
     const rEl = document.getElementById('r-inherit');
-    if(rEl) { rEl.textContent = inherentRating; rEl.style.color = riskColor(inherentRating); }
-    
-    const validControls = controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13]; 
-    let activeValidCount = 0;
-    let pRed = 0, sRed = 0;
+    if (rEl) { rEl.textContent = inherentRating; rEl.style.color = riskColor(inherentRating); }
 
-    for(let i=1; i<=13; i++) {
-        const cb = document.getElementById('ctrl'+i);
-        if(cb && cb.checked && validControls.includes(i)) {
-            activeValidCount++;
-            if ([1,2,3,4,5,8,10,11,12].includes(i)) pRed += 1.0; 
-            if ([6,7,9,13].includes(i)) sRed += 1.0; 
+    // -----------------------------------------------------------
+    // RESIDUAL REDUCTION (defense-in-depth, weighted, with diminishing
+    // returns and synergy bonuses)
+    // -----------------------------------------------------------
+    const relevantSet = new Set(controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13]);
+    const active = [];
+    for (let i = 1; i <= 13; i++) {
+        const cb = document.getElementById('ctrl' + i);
+        if (cb && cb.checked && !cb.disabled) active.push(i);
+    }
+    const activeRelevant = active.filter(id => relevantSet.has(id));
+
+    // Sum weighted reductions for relevant controls only.
+    let pRedRaw = 0, sRedRaw = 0;
+    activeRelevant.forEach(id => {
+        const w = CONTROL_WEIGHTS[id] || { p: 0, s: 0 };
+        pRedRaw += w.p;
+        sRedRaw += w.s;
+    });
+    // Apply synergy bonuses where ALL ids of a synergy are active and relevant.
+    const appliedSynergies = [];
+    CONTROL_SYNERGIES.forEach(syn => {
+        if (syn.ids.every(id => activeRelevant.includes(id))) {
+            pRedRaw += syn.pBonus;
+            sRedRaw += syn.sBonus;
+            appliedSynergies.push(syn.label);
         }
+    });
+    // Diminishing returns: a single dimension can never drop more than (score − 1)
+    // and the saturation curve plateaus around 70 % of the raw reduction once
+    // beyond the score. This stops "10 controls = score of 1" gaming.
+    const dimReturn = (raw, max) => {
+        if (raw <= 0) return 0;
+        const cap = Math.max(0, max - 1);
+        // Saturating curve: r(x) = cap * (1 - exp(-x / k))   k tuned to 2.0
+        const reduction = cap * (1 - Math.exp(-raw / 2.0));
+        return Math.min(cap, reduction);
+    };
+    const pRed = dimReturn(pRedRaw, p);
+    const sRed = dimReturn(sRedRaw, s);
+    let resP = Math.max(1, Math.round(p - pRed));
+    let resS = Math.max(1, Math.round(s - sRed));
+    let residualRating = INHERIT[resS + '-' + resP] || 'Low';
+
+    // -----------------------------------------------------------
+    // MANDATORY-CONTROL FLOORS (cannot bypass minimum baselines)
+    // -----------------------------------------------------------
+    const mandatorySets = getApplicableMandatorySets({ type, c: cVal, i: iVal, a: aVal, pii: currentPii, spi: currentSpi, environment: env });
+    const gaps = [];
+    let highestFloor = 'Very Low';
+    mandatorySets.forEach(set => {
+        const missing = set.ids.filter(id => !active.includes(id));
+        if (missing.length) {
+            gaps.push({ key: set.key, missing, floor: set.floor, rationale: set.rationale });
+            if (RESIDUAL_FLOOR_RANK[set.floor] > RESIDUAL_FLOOR_RANK[highestFloor]) {
+                highestFloor = set.floor;
+            }
+        }
+    });
+    if (RESIDUAL_FLOOR_RANK[residualRating] < RESIDUAL_FLOOR_RANK[highestFloor]) {
+        residualRating = highestFloor;
+        // Reflect the floor on the residual P/S display so the math stays consistent.
+        if (highestFloor === 'High')     { resP = Math.max(resP, 4); resS = Math.max(resS, 4); }
+        else if (highestFloor === 'Moderate') { resP = Math.max(resP, 3); resS = Math.max(resS, 3); }
+        else if (highestFloor === 'Low')      { resP = Math.max(resP, 2); resS = Math.max(resS, 2); }
     }
 
-    let resP = Math.max(1, p - Math.floor(pRed / 1.5));
-    let resS = Math.max(1, s - Math.floor(sRed / 1.5));
-    const residualRating = INHERIT[resS + '-' + resP] || 'Low';
-    
     const resEl = document.getElementById('r-residual');
-    if(resEl) { resEl.textContent = residualRating; resEl.style.color = riskColor(residualRating); }
+    if (resEl) { resEl.textContent = residualRating; resEl.style.color = riskColor(residualRating); }
     const resProbDisp = document.getElementById('f-res-prob-display');
-    const resSevDisp = document.getElementById('f-res-sev-display');
+    const resSevDisp  = document.getElementById('f-res-sev-display');
     if (resProbDisp) resProbDisp.value = String(resP);
-    if (resSevDisp) resSevDisp.value = String(resS);
-    
-    const fbEl = document.getElementById('control-feedback');
-    if (fbEl) fbEl.textContent = `(${activeValidCount} relevant mitigating controls applied)`;
+    if (resSevDisp)  resSevDisp.value = String(resS);
 
-    // Risk Appetite Enforcement
+    const fbEl = document.getElementById('control-feedback');
+    if (fbEl) {
+        const synTxt = appliedSynergies.length ? ` · synergy: ${appliedSynergies.join(', ')}` : '';
+        fbEl.textContent = `(${activeRelevant.length} of ${relevantSet.size} relevant mitigating controls applied${synTxt})`;
+    }
+
+    // -----------------------------------------------------------
+    // RISK-APPETITE ENFORCEMENT (ISO 27001:2022 §6.1.3 d / §8.3 +
+    // NIST RMF — risk acceptance authority by classification)
+    // -----------------------------------------------------------
     const actTypeSelect = document.getElementById('f-action-type');
-    const lockTreat = document.getElementById('lock-treat');
-    
+    const lockTreat     = document.getElementById('lock-treat');
     if (actTypeSelect) {
+        // Reset the dropdown first.
+        Array.from(actTypeSelect.options).forEach(opt => opt.disabled = false);
+        let lockMsg = '';
+        const optAccept = Array.from(actTypeSelect.options).find(o => o.value === 'Accept');
+
         if (residualRating === 'High') {
+            if (optAccept) optAccept.disabled = true;
             if (actTypeSelect.value === 'Accept') actTypeSelect.value = 'Mitigate';
-            Array.from(actTypeSelect.options).forEach(opt => { if (opt.value === 'Accept') opt.disabled = true; });
-            if(lockTreat) lockTreat.textContent = '🔒 Cannot accept High Risk';
-        } else {
-            Array.from(actTypeSelect.options).forEach(opt => opt.disabled = false);
-            if(lockTreat) lockTreat.textContent = '';
+            lockMsg = 'Cannot Accept High residual (ISO 27001:2022 §6.1.3 — outside risk appetite)';
+        } else if (type === 'FA' && residualRating !== 'Low' && residualRating !== 'Very Low') {
+            if (optAccept) optAccept.disabled = true;
+            if (actTypeSelect.value === 'Accept') actTypeSelect.value = 'Mitigate';
+            lockMsg = 'PCI-DSS scoped (FA) — Accept blocked unless residual is Low';
+        } else if (ciaScore >= 8 && residualRating === 'Moderate') {
+            if (optAccept) optAccept.disabled = true;
+            if (actTypeSelect.value === 'Accept') actTypeSelect.value = 'Mitigate';
+            lockMsg = 'Restricted-class data — CISO sign-off needed; Accept blocked at Moderate';
         }
+        if (lockTreat) lockTreat.textContent = lockMsg ? '🔒 ' + lockMsg : '';
     }
 
     const apSection = document.getElementById('action-plan-section');
-    if(apSection && actTypeSelect) {
+    if (apSection && actTypeSelect) {
         apSection.style.display = (actTypeSelect.value === 'Accept' || residualRating === 'Very Low') ? 'none' : 'block';
     }
+
     renderComplianceMapping();
+    renderControlGapAnalysis(gaps);
 }
 
 function applyRiskTemplate(skipEngineUpdate = false) {
@@ -376,14 +721,15 @@ function getFrameworksForControls(ctrlIds, assetType) {
     ctrlIds.forEach(id => {
         const m = CONTROL_COMPLIANCE[id];
         if (!m) return;
-        if (m.nist) nist.add('NIST CSF: ' + m.nist);
-        if (m.iso) iso.add('ISO/IEC 27001 & 27002: ' + m.iso);
-        if (m.cis) cis.add('CIS Controls: ' + m.cis);
-        if (m.soc2) soc2.add('SOC 2: ' + m.soc2);
-        if (m.pci && assetType === 'FA') pci.add('PCI-DSS: ' + m.pci);
+        (m.nist || []).forEach(v => nist.add(v));
+        (m.iso  || []).forEach(v => iso.add(v));
+        (m.cis  || []).forEach(v => cis.add(v));
+        (m.soc2 || []).forEach(v => soc2.add(v));
+        if (assetType === 'FA') (m.pci || []).forEach(v => pci.add(v));
     });
+    const sortIds = arr => arr.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
     return {
-        nist: [...nist].join('; ') || '—',
+        nist: sortIds([...nist]).join(', ') || '—',
         iso: [...iso].join('; ') || '—',
         cis: [...cis].join('; ') || '—',
         soc2: [...soc2].join('; ') || '—',
@@ -401,12 +747,76 @@ function renderComplianceMapping() {
     const type = g('f-type');
     const fw = getFrameworksForControls(getActiveControlIds(), type);
     const items = [
-        ['NIST CSF', fw.nist], ['ISO 27001/27002', fw.iso], ['CIS', fw.cis],
-        ['SOC 2', fw.soc2], ['PCI-DSS', fw.pci]
+        ['NIST CSF 2.0', fw.nist],
+        ['ISO 27001:2022 / 27002', fw.iso],
+        ['CIS Controls v8', fw.cis],
+        ['SOC 2 (TSC)', fw.soc2],
+        ['PCI-DSS v4.0', fw.pci]
     ];
     tags.innerHTML = items.map(([label, val]) =>
-        `<span class="compliance-tag"><strong>${label}</strong> ${val}</span>`
+        `<span class="compliance-tag"><strong>${label}</strong> ${escapeHtmlSafe(val)}</span>`
     ).join('');
+}
+
+/**
+ * Renders missing-mandatory-control panel under the controls section.
+ * Each gap is annotated with the framework rationale (ISO / NIST / PCI / DPA)
+ * so Info Sec sees exactly WHY a baseline is required, not just THAT it is.
+ */
+function renderControlGapAnalysis(gaps) {
+    let panel = document.getElementById('control-gap-panel');
+    if (!panel) {
+        const compEl = document.getElementById('compliance-mapping-panel');
+        if (!compEl || !compEl.parentNode) return;
+        panel = document.createElement('div');
+        panel.id = 'control-gap-panel';
+        panel.className = 'compliance-panel control-gap-panel hidden';
+        compEl.parentNode.insertBefore(panel, compEl);
+    }
+    const showRole = currentRole === 'infosec' || currentRole === 'admin';
+    if (!showRole || !gaps || !gaps.length) {
+        panel.classList.add('hidden');
+        panel.innerHTML = '';
+        return;
+    }
+    const labelByKey = {
+        restrictedClass:   'Restricted Classification (CIA ≥ 8)',
+        confidentialClass: 'Confidential Classification (CIA 6–7)',
+        fa:                'PCI-DSS Scope (Financial Asset)',
+        pii:               'Personal / Sensitive PI (RA 10173 DPA + GDPR)',
+        internetFacing:    'Internet-Facing Exposure'
+    };
+    const fwLabel = { nist: 'NIST', iso: 'ISO 27001', cis: 'CIS', soc2: 'SOC 2', pci: 'PCI-DSS' };
+    const html = gaps.map(g => {
+        const ctrls = g.missing.map(id => {
+            const cm = CONTROL_COMPLIANCE[id] || { name: 'Control ' + id };
+            const fws = ['nist','iso','cis','soc2','pci']
+                .filter(k => Array.isArray(cm[k]) && cm[k].length)
+                .map(k => `<span class="gap-fw"><em>${fwLabel[k]}:</em> ${escapeHtmlSafe(cm[k].join(', '))}</span>`)
+                .join('');
+            return `<li><strong>C${id} — ${escapeHtmlSafe(cm.name || 'Control ' + id)}</strong>${fws ? `<div class="gap-fw-row">${fws}</div>` : ''}</li>`;
+        }).join('');
+        return `
+          <div class="gap-block gap-floor-${g.floor.toLowerCase().replace(/\s/g,'-')}">
+            <div class="gap-head">
+              <span class="gap-label">${escapeHtmlSafe(labelByKey[g.key] || g.key)}</span>
+              <span class="gap-floor">Residual floor: <strong>${escapeHtmlSafe(g.floor)}</strong></span>
+            </div>
+            <div class="gap-rationale">${escapeHtmlSafe(g.rationale)}</div>
+            <ul class="gap-list">${ctrls}</ul>
+          </div>`;
+    }).join('');
+    panel.innerHTML = `
+      <label style="margin-top:16px;display:block;color:var(--danger);">⚠ Mandatory Control Gaps</label>
+      <div class="gap-summary">Tick the controls below to lift the standards-based residual floor. Controls flagged <span class="ctrl-mandatory-pill">Compliance baseline</span> in the picker do NOT reduce P/S for the chosen threat — they exist solely to satisfy the framework requirement above. Until every gap closes, residual cannot drop below the indicated rating.</div>
+      ${html}`;
+    panel.classList.remove('hidden');
+}
+
+// Lightweight HTML escaper used by panels above (separate from export-side
+// escapeHtml — that one is defined later in the file but only on export).
+function escapeHtmlSafe(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function roleLabel(role) {
@@ -416,14 +826,39 @@ function roleLabel(role) {
 function showAuthScreen() {
     document.getElementById('auth-screen')?.classList.remove('hidden');
     document.getElementById('app-shell')?.classList.add('hidden');
+    const trig = document.getElementById('notif-trigger');
+    if (trig) trig.style.display = 'none';
+    document.getElementById('notif-dropdown')?.classList.add('hidden');
     resetAuthSteps();
 }
 
 function resetAuthSteps() {
     document.getElementById('auth-step-credentials')?.classList.remove('hidden');
-    document.getElementById('auth-step-mfa')?.classList.add('hidden');
+    document.getElementById('auth-step-verify')?.classList.add('hidden');
     document.getElementById('auth-step-pending')?.classList.add('hidden');
-    pendingMfaSession = null;
+    showAuthTab('login');
+    const errEl = document.getElementById('login-error');
+    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+}
+
+function showVerificationStep(email) {
+    pendingVerifyEmail = email;
+    document.getElementById('auth-step-credentials')?.classList.add('hidden');
+    document.getElementById('auth-step-verify')?.classList.remove('hidden');
+    document.getElementById('auth-step-pending')?.classList.add('hidden');
+    const target = document.getElementById('verify-email-target');
+    if (target) target.textContent = email;
+}
+
+async function resendVerificationEmail() {
+    if (!supabase || !pendingVerifyEmail) return notify('Enter your email and register again.', true);
+    try {
+        const { error } = await supabase.auth.resend({ type: 'signup', email: pendingVerifyEmail });
+        if (error) throw error;
+        notify('Verification email resent.');
+    } catch (err) {
+        notify(formatAuthError(err), true);
+    }
 }
 
 function showAuthTab(tab) {
@@ -439,18 +874,11 @@ function showAuthTab(tab) {
 
 function showPendingApproval(profile) {
     document.getElementById('auth-step-credentials')?.classList.add('hidden');
-    document.getElementById('auth-step-mfa')?.classList.add('hidden');
+    document.getElementById('auth-step-verify')?.classList.add('hidden');
     document.getElementById('auth-step-pending')?.classList.remove('hidden');
     const msg = document.getElementById('pending-approval-msg');
     const who = profile.requested_role === 'infosec' ? 'an Admin (CISO)' : 'Info Sec or Admin';
     if (msg) msg.textContent = `Your ${roleLabel(profile.requested_role)} account (${profile.email}) is pending approval by ${who}.`;
-}
-
-function showMfaStep() {
-    document.getElementById('auth-step-credentials')?.classList.add('hidden');
-    document.getElementById('auth-step-mfa')?.classList.remove('hidden');
-    const codeEl = document.getElementById('mfa-code');
-    if (codeEl) { codeEl.value = ''; codeEl.focus(); }
 }
 
 async function loadUserProfile(userId) {
@@ -459,33 +887,29 @@ async function loadUserProfile(userId) {
     return data;
 }
 
-async function ensureUserProfile(user) {
-    let profile = await loadUserProfile(user.id);
-    if (profile) return profile;
-    const role = resolveRoleFromEmail(user.email);
-    profile = {
-        id: user.id, email: user.email, requested_role: role,
-        approved_role: role, account_status: 'active'
-    };
-    await supabase.from('user_profiles').upsert(profile);
-    return profile;
-}
-
 function showAppShell() {
     document.getElementById('auth-screen')?.classList.add('hidden');
     document.getElementById('app-shell')?.classList.remove('hidden');
+    const trig = document.getElementById('notif-trigger');
+    if (trig) trig.style.display = '';
 }
 
 function formatAuthError(err) {
     const msg = err?.message || String(err);
     if (/invalid login credentials/i.test(msg)) {
-        return 'Invalid email or password. Create users in Supabase → Authentication → Users (enable Email provider).';
+        return 'Invalid email or password. If you are using the demo accounts (user@plm.edu.ph / infosec@plm.edu.ph), make sure you have run supabase/hotfix_demo_accounts.sql in the Supabase SQL editor.';
     }
     if (/email not confirmed/i.test(msg)) {
-        return 'Email not confirmed. In Supabase, create the user with “Auto Confirm” checked, or confirm via email.';
+        return 'Email not yet verified. Click the link Supabase sent to your inbox, then sign in again.';
     }
     if (/signup is disabled/i.test(msg)) {
-        return 'Email sign-in is disabled. Enable Email provider under Authentication → Providers.';
+        return 'Sign-up is disabled in Supabase. Enable Email provider under Authentication → Providers.';
+    }
+    if (/user already registered/i.test(msg)) {
+        return 'An account already exists for this email. Try signing in or resend verification.';
+    }
+    if (/rate limit/i.test(msg)) {
+        return 'Email rate limit hit. Wait a minute and try again.';
     }
     return msg;
 }
@@ -498,6 +922,7 @@ async function handleRegister(event) {
     const password2 = document.getElementById('register-password2')?.value;
     const role = document.getElementById('register-role')?.value || 'user';
     const errEl = document.getElementById('login-error');
+    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
     if (password !== password2) {
         if (errEl) { errEl.textContent = 'Passwords do not match.'; errEl.hidden = false; }
         return;
@@ -505,18 +930,19 @@ async function handleRegister(event) {
     const btn = document.getElementById('register-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
     try {
-        const { data, error } = await supabase.auth.signUp({
-            email, password,
-            options: { data: { requested_role: role } }
+        const { error } = await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+                data: { requested_role: role },
+                emailRedirectTo: window.location.origin + window.location.pathname
+            }
         });
         if (error) throw error;
-        if (data.user) {
-            await supabase.from('user_profiles').upsert({
-                id: data.user.id, email, requested_role: role, account_status: 'pending'
-            });
-        }
-        notify('Account created. Await approval before signing in.');
-        showAuthTab('login');
+        // Real Supabase email verification — user_profiles row will be inserted by
+        // the on_auth_user_confirmed trigger only after the email is verified.
+        showVerificationStep(email);
+        notify('Verification email sent. Click the link in your inbox.');
     } catch (err) {
         const text = formatAuthError(err);
         if (errEl) { errEl.textContent = text; errEl.hidden = false; }
@@ -537,74 +963,95 @@ async function handleLogin(event) {
     if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
     try {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        if (error) {
+            // Supabase returns "Email not confirmed" — surface the verify step
+            if (/email not confirmed/i.test(error.message || '')) {
+                showVerificationStep(email);
+            }
+            throw error;
+        }
         if (!data.session) throw new Error('No session returned.');
-        const profile = await ensureUserProfile(data.session.user);
-        const role = effectiveRole(profile);
-        if (profile.account_status === 'pending') {
-            currentUser = data.session.user;
-            currentProfile = profile;
-            showAuthScreen();
-            showPendingApproval(profile);
-            return;
-        }
-        if (profile.account_status !== 'active' || profile.approved_role !== selectedRole) {
-            await supabase.auth.signOut();
-            throw new Error(`Role mismatch or inactive account. Sign in as ${roleLabel(profile.approved_role || role)}.`);
-        }
-        pendingMfaSession = data.session;
-        showAuthScreen();
-        showMfaStep();
+        await enterAuthenticatedApp(data.session, selectedRole);
     } catch (err) {
         const text = formatAuthError(err);
         if (errEl) { errEl.textContent = text; errEl.hidden = false; }
         notify(text, true);
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Continue →'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Sign In →'; }
     }
 }
 
-function cancelMfaStep() {
-    pendingMfaSession = null;
-    if (supabase) supabase.auth.signOut();
-    resetAuthSteps();
-}
-
-async function completeMfaStep() {
-    const code = document.getElementById('mfa-code')?.value?.trim();
-    if (!/^\d{6}$/.test(code || '')) return notify('Enter the 6-digit verification code.', true);
-    if (code !== MFA_DEMO_CODE && code !== '000000') {
-        return notify('Invalid MFA code. Use demo code 123456.', true);
-    }
-    if (!pendingMfaSession) return notify('Session expired. Sign in again.', true);
-    await enterAuthenticatedApp(pendingMfaSession);
-    pendingMfaSession = null;
-}
-
-async function handleLogout() {
-    if (supabase) await supabase.auth.signOut();
+function handleLogout() {
+    // Reset client state and flip the UI FIRST so the user is never trapped
+    // waiting on the Supabase round-trip (which can hang on slow networks).
     currentUser = null;
     currentRole = null;
     currentProfile = null;
-    pendingMfaSession = null;
+    currentAccessToken = null;
+    pendingVerifyEmail = null;
     authUiReady = false;
     showAuthScreen();
     notify('Signed out.');
+    // Best-effort revoke the cloud session in the background; ignore errors.
+    if (supabase) {
+        try {
+            supabase.auth.signOut().catch(err => console.warn('signOut warning:', err));
+        } catch (err) {
+            console.warn('signOut threw:', err);
+        }
+    }
 }
+
+// Wipe any zombie Supabase token from a previously broken session and reload
+// the page so the auth state machine starts clean.
+function forceResetSession() {
+    try {
+        // Best-effort SDK signOut — don't await it.
+        if (supabase) supabase.auth.signOut().catch(() => {});
+    } catch (_) { /* noop */ }
+    try {
+        // Remove any keys Supabase JS may have left behind.
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && (k.startsWith('sb-') || k.startsWith('supabase.'))) keys.push(k);
+        }
+        keys.forEach(k => localStorage.removeItem(k));
+        sessionStorage.clear();
+    } catch (e) { console.warn('Storage clear failed:', e); }
+    // Drop our app caches too so notifications don't replay.
+    try { localStorage.removeItem('impactlens.notif.lastSeen'); } catch (_) {}
+    location.reload();
+}
+window.forceResetSession = forceResetSession;
 
 let authUiReady = false;
 
-async function enterAuthenticatedApp(session) {
+async function enterAuthenticatedApp(session, requestedRole = null) {
     if (!session?.user) return;
     currentUser = session.user;
-    currentProfile = await ensureUserProfile(currentUser);
+    currentAccessToken = session.access_token || null;
+    // The trigger creates user_profiles on email confirmation. If we somehow get
+    // here without a row, treat the account as pending until the DB catches up.
+    currentProfile = await loadUserProfile(currentUser.id);
+    if (!currentProfile) {
+        showAuthScreen();
+        showPendingApproval({ email: currentUser.email, requested_role: requestedRole || 'user' });
+        return;
+    }
     if (currentProfile.account_status !== 'active') {
         showAuthScreen();
         showPendingApproval(currentProfile);
         return;
     }
-    currentRole = currentProfile.approved_role || effectiveRole(currentProfile);
-    document.getElementById('auth-step-mfa')?.classList.add('hidden');
+    if (requestedRole && currentProfile.approved_role !== requestedRole) {
+        await supabase.auth.signOut();
+        const errEl = document.getElementById('login-error');
+        const text = `This account is approved as ${roleLabel(currentProfile.approved_role)}. Re-sign-in with the correct role.`;
+        if (errEl) { errEl.textContent = text; errEl.hidden = false; }
+        return;
+    }
+    currentRole = currentProfile.approved_role;
     showAppShell();
     const roleEl = document.getElementById('hdr-role');
     const userEl = document.getElementById('hdr-user');
@@ -620,7 +1067,7 @@ async function enterAuthenticatedApp(session) {
         renderSectionContent(document.querySelector('.section.active')?.id?.replace('sec-', '') || landing);
     } catch (err) {
         console.error('Post-login data sync:', err);
-        notify('Signed in, but some data failed to load. Run setup_database.sql and enterprise_setup.sql.', true);
+        notify('Signed in, but some data failed to load. Run supabase/master_setup.sql.', true);
     }
     authUiReady = true;
 }
@@ -709,11 +1156,12 @@ async function syncFromCloud(silent = false) {
 
         const { data: lData } = await supabase.from('SystemLogs').select('*').order('created_at', { ascending: false }).limit(200);
         globalLogs = lData || globalLogs;
+        renderNotificationBadge();
     } catch (err) {
         console.error('Cloud Sync Error: ', err);
         const msg = err?.message || String(err);
         const hint = /relation.*does not exist|schema cache/i.test(msg)
-            ? ' Database tables missing — run supabase/setup_database.sql in the Supabase SQL Editor.'
+            ? ' Database tables missing — run supabase/master_setup.sql in the Supabase SQL Editor.'
             : '';
         if (!silent) notify('Failed to connect to Supabase DB.' + hint, true);
     }
@@ -740,12 +1188,12 @@ async function seedSupabaseIfEmpty() {
         if (error) {
             console.error('Seed check failed:', error);
             if (/relation.*does not exist/i.test(error.message || '')) {
-                notify('Run supabase/setup_database.sql then enterprise_setup.sql and seed_plm_assets.sql.', true);
+                notify('Run supabase/master_setup.sql in the Supabase SQL Editor.', true);
             }
             return;
         }
         if (data.length === 0) {
-            notify('No assets in database. Run supabase/seed_plm_assets.sql in Supabase SQL Editor (57 PLM assets).', true);
+            notify('Database is empty. Re-run supabase/master_setup.sql to seed 57 PLM assets.', true);
         }
     } catch (e) { console.error('Seed check:', e); }
 }
@@ -767,8 +1215,8 @@ function renderSectionContent(name) {
 function showSection(name) {
   const allowed = {
     user: ['add', 'guidelines'],
-    infosec: ['add', 'draft-queue', 'logs', 'users', 'guidelines'],
-    admin: ['dashboard', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'report', 'users', 'logs', 'guidelines']
+    infosec: ['dashboard', 'add', 'draft-queue', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'logs', 'users', 'guidelines'],
+    admin: ['dashboard', 'add', 'draft-queue', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'report', 'users', 'logs', 'guidelines']
   };
   if (currentRole && allowed[currentRole] && !allowed[currentRole].includes(name)) {
     notify('You do not have access to that section.', true);
@@ -793,6 +1241,110 @@ function notify(msg, isErr=false) {
   el.textContent = (isErr ? '⚠ ' : '✓ ') + msg; 
   el.className = 'notification' + (isErr ? ' error' : '') + ' show';
   setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// =====================================================================
+// REASON-CAPTURE MODAL (used by Reject / Delete actions across roles)
+// =====================================================================
+// Standardised reason presets per action. Picking one of these counts as
+// "generated"; the user can also (or instead) write a free-text "essay".
+const REASON_PRESETS = {
+  rejectAssetPending: [
+    'Insufficient or weak controls — does not meet ISO 27001 Annex A baseline',
+    'CIA values misaligned with asset profile (NIST SP 800-60 mismatch)',
+    'Risk classification needs review — inherent escalation not justified',
+    'Action plan unrealistic, missing owner, or beyond remediation window',
+    'Compliance gap — PCI-DSS / RA 10173 / SOC 2 control still missing',
+    'Duplicate of an existing approved asset',
+    'Other (see notes)',
+  ],
+  rejectAssetDraft: [
+    'Submission incomplete or missing required information',
+    'Not a valid in-scope ISMS asset',
+    'Duplicate of an existing draft or approved asset',
+    'Asset profile mis-classified (wrong type / department)',
+    'Sensitive data handling instructions not followed',
+    'Other (see notes)',
+  ],
+  deleteAsset: [
+    'Asset decommissioned or retired',
+    'Out of scope for the ISMS register',
+    'Duplicate / consolidated with another record',
+    'Test or sample data — cleanup',
+    'Owner request (with formal sign-off)',
+    'Replaced by a new asset entry',
+    'Other (see notes)',
+  ],
+  rejectUser: [
+    'Email not affiliated with PLM / not a recognised tenant',
+    'Requested role not appropriate for this user',
+    'User already has an active account',
+    'Awaiting background or HR verification',
+    'Suspected automated / spam registration',
+    'Other (see notes)',
+  ],
+};
+
+function promptReason({
+  title = 'Provide a reason',
+  eyebrow = 'Action requires justification',
+  description = 'Pick the closest reason from the list and add detail in the notes — both are stored in the System Logs and shared with the originator.',
+  presets = [],
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  tone = 'danger',           // 'danger' | 'warn' | 'info'
+  requireSomething = true,    // require either a preset or text
+} = {}) {
+  return new Promise((resolve) => {
+    const prev = document.getElementById('il-reason-modal');
+    if (prev) prev.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'il-modal-overlay';
+    overlay.id = 'il-reason-modal';
+    const optsHtml = ['<option value="">— Select a reason —</option>']
+      .concat(presets.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`))
+      .join('');
+    overlay.innerHTML =
+      '<div class="il-modal tone-' + tone + '" role="dialog" aria-modal="true">'
+      + '<div class="il-modal-header">'
+      + '<div class="il-eyebrow">' + escapeHtml(eyebrow) + '</div>'
+      + '<h3>' + escapeHtml(title) + '</h3>'
+      + '<p>' + escapeHtml(description) + '</p>'
+      + '</div>'
+      + '<div class="il-modal-body">'
+      + '<div><label for="il-reason-preset">Pre-defined reason</label>'
+      + '<select id="il-reason-preset">' + optsHtml + '</select></div>'
+      + '<div><label for="il-reason-essay">Notes / additional detail (free text)</label>'
+      + '<textarea id="il-reason-essay" placeholder="Add specifics — what changed, what is missing, or any compliance reference."></textarea></div>'
+      + '<div id="il-reason-error" class="il-modal-error">A reason is required — pick one from the list or write notes.</div>'
+      + '</div>'
+      + '<div class="il-modal-footer">'
+      + '<button type="button" class="btn btn-sm" id="il-reason-cancel">' + escapeHtml(cancelLabel) + '</button>'
+      + '<button type="button" class="btn btn-sm btn-danger" id="il-reason-confirm">' + escapeHtml(confirmLabel) + '</button>'
+      + '</div>'
+      + '</div>';
+    document.body.appendChild(overlay);
+
+    const close = (val) => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(val); };
+    const onKey = (e) => {
+      if (e.key === 'Escape') close(null);
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) overlay.querySelector('#il-reason-confirm').click();
+    };
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+    overlay.querySelector('#il-reason-cancel').onclick = () => close(null);
+    overlay.querySelector('#il-reason-confirm').onclick = () => {
+      const preset = overlay.querySelector('#il-reason-preset').value.trim();
+      const essay  = overlay.querySelector('#il-reason-essay').value.trim();
+      if (requireSomething && !preset && !essay) {
+        overlay.querySelector('#il-reason-error').classList.add('show');
+        return;
+      }
+      const combined = [preset, essay].filter(Boolean).join(' — ');
+      close(combined);
+    };
+    setTimeout(() => overlay.querySelector('#il-reason-preset').focus(), 30);
+  });
 }
 
 function g(id) { const el = document.getElementById(id); return el ? el.value : ''; }
@@ -832,6 +1384,231 @@ function updateActionBadge() {
     const navActions = document.getElementById('nav-actions');
     if(navActions) navActions.textContent = actionsCount;
 }
+
+// ==========================================
+// NOTIFICATIONS INBOX
+// ==========================================
+function notifLastSeenKey() {
+    return `impactlens_notif_seen_${currentRole || 'anon'}_${(currentUser?.email || 'anon').toLowerCase()}`;
+}
+function getNotifLastSeen() {
+    try { return parseInt(localStorage.getItem(notifLastSeenKey()) || '0', 10) || 0; }
+    catch { return 0; }
+}
+function setNotifLastSeen(ts) {
+    try { localStorage.setItem(notifLastSeenKey(), String(ts)); } catch {}
+}
+
+// Parse the "Reason: ... · originator=... · prior_status=..." log details
+// into a structured object so notifications can render cleanly.
+function parseLogDetails(details) {
+    const out = { reason: '', originator: '', target: '', priorStatus: '', requestedRole: '' };
+    if (!details) return out;
+    const segs = String(details).split(/\s*·\s*/);
+    for (const s of segs) {
+        const seg = s.trim();
+        if (!seg) continue;
+        const m = seg.match(/^([a-z_]+)\s*[:=]\s*(.+)$/i);
+        if (!m) continue;
+        const key = m[1].toLowerCase();
+        const val = m[2].trim();
+        if (key === 'reason') out.reason = val;
+        else if (key === 'originator') out.originator = val;
+        else if (key === 'target') out.target = val;
+        else if (key === 'prior_status') out.priorStatus = val;
+        else if (key === 'requested_role') out.requestedRole = val;
+    }
+    return out;
+}
+
+function reasonHtml(reason, fallback = 'No reason recorded.') {
+    const r = (reason || '').trim();
+    if (!r) return `<div class="notif-reason notif-reason-none">${fallback}</div>`;
+    return `<div class="notif-reason"><span class="notif-reason-label">Reason</span><span class="notif-reason-text">${escapeHtmlSafe(r)}</span></div>`;
+}
+
+function computeNotifications() {
+    const items = [];
+    if (!Array.isArray(globalLogs) || !currentRole || !currentUser?.email) return items;
+    const me = currentUser.email.toLowerCase();
+    for (const l of globalLogs) {
+        const action  = l.action || '';
+        const details = l.details || '';
+        const aid     = l.asset_id || '';
+        const actor   = (l.user_email || '').toLowerCase();
+        const ts      = l.created_at ? new Date(l.created_at).getTime() : 0;
+        const asset   = aid ? globalAssets.find(a => a.id === aid) : null;
+        const aname   = asset ? asset.name : '';
+        const orig    = (asset?.created_by || '').toLowerCase();
+        const handled = (asset?.updated_by || '').toLowerCase();
+        const parsed  = parseLogDetails(details);
+        const meIsOriginator = parsed.originator
+            ? parsed.originator.toLowerCase() === me
+            : (orig === me);
+
+        let msg = null, kind = 'info', target = null;
+        const aLabel = aid && aname ? `<strong>${escapeHtmlSafe(aid)}</strong> (${escapeHtmlSafe(aname)})`
+                     : aid          ? `<strong>${escapeHtmlSafe(aid)}</strong>`
+                     :                 'an asset';
+
+        if (currentRole === 'user') {
+            if (action === 'ASSET_APPROVED' && meIsOriginator) {
+                msg = `Your asset ${aLabel} was <strong>APPROVED</strong> by the CISO.`;
+                kind = 'success';
+            } else if (action === 'ASSET_REJECTED' && meIsOriginator) {
+                msg = `Your asset ${aLabel} was <strong>REJECTED</strong> and returned to draft for revision.${reasonHtml(parsed.reason)}`;
+                kind = 'warn';
+            } else if (action === 'DRAFT_REJECTED' && meIsOriginator) {
+                msg = `Your draft submission <strong>${escapeHtmlSafe(aid)}</strong> was <strong>REJECTED</strong> by Info Sec and removed from the queue.${reasonHtml(parsed.reason)}`;
+                kind = 'warn';
+            } else if (action === 'ASSET_DELETED' && meIsOriginator) {
+                msg = `Your asset ${aLabel} was <strong>DELETED</strong> by ${escapeHtmlSafe(actor || 'an officer')} (prior status: ${escapeHtmlSafe(parsed.priorStatus || 'unknown')}).${reasonHtml(parsed.reason)}`;
+                kind = 'warn';
+            } else if (action === 'ASSET_SUBMITTED_FOR_APPROVAL' && meIsOriginator) {
+                msg = `Your draft <strong>${escapeHtmlSafe(aid)}</strong> was picked up by Info Sec and forwarded to the CISO.`;
+                kind = 'info';
+            }
+        } else if (currentRole === 'infosec') {
+            if (action === 'ASSET_APPROVED' && handled === me) {
+                msg = `Your submission ${aLabel} was <strong>APPROVED</strong> by the CISO.`;
+                kind = 'success';
+            } else if (action === 'ASSET_REJECTED' && handled === me) {
+                msg = `Your submission ${aLabel} was <strong>REJECTED</strong> by the CISO and returned to drafts.${reasonHtml(parsed.reason)}`;
+                kind = 'warn';
+                target = 'draft-queue';
+            } else if (action === 'ASSET_DELETED' && (handled === me || actor === me)) {
+                msg = `Asset ${aLabel} was <strong>DELETED</strong> (prior status: ${escapeHtmlSafe(parsed.priorStatus || 'unknown')}) by ${escapeHtmlSafe(actor || 'an officer')}.${reasonHtml(parsed.reason)}`;
+                kind = 'warn';
+            } else if (action === 'ASSET_DRAFT_CREATED' && actor && actor !== me) {
+                msg = `New draft <strong>${escapeHtmlSafe(aid)}</strong> (${escapeHtmlSafe(aname)}) submitted by ${escapeHtmlSafe(actor)} — needs profiling.`;
+                kind = 'info';
+                target = 'draft-queue';
+            } else if (action === 'DRAFT_REJECTED' && actor !== me) {
+                msg = `Draft <strong>${escapeHtmlSafe(aid)}</strong> was rejected by ${escapeHtmlSafe(actor || 'another officer')}.${reasonHtml(parsed.reason)}`;
+                kind = 'info';
+                target = 'draft-queue';
+            }
+        } else if (currentRole === 'admin') {
+            if (action === 'ASSET_SUBMITTED_FOR_APPROVAL' && actor !== me) {
+                msg = `Asset ${aLabel} is awaiting your approval.`;
+                kind = 'warn';
+                target = 'pending-queue';
+            } else if (action === 'USER_REQUEST' || details.includes('account_status=pending')) {
+                msg = `New user account pending approval: ${escapeHtmlSafe(details)}`;
+                kind = 'info';
+                target = 'users';
+            } else if (action === 'USER_REJECTED' && actor !== me) {
+                msg = `User account rejected by ${escapeHtmlSafe(actor || 'Info Sec')} — ${escapeHtmlSafe(parsed.target || 'unknown')}.${reasonHtml(parsed.reason)}`;
+                kind = 'info';
+                target = 'users';
+            } else if (action === 'DRAFT_REJECTED' && actor !== me) {
+                msg = `Draft ${aLabel} was rejected by ${escapeHtmlSafe(actor || 'Info Sec')}.${reasonHtml(parsed.reason)}`;
+                kind = 'info';
+                target = 'draft-queue';
+            }
+        }
+
+        if (msg) items.push({ ts, action, aid, msg, kind, target });
+    }
+    items.sort((a,b) => b.ts - a.ts);
+    return items.slice(0, 30);
+}
+
+function renderNotificationBadge() {
+    const trigger = document.getElementById('notif-trigger');
+    const countEl = document.getElementById('notif-count');
+    if (!trigger || !countEl) return;
+    if (currentRole === 'user' || currentRole === 'infosec' || currentRole === 'admin') {
+        trigger.style.display = '';
+    } else {
+        trigger.style.display = 'none';
+        return;
+    }
+    const items = computeNotifications();
+    const lastSeen = getNotifLastSeen();
+    const unread = items.filter(i => i.ts > lastSeen).length;
+    if (unread > 0) {
+        countEl.textContent = unread > 99 ? '99+' : String(unread);
+        countEl.classList.remove('hidden');
+    } else {
+        countEl.classList.add('hidden');
+    }
+}
+
+function renderNotificationList() {
+    const list = document.getElementById('notif-list');
+    if (!list) return;
+    const items = computeNotifications();
+    const lastSeen = getNotifLastSeen();
+    if (!items.length) {
+        list.innerHTML = '<div class="notif-empty">No notifications yet.</div>';
+        return;
+    }
+    list.innerHTML = items.map(i => {
+        const isUnread = i.ts > lastSeen;
+        const ago = relativeTime(i.ts);
+        const classes = ['notif-item', 'kind-' + i.kind];
+        if (isUnread) classes.push('unread');
+        const target = i.target ? `data-target="${i.target}"` : '';
+        return `
+            <div class="${classes.join(' ')}" ${target} onclick="onNotifClick(this)">
+              <div class="notif-dot"></div>
+              <div class="notif-body">
+                ${i.msg}
+                <div class="notif-meta">${i.action.replace(/_/g,' ')} · ${ago}</div>
+              </div>
+            </div>`;
+    }).join('');
+}
+
+function relativeTime(ts) {
+    if (!ts) return '';
+    const diff = Date.now() - ts;
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + 'h ago';
+    const d = Math.floor(h / 24);
+    if (d < 7) return d + 'd ago';
+    return new Date(ts).toLocaleDateString();
+}
+
+function toggleNotifications(event) {
+    if (event) event.stopPropagation();
+    const dd = document.getElementById('notif-dropdown');
+    if (!dd) return;
+    const willShow = dd.classList.contains('hidden');
+    dd.classList.toggle('hidden');
+    if (willShow) {
+        renderNotificationList();
+        document.addEventListener('click', closeNotifOnOutside);
+    } else {
+        document.removeEventListener('click', closeNotifOnOutside);
+    }
+}
+function closeNotifOnOutside(ev) {
+    const dd = document.getElementById('notif-dropdown');
+    const trig = document.getElementById('notif-trigger');
+    if (!dd || dd.classList.contains('hidden')) return;
+    if (dd.contains(ev.target) || trig?.contains(ev.target)) return;
+    dd.classList.add('hidden');
+    document.removeEventListener('click', closeNotifOnOutside);
+}
+function onNotifClick(el) {
+    const target = el?.dataset?.target;
+    markAllNotificationsRead(false);
+    document.getElementById('notif-dropdown')?.classList.add('hidden');
+    if (target) showSection(target);
+}
+function markAllNotificationsRead(rerender = true) {
+    setNotifLastSeen(Date.now());
+    if (rerender) renderNotificationList();
+    renderNotificationBadge();
+}
+window.toggleNotifications = toggleNotifications;
+window.onNotifClick = onNotifClick;
+window.markAllNotificationsRead = markAllNotificationsRead;
 
 function calculateDeadlines() {
     const today = new Date(); today.setHours(0,0,0,0);
@@ -906,85 +1683,273 @@ function draftDefaultsFromType(type) {
   };
 }
 
+function setSaveStatus(state, html) {
+  // Persistent banner above the Add form. state ∈ 'busy' | 'ok' | 'err' | 'idle'.
+  const sec = document.getElementById('sec-add');
+  if (!sec) return;
+  let banner = document.getElementById('save-status-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'save-status-banner';
+    banner.className = 'save-status-banner';
+    sec.insertBefore(banner, sec.firstChild);
+  }
+  banner.dataset.state = state;
+  banner.innerHTML = html || '';
+  banner.style.display = state === 'idle' ? 'none' : '';
+}
+
 async function saveAssetToDB() {
-  const type = g('f-type');
-  const name = g('f-name').trim();
-  if (!type) return notify('Error: Select an asset type', true);
-  if (!name) return notify('Error: Enter an asset name', true);
-
-  let payload = buildAssetPayloadFromForm();
-  const id = payload.id;
-  if (!id) return notify('Error: Asset ID missing', true);
-
-  if (currentRole === 'user') {
-    Object.assign(payload, draftDefaultsFromType(type));
-    payload.status = ASSET_STATUS.DRAFT;
-    payload.created_by = currentUser?.email || null;
-  } else if (currentRole === 'infosec') {
-    if (!g('f-risk-category')) return notify('Select a risk template / category.', true);
-    if (!g('f-risk-desc')?.trim()) return notify('Enter risk description.', true);
-    payload.status = ASSET_STATUS.PENDING;
-    calculateRiskMath();
-    payload = { ...payload, ...buildAssetPayloadFromForm() };
-  } else {
-    payload.status = payload.status || ASSET_STATUS.APPROVED;
+  const saveBtn = document.getElementById('btn-save-asset');
+  console.info('[saveAssetToDB] clicked', { role: currentRole, supabase: !!supabase, editingId });
+  if (saveBtn) {
+    if (saveBtn.dataset.busy === '1') return;
+    saveBtn.dataset.busy = '1';
+    saveBtn.disabled = true;
   }
+  setSaveStatus('busy', '<span class="spinner"></span> Saving asset to Supabase…');
 
-  const statusEl = document.getElementById('form-workflow-status');
-  if (statusEl) statusEl.textContent = payload.status;
-
-  const { error: assetErr } = await supabase.from('Assets').upsert(payload);
-  if (assetErr) return notify('Cloud Error: ' + assetErr.message, true);
-
-  if (currentRole !== 'user') {
-    await supabase.from('AssetControls').delete().eq('asset_id', id);
-    const controls = [];
-    for (let i = 1; i <= 13; i++) {
-      const cb = document.getElementById('ctrl' + i);
-      if (cb && cb.checked && !cb.disabled) controls.push({ asset_id: id, ctrl_id: i });
+  try {
+    if (!supabase) {
+      setSaveStatus('err', '<strong>✗ Cloud not connected.</strong> Please sign in again.');
+      return;
     }
-    if (controls.length) await supabase.from('AssetControls').insert(controls);
+
+    // Validate session BEFORE the round-trip. We rely on our in-memory
+    // `currentUser` (populated during enterAuthenticatedApp) instead of
+    // calling `supabase.auth.getSession()`, which can lock for 30s+ if the
+    // SDK is stuck on a hung token-refresh.
+    console.info('[saveAssetToDB] step=session-check', { hasUser: !!currentUser, role: currentRole, email: currentUser?.email });
+    if (!currentUser || !currentRole) {
+      setSaveStatus('err',
+        '<strong>✗ Your session has expired or is invalid.</strong> '
+        + '<div class="save-status-actions">'
+        + '<button type="button" class="btn btn-sm" onclick="forceResetSession()">Reset session &amp; sign in again</button>'
+        + '</div>');
+      return;
+    }
+    const type = g('f-type');
+    const name = (g('f-name') || '').trim();
+    if (!type) { setSaveStatus('err', '<strong>✗ Asset Type is required.</strong> Pick one from the dropdown.'); return; }
+    if (!name) { setSaveStatus('err', '<strong>✗ Asset Name is required.</strong>'); return; }
+
+    let payload = buildAssetPayloadFromForm();
+    const id = payload.id;
+    if (!id) { setSaveStatus('err', '<strong>✗ Asset ID missing.</strong> Re-pick the Asset Type.'); return; }
+
+    const wasEditing = !!editingId;
+    let priorAsset = null;
+    if (wasEditing) priorAsset = globalAssets.find(a => a.id === id) || null;
+
+    if (currentRole === 'user') {
+      Object.assign(payload, draftDefaultsFromType(type));
+      payload.status = ASSET_STATUS.DRAFT;
+      payload.created_by = currentUser?.email || null;
+    } else if (currentRole === 'infosec') {
+      if (!g('f-risk-category')) { setSaveStatus('err', '<strong>✗ Risk template / category required.</strong>'); return; }
+      if (!(g('f-risk-desc') || '').trim()) { setSaveStatus('err', '<strong>✗ Risk description required.</strong>'); return; }
+      payload.status = ASSET_STATUS.PENDING;
+      calculateRiskMath();
+      payload = { ...payload, ...buildAssetPayloadFromForm() };
+      payload.status = ASSET_STATUS.PENDING;
+      if (priorAsset?.created_by) payload.created_by = priorAsset.created_by;
+    } else {
+      payload.status = payload.status || ASSET_STATUS.APPROVED;
+      if (!wasEditing && !payload.created_by) {
+        payload.created_by = currentUser?.email || null;
+      }
+      payload.reviewed_at = new Date().toISOString();
+    }
+
+    const statusEl = document.getElementById('form-workflow-status');
+    if (statusEl) statusEl.textContent = payload.status;
+
+    console.info('[saveAssetToDB] step=upsert-start', { id: payload.id, status: payload.status });
+    // Use raw fetch via directFetch — bypasses supabase-js's internal locks
+    // and guarantees a real network error if Supabase / the network is down.
+    try {
+      await directFetch('Assets', {
+        method: 'POST',
+        body: payload,
+        prefer: 'resolution=merge-duplicates,return=minimal',
+        timeoutMs: 12000
+      });
+    } catch (assetErr) {
+      console.error('[saveAssetToDB] upsert error:', assetErr, assetErr?.body || '');
+      const stale = /timeout|fetch|network|jwt|expired|unauthor/i.test(assetErr?.message || '');
+      setSaveStatus('err',
+        `<strong>✗ Save failed.</strong> ${escapeHtml(assetErr.message || 'Unknown error')}`
+        + (assetErr.status ? ` <span style="opacity:.7">(HTTP ${assetErr.status})</span>` : '')
+        + '<div class="save-status-actions">'
+        + (stale ? '<button type="button" class="btn btn-sm" onclick="forceResetSession()">Reset session &amp; sign in again</button>' : '')
+        + '<button type="button" class="btn btn-sm" onclick="setSaveStatus(\'idle\')">Dismiss</button>'
+        + '</div>');
+      return;
+    }
+    console.info('[saveAssetToDB] step=upsert-done');
+
+    if (currentRole !== 'user') {
+      try {
+        await directFetch('AssetControls', {
+          method: 'DELETE',
+          params: { asset_id: 'eq.' + id },
+          prefer: 'return=minimal',
+          timeoutMs: 8000
+        });
+      } catch (e) { console.warn('Ctrl cleanup:', e?.message || e); }
+      const controls = [];
+      for (let i = 1; i <= 13; i++) {
+        const cb = document.getElementById('ctrl' + i);
+        if (cb && cb.checked && !cb.disabled) controls.push({ asset_id: id, ctrl_id: i });
+      }
+      if (controls.length) {
+        try {
+          await directFetch('AssetControls', {
+            method: 'POST',
+            body: controls,
+            prefer: 'return=minimal',
+            timeoutMs: 8000
+          });
+        } catch (e) { console.warn('Ctrl insert:', e?.message || e); }
+      }
+    }
+
+    let logAction, detailMsg;
+    if (currentRole === 'user') {
+      logAction = 'ASSET_DRAFT_CREATED';
+      detailMsg = `Status: Draft · awaiting Info Sec profiling · originator=${currentUser?.email || 'unknown'}`;
+    } else if (currentRole === 'infosec') {
+      logAction = 'ASSET_SUBMITTED_FOR_APPROVAL';
+      detailMsg = `Status: Pending · awaiting CISO approval · originator=${payload.created_by || currentUser?.email || 'unknown'}`;
+    } else {
+      logAction = wasEditing ? 'ASSET_UPDATED' : 'ASSET_CREATED';
+      detailMsg = `Status: ${payload.status} · by Admin`;
+    }
+    // Fire log + cloud refresh in background; do NOT block the UI feedback.
+    Promise.resolve(logSystemEvent(logAction, detailMsg, id))
+      .then(() => syncFromCloud(true))
+      .catch(err => console.warn('post-save background:', err));
+
+    editingId = null;
+    clearForm();
+
+    let successMsg;
+    if (currentRole === 'user') {
+      successMsg = `Draft <strong>${id}</strong> saved.<br>Forwarded to <strong>Info Sec</strong> for cybersecurity profiling.`;
+    } else if (currentRole === 'infosec') {
+      successMsg = `Asset <strong>${id}</strong> submitted.<br>Forwarded to <strong>Admin (CISO)</strong> for approval.`;
+    } else {
+      successMsg = `Asset <strong>${id}</strong> saved (${payload.status}).`;
+    }
+    setSaveStatus('ok',
+      `<strong>✓ Success.</strong> ${successMsg} `
+      + '<div class="save-status-actions">'
+      + '<button type="button" class="btn btn-sm" onclick="setSaveStatus(\'idle\')">Submit another</button>'
+      + (currentRole === 'infosec'
+          ? '<button type="button" class="btn btn-sm" onclick="showSection(\'draft-queue\')">Open Draft Queue</button>'
+          : currentRole === 'admin'
+          ? '<button type="button" class="btn btn-sm" onclick="showSection(\'register\')">Open Asset Table</button>'
+          : '')
+      + '</div>');
+    notify('Asset saved.');
+  } catch (err) {
+    console.error('saveAssetToDB threw:', err);
+    const msg = err?.message || String(err);
+    const looksLikeStaleSession = /timed out|jwt|expired|fetch|network/i.test(msg);
+    setSaveStatus('err',
+      `<strong>✗ Could not save asset.</strong> ${escapeHtml(msg)}`
+      + '<div class="save-status-actions">'
+      + (looksLikeStaleSession
+          ? '<button type="button" class="btn btn-sm" onclick="forceResetSession()">Reset session &amp; sign in again</button>'
+          : '')
+      + '<button type="button" class="btn btn-sm" onclick="setSaveStatus(\'idle\')">Dismiss</button>'
+      + '</div>');
+  } finally {
+    if (saveBtn) {
+      saveBtn.dataset.busy = '0';
+      saveBtn.disabled = false;
+    }
   }
+}
 
-  const logAction = currentRole === 'user' ? 'ASSET_DRAFT_CREATED' : 'ASSET_SUBMITTED_FOR_APPROVAL';
-  await logSystemEvent(logAction, `Status: ${payload.status}`, id);
-  await syncFromCloud(true);
-
-  editingId = null;
-  clearForm();
-  notify(`Asset ${id} saved (${payload.status}).`);
-  if (currentRole === 'user') showSection('add');
-  else if (currentRole === 'infosec') showSection('draft-queue');
-  else showSection('register');
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 async function approveAsset(id) {
   if (currentRole !== 'admin') return;
+  const asset = globalAssets.find(a => a.id === id);
+  const originator = asset?.created_by || asset?.updated_by || 'unknown';
   const { error } = await supabase.from('Assets').update({
     status: ASSET_STATUS.APPROVED,
     reviewed_at: new Date().toISOString(),
     updated_by: currentUser?.email
   }).eq('id', id);
   if (error) return notify(error.message, true);
-  await logSystemEvent('ASSET_APPROVED', 'CISO approved risk assessment', id);
+  await logSystemEvent('ASSET_APPROVED', `CISO approved risk assessment · originator=${originator}`, id);
   await syncFromCloud(true);
-  notify(`Asset ${id} approved.`);
+  notify(`Asset ${id} approved. Originator (${originator}) will see the update on next sign-in.`);
   showSection('pending-queue');
 }
 
 async function rejectAsset(id) {
   if (currentRole !== 'admin') return;
-  const reason = prompt('Rejection notes for Info Sec (optional):') || '';
+  const asset = globalAssets.find(a => a.id === id);
+  if (!asset) return notify('Asset not found.', true);
+  const originator = asset.created_by || asset.updated_by || 'unknown';
+  const reason = await promptReason({
+    title: 'Reject submission for revision',
+    eyebrow: 'CISO Review · Pending Approval',
+    description: 'This asset will be returned to Draft status for the Info Sec officer to address. The reason is logged in System Logs and surfaced in the originator\'s notifications.',
+    presets: REASON_PRESETS.rejectAssetPending,
+    confirmLabel: 'Reject & return to draft',
+    tone: 'warn',
+  });
+  if (reason === null) return;
   const { error } = await supabase.from('Assets').update({
     status: ASSET_STATUS.DRAFT,
     reviewed_at: new Date().toISOString(),
     updated_by: currentUser?.email
   }).eq('id', id);
   if (error) return notify(error.message, true);
-  await logSystemEvent('ASSET_REJECTED', reason || 'Returned to Info Sec', id);
+  await logSystemEvent('ASSET_REJECTED', `Reason: ${reason} · originator=${originator}`, id);
   await syncFromCloud(true);
-  notify(`Asset ${id} returned to Info Sec.`);
+  notify(`Asset ${id} returned to Info Sec for revision — reason logged and surfaced to ${originator}.`);
   showSection('pending-queue');
+}
+
+// Info Sec / Admin discard a Draft submitted by a Standard User. The
+// asset row is deleted (no soft-state for "rejected draft") and the
+// reason is logged so the originator sees why their submission was
+// discarded the next time they sign in.
+async function rejectDraftAsset(id) {
+  if (currentRole !== 'admin' && currentRole !== 'infosec') return;
+  const asset = globalAssets.find(a => a.id === id);
+  if (!asset) return notify('Asset not found.', true);
+  if (asset.status !== ASSET_STATUS.DRAFT) {
+    return notify('Only Draft submissions can be rejected here.', true);
+  }
+  const originator = asset.created_by || asset.updated_by || 'unknown';
+  const reason = await promptReason({
+    title: `Reject draft submission ${id}`,
+    eyebrow: 'Info Sec · Draft Queue',
+    description: 'The draft will be removed from the queue and the originator will see your reason in their next sign-in. This cannot be undone.',
+    presets: REASON_PRESETS.rejectAssetDraft,
+    confirmLabel: 'Reject draft',
+    tone: 'danger',
+  });
+  if (reason === null) return;
+  try {
+    const { error } = await supabase.from('Assets').delete().eq('id', id);
+    if (error) throw error;
+    await logSystemEvent('DRAFT_REJECTED', `Reason: ${reason} · originator=${originator}`, id);
+    await syncFromCloud(true);
+    notify(`Draft ${id} rejected — reason recorded and surfaced to ${originator}.`);
+    renderDraftQueue();
+  } catch (err) {
+    console.error('rejectDraftAsset:', err);
+    notify('Failed to reject draft: ' + (err?.message || err), true);
+  }
 }
 
 function editAsset(id) {
@@ -1027,6 +1992,8 @@ function editAsset(id) {
 
       runEnforcementEngine(true); 
       setTimeout(updateTagsUI, 50); 
+
+      updateReapprovalBanner(a);
       
       document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
       document.getElementById('sec-add').classList.add('active');
@@ -1037,16 +2004,64 @@ function editAsset(id) {
   }
 }
 
+function updateReapprovalBanner(asset) {
+    let banner = document.getElementById('reapproval-banner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'reapproval-banner';
+        banner.className = 'reapproval-banner';
+        const sec = document.getElementById('sec-add');
+        if (sec) sec.insertBefore(banner, sec.firstChild);
+    }
+    const status = asset?.status || ASSET_STATUS.DRAFT;
+    if (currentRole === 'infosec' && status === ASSET_STATUS.APPROVED) {
+        banner.innerHTML = '<strong>Re-Approval Required</strong> — This asset is currently <span class="badge badge-type">Approved</span>. Saving any change will move it back to <span class="badge badge-mo">Pending Approval</span> until the CISO reviews it again.';
+        banner.hidden = false;
+    } else if (currentRole === 'infosec' && status === ASSET_STATUS.PENDING) {
+        banner.innerHTML = '<strong>Awaiting CISO Review</strong> — This asset is in the approval queue. You can still update it; it will remain <span class="badge badge-mo">Pending Approval</span>.';
+        banner.hidden = false;
+    } else if (currentRole === 'admin' && status === ASSET_STATUS.PENDING) {
+        banner.innerHTML = '<strong>CISO Review Mode</strong> — Use Approve/Reject in the Pending Approval queue to finalize this submission.';
+        banner.hidden = false;
+    } else {
+        banner.hidden = true;
+        banner.innerHTML = '';
+    }
+}
+
 async function deleteAsset(id) {
-  if (!confirm(`Are you sure you want to permanently delete asset ${id} from Cloud?`)) return;
+  if (currentRole !== 'admin' && currentRole !== 'infosec') {
+    return notify('Standard users cannot delete assets.', true);
+  }
+  const asset = globalAssets.find(a => a.id === id);
+  if (!asset) return notify('Asset not found.', true);
+  const originator = asset.created_by || asset.updated_by || 'unknown';
+  const reason = await promptReason({
+    title: `Permanently delete ${id}`,
+    eyebrow: 'ISMS Register · Destructive action',
+    description: `${escapeHtml(asset.name || id)} will be removed from the database along with its control mappings. This cannot be undone — the reason and your identity are written to System Logs.`,
+    presets: REASON_PRESETS.deleteAsset,
+    confirmLabel: 'Delete asset',
+    tone: 'danger',
+  });
+  if (reason === null) return;
   try {
-      const { error } = await supabase.from('Assets').delete().eq('id', id);
-      if (error) throw error;
-      notify(`Asset ${id} deleted.`);
-      showSection('register'); 
-  } catch(err) {
-      console.error("Deletion Error:", err);
-      notify("Failed to delete asset.", true);
+    const { error } = await supabase.from('Assets').delete().eq('id', id);
+    if (error) throw error;
+    await logSystemEvent('ASSET_DELETED',
+      `Reason: ${reason} · originator=${originator} · prior_status=${asset.status || 'Approved'}`, id);
+    await syncFromCloud(true);
+    notify(`Asset ${id} deleted — reason logged and surfaced to ${originator}.`);
+    // Refresh whichever queue we were on
+    const active = document.querySelector('.section.active')?.id;
+    if (active === 'sec-draft-queue')   renderDraftQueue();
+    else if (active === 'sec-pending-queue') renderPendingQueue();
+    else if (active === 'sec-register') renderRegister();
+    else if (active === 'sec-risk')     renderRiskRegister();
+    else showSection('register');
+  } catch (err) {
+    console.error('Deletion Error:', err);
+    notify('Failed to delete asset: ' + (err?.message || err), true);
   }
 }
 
@@ -1077,6 +2092,8 @@ function clearForm() {
   const statusEl = document.getElementById('form-workflow-status');
   if (statusEl) statusEl.textContent = ASSET_STATUS.DRAFT;
   setFormSectionsLocked(currentRole === 'user');
+  const banner = document.getElementById('reapproval-banner');
+  if (banner) { banner.hidden = true; banner.innerHTML = ''; }
   
   runEnforcementEngine(); 
   updateTagsUI();
@@ -1129,15 +2146,26 @@ function renderDraftQueue() {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No draft assets in queue.</td></tr>';
     return;
   }
-  tbody.innerHTML = items.map(a => `
+  const canActOnDraft = currentRole === 'admin' || currentRole === 'infosec';
+  tbody.innerHTML = items.map(a => {
+    const actions = [
+      `<button class="btn btn-sm btn-primary" onclick="editAsset('${a.id}')">Assess →</button>`,
+      canActOnDraft
+        ? `<button class="btn btn-sm btn-danger" style="margin-left:4px" onclick="rejectDraftAsset('${a.id}')">Reject</button>`
+        : '',
+      canActOnDraft
+        ? `<button class="btn btn-sm btn-danger" style="margin-left:4px;opacity:0.85" onclick="deleteAsset('${a.id}')">Delete</button>`
+        : ''
+    ].filter(Boolean).join('');
+    return `
     <tr>
       <td><span class="badge badge-id">${a.id}</span> ${statusBadge(a.status)}</td>
       <td><strong>${a.name}</strong></td>
       <td><span class="badge badge-type">${a.type}</span></td>
       <td style="color:var(--text2)">${a.created_by || '—'}</td>
-      <td><button class="btn btn-sm btn-primary" onclick="editAsset('${a.id}')">Assess →</button></td>
-    </tr>
-  `).join('');
+      <td style="white-space:nowrap">${actions}</td>
+    </tr>`;
+  }).join('');
 }
 
 function renderPendingQueue() {
@@ -1149,8 +2177,25 @@ function renderPendingQueue() {
     el.innerHTML = '<' + D + ' class="empty-state"><' + D + ' class="icon">[✓]</' + D + '><' + D + '>No assets awaiting CISO approval.</' + D + '></' + D + '>';
     return;
   }
+  const isAdmin   = currentRole === 'admin';
+  const isInfoSec = currentRole === 'infosec';
   el.innerHTML = items.map(a => {
     const ctrls = globalControls.filter(c => c.asset_id === a.id).length;
+    const reviewBtn = '<button class="btn btn-sm" onclick="editAsset(\'' + a.id + '\')">' + (isAdmin ? 'Review' : 'Open (read-only)') + '</button>';
+    let adminActions;
+    if (isAdmin) {
+      adminActions =
+        '<button class="btn btn-sm btn-danger" onclick="rejectAsset(\'' + a.id + '\')">Reject</button>'
+        + '<button class="btn btn-sm btn-danger" style="opacity:0.85" onclick="deleteAsset(\'' + a.id + '\')">Delete</button>'
+        + '<button class="btn btn-sm btn-success" onclick="approveAsset(\'' + a.id + '\')">Approve</button>';
+    } else if (isInfoSec) {
+      // Info Sec can withdraw their own pending submission with a logged reason.
+      adminActions =
+        '<span class="badge badge-mo" style="margin-left:8px">Awaiting CISO Review</span>'
+        + '<button class="btn btn-sm btn-danger" style="margin-left:8px;opacity:0.9" onclick="deleteAsset(\'' + a.id + '\')">Withdraw</button>';
+    } else {
+      adminActions = '<span class="badge badge-mo" style="margin-left:8px">Awaiting CISO Review</span>';
+    }
     return [
       '<' + D + ' class="card queue-card" style="border-left:3px solid var(--warn);margin-bottom:16px;padding:20px 24px">',
       '<' + D + ' style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px">',
@@ -1158,11 +2203,10 @@ function renderPendingQueue() {
       riskBadge(a.residual),
       '</' + D + '>',
       '<p style="font-size:12px;color:var(--text2);margin-bottom:12px">' + (a.riskDesc || '—') + '</p>',
-      '<' + D + ' style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-bottom:12px">Inherent: ' + (a.inherit || '—') + ' · Controls: ' + ctrls + ' · Class: ' + (a.ciaClass || '—') + '</' + D + '>',
-      '<' + D + ' style="display:flex;gap:8px;justify-content:flex-end">',
-      '<button class="btn btn-sm" onclick="editAsset(\'' + a.id + '\')">Review</button>',
-      '<button class="btn btn-sm btn-danger" onclick="rejectAsset(\'' + a.id + '\')">Reject</button>',
-      '<button class="btn btn-sm btn-success" onclick="approveAsset(\'' + a.id + '\')">Approve</button>',
+      '<' + D + ' style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-bottom:12px">Inherent: ' + (a.inherit || '—') + ' · Controls: ' + ctrls + ' · Class: ' + (a.ciaClass || '—') + (a.updated_by ? ' · Submitted by: ' + a.updated_by : '') + '</' + D + '>',
+      '<' + D + ' style="display:flex;gap:8px;justify-content:flex-end;align-items:center">',
+      reviewBtn,
+      adminActions,
       '</' + D + '></' + D + '>'
     ].join('');
   }).join('');
@@ -1174,7 +2218,7 @@ async function renderUserManagement() {
   tbody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
   const { data, error } = await supabase.from('user_profiles').select('*').order('created_at', { ascending: false });
   if (error) {
-    tbody.innerHTML = `<tr><td colspan="4">Error: ${error.message}. Run enterprise_setup.sql.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4">Error: ${error.message}. Run supabase/master_setup.sql.</td></tr>`;
     return;
   }
   const pending = (data || []).filter(p => p.account_status === 'pending');
@@ -1221,13 +2265,39 @@ async function approveUserAccount(userId) {
 
 async function rejectUserAccount(userId) {
   if (currentRole !== 'admin' && currentRole !== 'infosec') return;
+  const { data: target } = await supabase.from('user_profiles').select('*').eq('id', userId).single();
+  if (!target) return notify('User profile not found.', true);
+  if (currentRole === 'infosec' && target.requested_role !== 'user') {
+    return notify('Info Sec can only reject Standard User account requests.', true);
+  }
+  const reason = await promptReason({
+    title: `Reject account request — ${target.email}`,
+    eyebrow: 'User Management · Pending approval',
+    description: 'The applicant remains in Supabase Auth but their profile is marked rejected and they will not be able to sign in. The reason is recorded in System Logs.',
+    presets: REASON_PRESETS.rejectUser,
+    confirmLabel: 'Reject account',
+    tone: 'danger',
+  });
+  if (reason === null) return;
   const { error } = await supabase.from('user_profiles').update({
     account_status: 'rejected',
+    rejection_reason: reason,
     updated_at: new Date().toISOString()
   }).eq('id', userId);
-  if (error) return notify(error.message, true);
-  await logSystemEvent('USER_REJECTED', `Rejected user ${userId}`);
-  notify('Account rejected.');
+  if (error) {
+    // rejection_reason column may not exist on legacy installs — retry without it.
+    if (/rejection_reason/i.test(error.message)) {
+      const retry = await supabase.from('user_profiles').update({
+        account_status: 'rejected',
+        updated_at: new Date().toISOString()
+      }).eq('id', userId);
+      if (retry.error) return notify(retry.error.message, true);
+    } else {
+      return notify(error.message, true);
+    }
+  }
+  await logSystemEvent('USER_REJECTED', `Reason: ${reason} · target=${target.email} · requested_role=${target.requested_role}`);
+  notify(`Account ${target.email} rejected.`);
   renderUserManagement();
 }
 
@@ -1480,107 +2550,626 @@ async function exportDataXLSX() {
     }
     if (typeof ExcelJS === 'undefined') { notify('ExcelJS library not loaded.', true); return; }
 
-    const rep = globalReport;
-    const assets = approvedAssetsOnly();
-    const headers = ['Asset ID', 'Name', 'Description', 'Group', 'Hostname', 'Server', 'Custodian', 'IP', 'Environment', 'Department', 'Type', 'PII', 'SPI', 'Corp', 'C', 'I', 'A', 'Score', 'Class', 'Risk', 'Prob', 'Sev', 'Inherent', 'Residual', 'Strategy', 'Action Status', 'Action Plan', 'Owner', 'Target Date', 'Workflow Status', 'NIST CSF', 'ISO 27001/27002', 'CIS Controls', 'SOC 2', 'PCI-DSS'];
+    const rep = globalReport || {};
+    const isAdmin = currentRole === 'admin';
+
+    // Role-scoped data:
+    //  - Admin   : Approved + Pending (full register including in-flight items)
+    //  - InfoSec : Approved + Pending (their working set; same scope, no Sign-Off sheet)
+    const assets = globalAssets.filter(a =>
+        a.status === ASSET_STATUS.APPROVED || a.status === ASSET_STATUS.PENDING
+    );
 
     const wb = new ExcelJS.Workbook();
-    wb.creator = 'ImpactLens';
-    wb.created = new Date();
+    wb.creator  = 'ImpactLens';
+    wb.created  = new Date();
+    wb.company  = 'Pamantasan ng Lungsod ng Maynila — ISMS';
 
-    const styleTitle = (ws, row, text, cols = 8) => {
+    // ---------- shared style helpers (admin PDF aesthetic) ----------
+    // NOTE: COL_TITLE_FG is the BODY accent (readable on white). The neon
+    // brand green is reserved for the dark title bar + header rows where
+    // contrast is high enough to remain legible.
+    const COL_TITLE_BG    = 'FF111118';
+    const COL_TITLE_FG    = 'FF0E6E2C';   // deep forest green — readable on white
+    const COL_TITLE_NEON  = 'FFC8FF00';   // brand neon — only on dark backgrounds
+    const COL_HDR_BG      = 'FF1A1A22';
+    const COL_HDR_FG      = 'FFC8FF00';
+    const COL_SUB_BG      = 'FF2A2A35';
+    const COL_BORDER      = 'FFC0C0CC';   // mid-grey borders — visible on white cells
+
+    const styleTitle = (ws, row, text, cols) => {
         ws.mergeCells(row, 1, row, cols);
         const c = ws.getCell(row, 1);
         c.value = text;
-        c.font = { name: 'Calibri', size: 16, bold: true, color: { argb: 'FFC8FF00' } };
-        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111118' } };
-        c.alignment = { vertical: 'middle', horizontal: 'left' };
-        c.border = { bottom: { style: 'medium', color: { argb: 'FFC8FF00' } } };
-        ws.getRow(row).height = 28;
+        c.font  = { name: 'Calibri', size: 16, bold: true, color: { argb: COL_TITLE_NEON } };
+        c.fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: COL_TITLE_BG } };
+        c.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+        c.border = { bottom: { style: 'medium', color: { argb: COL_TITLE_NEON } } };
+        ws.getRow(row).height = 30;
     };
-
-    const styleHeaderRow = (ws, row, colCount) => {
+    const styleSubtitle = (ws, row, text, cols) => {
+        ws.mergeCells(row, 1, row, cols);
+        const c = ws.getCell(row, 1);
+        c.value = text;
+        c.font  = { name: 'Calibri', size: 10, bold: true, italic: true, color: { argb: 'FFB5B5C5' } };
+        c.fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: COL_SUB_BG } };
+        c.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+        ws.getRow(row).height = 18;
+    };
+    const styleHeaderRow = (ws, rowNum, colCount) => {
         for (let col = 1; col <= colCount; col++) {
-            const c = ws.getCell(row, col);
-            c.font = { bold: true, color: { argb: 'FFC8FF00' }, size: 10 };
-            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A1A22' } };
+            const c = ws.getCell(rowNum, col);
+            c.font = { bold: true, color: { argb: COL_HDR_FG }, size: 10 };
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COL_HDR_BG } };
             c.border = {
-                top: { style: 'thin', color: { argb: 'FF3A3A48' } },
-                bottom: { style: 'thin', color: { argb: 'FF3A3A48' } },
-                left: { style: 'thin', color: { argb: 'FF3A3A48' } },
-                right: { style: 'thin', color: { argb: 'FF3A3A48' } }
+                top:    { style: 'medium', color: { argb: COL_HDR_FG } },
+                bottom: { style: 'medium', color: { argb: COL_HDR_FG } },
+                left:   { style: 'thin',   color: { argb: COL_BORDER } },
+                right:  { style: 'thin',   color: { argb: COL_BORDER } },
             };
             c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
         }
-        ws.getRow(row).height = 22;
+        ws.getRow(rowNum).height = 26;
+    };
+    const styleBodyCells = (ws, rowNum, colCount) => {
+        for (let col = 1; col <= colCount; col++) {
+            const c = ws.getCell(rowNum, col);
+            c.border = {
+                top:    { style: 'thin', color: { argb: COL_BORDER } },
+                bottom: { style: 'thin', color: { argb: COL_BORDER } },
+                left:   { style: 'thin', color: { argb: COL_BORDER } },
+                right:  { style: 'thin', color: { argb: COL_BORDER } },
+            };
+            c.alignment = c.alignment || { vertical: 'middle', wrapText: true };
+        }
+    };
+    const yn = v => (v === 'Y' ? 'Y' : 'N');
+    const ynFill = v => v === 'Y'
+        ? { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3A1F' } }
+        : { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A1A22' } };
+    const ynFont = v => v === 'Y'
+        ? { bold: true, color: { argb: 'FF7CFF7C' } }
+        : { color: { argb: 'FF6A6A78' } };
+    const setCols = (ws, widths) => { ws.columns = widths.map(w => ({ width: w })); };
+    const addBranding = (ws, cols) => {
+        styleTitle(ws, 1, 'IMPACTLENS  ·  PLM ISMS  —  Information Asset Register', cols);
+        styleSubtitle(ws, 2, 'Generated ' + new Date().toLocaleString() + '  ·  Role: ' + (isAdmin ? 'Admin (CISO)' : 'Information Security') + '  ·  Records: ' + assets.length, cols);
+        ws.addRow([]);
     };
 
-    const wsHistory = wb.addWorksheet('Document History');
-    styleTitle(wsHistory, 1, 'IMPACTLENS — DOCUMENT HISTORY');
-    wsHistory.addRow([]);
-    const histHdr = wsHistory.addRow(['DATE APPROVED', 'VERSION', 'DESCRIPTION', 'AUTHOR', 'APPROVAL']);
-    styleHeaderRow(wsHistory, histHdr.number, 5);
-    wsHistory.addRow([rep.docDate || '', rep.docVersion || '', rep.docDesc || '', rep.docAuthor || '', rep.docApproval || '']);
-    wsHistory.columns = [{ width: 14 }, { width: 10 }, { width: 40 }, { width: 22 }, { width: 22 }];
-
-    const wsHigh = wb.addWorksheet('Highlights');
-    styleTitle(wsHigh, 1, 'INFORMATION SECURITY RISK ASSESSMENT — HIGHLIGHTS');
-    wsHigh.addRow(['Revision Highlights']);
-    wsHigh.addRow([rep.revHigh || '']);
-    wsHigh.addRow([]);
-    wsHigh.addRow(['Initial Overall Highlights']);
-    wsHigh.addRow([rep.initHigh || '']);
-    wsHigh.getColumn(1).width = 80;
-
-    const wsData = wb.addWorksheet('IAR_Data');
-    styleTitle(wsData, 1, 'INFORMATION ASSET REGISTER — APPROVED RISK DATA', headers.length);
-    wsData.addRow([]);
-    const hdrRow = wsData.addRow(headers);
-    styleHeaderRow(wsData, hdrRow.number, headers.length);
-
-    assets.forEach(a => {
-        const ctrlIds = globalControls.filter(c => c.asset_id === a.id).map(c => c.ctrl_id);
-        const fw = getFrameworksForControls(ctrlIds, a.type);
-        const row = wsData.addRow([
-            a.id, a.name, a.description, a.group_name, a.hostname, a.server, a.custodian, a.ip_address, a.environment, a.department,
-            a.type, a.pii, a.spi, a.corp, a.ciaC, a.ciaI, a.ciaA, a.ciaScore, a.ciaClass, a.riskDesc, a.prob, a.sev, a.inherit, a.residual,
-            a.actionType, a.actionStatus, a.actionPlan, a.actionOwner, a.actionDate, a.status,
-            fw.nist, fw.iso, fw.cis, fw.soc2, fw.pci
-        ]);
-        const inhCell = row.getCell(23);
-        const resCell = row.getCell(24);
-        inhCell.fill = excelRiskFill(a.inherit);
-        resCell.fill = excelRiskFill(a.residual);
-        inhCell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-        resCell.font = { bold: true, color: { argb: 'FF000000' } };
-        row.eachCell(cell => {
-            cell.border = {
-                top: { style: 'thin', color: { argb: 'FF3A3A48' } },
-                bottom: { style: 'thin', color: { argb: 'FF3A3A48' } },
-                left: { style: 'thin', color: { argb: 'FF3A3A48' } },
-                right: { style: 'thin', color: { argb: 'FF3A3A48' } }
-            };
+    // =====================================================
+    // Sheet A — Asset Identification (PDF section 1+2)
+    // =====================================================
+    {
+        const ws = wb.addWorksheet('1 — Asset Identification', { views: [{ state: 'frozen', ySplit: 4 }] });
+        addBranding(ws, 11);
+        const headers = ['Asset ID', 'Name of Asset', 'Description', 'Group', 'Hostname', 'Server', 'Custodian', 'IP Address', 'Environment', 'Department', 'Type'];
+        const hdr = ws.addRow(headers);
+        styleHeaderRow(ws, hdr.number, headers.length);
+        assets.forEach(a => {
+            const r = ws.addRow([a.id, a.name, a.description, a.group_name, a.hostname, a.server, a.custodian, a.ip_address, a.environment, a.department, a.type]);
+            r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            r.getCell(11).alignment = { horizontal: 'center' };
+            styleBodyCells(ws, r.number, headers.length);
         });
-    });
-    wsData.columns.forEach((col, i) => { col.width = i === 2 || i === 19 || i === 26 ? 36 : 14; });
+        setCols(ws, [12, 38, 46, 18, 18, 22, 22, 16, 16, 22, 8]);
+    }
 
-    const wsSign = wb.addWorksheet('SIGN OFF');
-    styleTitle(wsSign, 1, 'OFFICIAL SIGN-OFF SHEET', 4);
-    wsSign.addRow(['Prepared By', rep.prepName || '', rep.prepTitle || '']);
-    wsSign.addRow(['Reviewed By', rep.revName || '', rep.revTitle || '']);
-    wsSign.addRow(['Approved By', rep.appName || '', rep.appTitle || '']);
-    wsSign.columns = [{ width: 16 }, { width: 28 }, { width: 28 }];
+    // =====================================================
+    // Sheet B — Information Sensitivity & Valuation (PDF section 3)
+    // =====================================================
+    {
+        const ws = wb.addWorksheet('2 — Sensitivity & Valuation', { views: [{ state: 'frozen', ySplit: 4 }] });
+        addBranding(ws, 11);
+        const headers = ['Asset ID', 'Name of Asset', 'PII', 'SPI', 'Corp Info', 'C', 'I', 'A', 'Valuation', 'Class', 'Type'];
+        const hdr = ws.addRow(headers);
+        styleHeaderRow(ws, hdr.number, headers.length);
+        assets.forEach(a => {
+            const r = ws.addRow([a.id, a.name, yn(a.pii), yn(a.spi), yn(a.corp), a.ciaC, a.ciaI, a.ciaA, a.ciaScore, a.ciaClass, a.type]);
+            r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            [3,4,5].forEach(idx => {
+                r.getCell(idx).fill = ynFill(idx === 3 ? a.pii : idx === 4 ? a.spi : a.corp);
+                r.getCell(idx).font = ynFont(idx === 3 ? a.pii : idx === 4 ? a.spi : a.corp);
+                r.getCell(idx).alignment = { horizontal: 'center' };
+            });
+            [6,7,8,9].forEach(idx => { r.getCell(idx).alignment = { horizontal: 'center' }; });
+            const classCell = r.getCell(10);
+            const cls = (a.ciaClass || '').toLowerCase();
+            if (cls === 'restricted')      classCell.fill = excelRiskFill('high');
+            else if (cls === 'confidential') classCell.fill = excelRiskFill('moderate');
+            else if (cls === 'internal use') classCell.fill = excelRiskFill('low');
+            else if (cls === 'public')       classCell.fill = excelRiskFill('very');
+            classCell.font = { bold: true, color: { argb: 'FF000000' } };
+            classCell.alignment = { horizontal: 'center' };
+            styleBodyCells(ws, r.number, headers.length);
+        });
+        setCols(ws, [12, 38, 6, 6, 9, 5, 5, 5, 10, 16, 8]);
+    }
 
+    // =====================================================
+    // Sheet C — Risk Assessment (PDF section 4 — IAR / Risk)
+    // =====================================================
+    {
+        const ws = wb.addWorksheet('3 — Risk Assessment', { views: [{ state: 'frozen', ySplit: 4 }] });
+        addBranding(ws, 7);
+        const headers = ['Asset ID', 'Name of Asset', 'Risk / Threat Description', 'Probability', 'Severity', 'Inherent', 'Residual'];
+        const hdr = ws.addRow(headers);
+        styleHeaderRow(ws, hdr.number, headers.length);
+        assets.forEach(a => {
+            const r = ws.addRow([a.id, a.name, a.riskDesc || '', a.prob, a.sev, a.inherit, a.residual]);
+            r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            [4,5].forEach(i => { r.getCell(i).alignment = { horizontal: 'center' }; });
+            const inh = r.getCell(6); inh.fill = excelRiskFill(a.inherit);  inh.font = { bold: true, color: { argb: 'FFFFFFFF' } }; inh.alignment = { horizontal: 'center' };
+            const res = r.getCell(7); res.fill = excelRiskFill(a.residual); res.font = { bold: true, color: { argb: 'FF000000' } }; res.alignment = { horizontal: 'center' };
+            styleBodyCells(ws, r.number, headers.length);
+        });
+        setCols(ws, [12, 38, 60, 12, 10, 12, 12]);
+    }
+
+    // =====================================================
+    // Sheet D — Controls (PDF section 5 — C1..C13 + Strategy)
+    // =====================================================
+    {
+        const ws = wb.addWorksheet('4 — Controls C1–C13', { views: [{ state: 'frozen', ySplit: 5, xSplit: 2 }] });
+        addBranding(ws, 17);
+        const headers = ['Asset ID', 'Name of Asset',
+            'C1','C2','C3','C4','C5','C6','C7','C8','C9','C10','C11','C12','C13',
+            'Residual', 'Strategy'];
+        // legend row
+        const legendRow = ws.addRow(['Legend',
+            'C1 Documented Procedures · C2 SoD · C3 RBAC · C4 MFA · C5 Physical · C6 Backup · C7 Encryption · C8 Disposal · C9 EDR · C10 WAF · C11 Vuln/Patch · C12 VLAN · C13 IRP'
+        ]);
+        ws.mergeCells(legendRow.number, 2, legendRow.number, 17);
+        legendRow.getCell(1).font = { bold: true, color: { argb: 'FFB5B5C5' }, italic: true };
+        legendRow.getCell(2).font = { italic: true, color: { argb: 'FF8A8A98' }, size: 9 };
+        legendRow.getCell(2).alignment = { horizontal: 'left', wrapText: true };
+        legendRow.height = 22;
+        const hdr = ws.addRow(headers);
+        styleHeaderRow(ws, hdr.number, headers.length);
+        assets.forEach(a => {
+            const ctrlIds = new Set(globalControls.filter(c => c.asset_id === a.id).map(c => c.ctrl_id));
+            const cells = [a.id, a.name];
+            for (let i = 1; i <= 13; i++) cells.push(ctrlIds.has(i) ? 'Y' : 'N');
+            cells.push(a.residual, a.actionType);
+            const r = ws.addRow(cells);
+            r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            for (let i = 3; i <= 15; i++) {
+                const v = r.getCell(i).value;
+                r.getCell(i).fill = ynFill(v);
+                r.getCell(i).font = ynFont(v);
+                r.getCell(i).alignment = { horizontal: 'center' };
+            }
+            const res = r.getCell(16); res.fill = excelRiskFill(a.residual); res.font = { bold: true, color: { argb: 'FF000000' } }; res.alignment = { horizontal: 'center' };
+            const strat = r.getCell(17);
+            const map = { Mitigate: 'FF1A4D80', Transfer: 'FF6A4DBA', Avoid: 'FFB04A2E', Accept: 'FF2E7A4D' };
+            strat.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: map[a.actionType] || 'FF2A2A35' } };
+            strat.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            strat.alignment = { horizontal: 'center' };
+            styleBodyCells(ws, r.number, headers.length);
+        });
+        const widths = [12, 32]; for (let i = 0; i < 13; i++) widths.push(5);
+        widths.push(12, 12);
+        setCols(ws, widths);
+    }
+
+    // =====================================================
+    // Sheet E — Residual & Treatment (PDF section 6)
+    // =====================================================
+    {
+        const ws = wb.addWorksheet('5 — Residual & Treatment', { views: [{ state: 'frozen', ySplit: 4 }] });
+        addBranding(ws, 7);
+        const headers = ['Asset ID', 'Name of Asset', 'Residual', 'Strategy', 'Status', 'Action Plan', 'Action Owner', 'Target Date'];
+        const hdr = ws.addRow(headers);
+        styleHeaderRow(ws, hdr.number, headers.length);
+        assets.forEach(a => {
+            const r = ws.addRow([a.id, a.name, a.residual, a.actionType, a.actionStatus, a.actionPlan, a.actionOwner, a.actionDate]);
+            r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            const res = r.getCell(3); res.fill = excelRiskFill(a.residual); res.font = { bold: true, color: { argb: 'FF000000' } }; res.alignment = { horizontal: 'center' };
+            const map = { Mitigate: 'FF1A4D80', Transfer: 'FF6A4DBA', Avoid: 'FFB04A2E', Accept: 'FF2E7A4D' };
+            const strat = r.getCell(4);
+            strat.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: map[a.actionType] || 'FF2A2A35' } };
+            strat.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            strat.alignment = { horizontal: 'center' };
+            const stat = r.getCell(5);
+            const sm = { Done: 'FF2E7A4D', 'In Progress': 'FF1A4D80', Pending: 'FFB04A2E' };
+            stat.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sm[a.actionStatus] || 'FF2A2A35' } };
+            stat.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            stat.alignment = { horizontal: 'center' };
+            styleBodyCells(ws, r.number, headers.length);
+        });
+        setCols(ws, [12, 38, 12, 12, 14, 60, 24, 14]);
+    }
+
+    // =====================================================
+    // Sheet F — Compliance Mapping (NIST / ISO / CIS / SOC 2 / PCI-DSS)
+    // =====================================================
+    {
+        const ws = wb.addWorksheet('6 — Compliance Mapping', { views: [{ state: 'frozen', ySplit: 4 }] });
+        addBranding(ws, 7);
+        const headers = ['Asset ID', 'Name of Asset', 'NIST CSF', 'ISO 27001 / 27002', 'CIS Controls', 'SOC 2', 'PCI-DSS'];
+        const hdr = ws.addRow(headers);
+        styleHeaderRow(ws, hdr.number, headers.length);
+        assets.forEach(a => {
+            const ctrlIds = globalControls.filter(c => c.asset_id === a.id).map(c => c.ctrl_id);
+            const fw = getFrameworksForControls(ctrlIds, a.type);
+            const r = ws.addRow([a.id, a.name, fw.nist, fw.iso, fw.cis, fw.soc2, fw.pci]);
+            r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            styleBodyCells(ws, r.number, headers.length);
+        });
+        setCols(ws, [12, 38, 28, 32, 24, 22, 22]);
+    }
+
+    // -------- date helpers shared by both role exports below --------
+    const fmtDate = (d) => {
+        if (!d) return '';
+        const dt = new Date(d);
+        if (isNaN(dt.getTime())) return String(d);
+        return dt.toISOString().slice(0, 10);
+    };
+    const fmtDateTime = (d) => {
+        if (!d) return '';
+        const dt = new Date(d);
+        if (isNaN(dt.getTime())) return String(d);
+        return dt.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+    };
+    const todayISO = fmtDate(new Date());
+    const reviewerEmail = currentUser?.email || 'admin@plm.edu.ph';
+
+    // =====================================================
+    // Sheet 7 — Rejected & Deleted (BOTH roles).
+    //   Single audit view of every Reject (Pending → Draft), Draft Reject,
+    //   Asset Delete, and User Reject with the captured reason in its own
+    //   column. Available to both Info Sec and Admin so each role can
+    //   produce evidence of due process for their scope of work.
+    // =====================================================
+    {
+        const wsRD = wb.addWorksheet('7 — Rejected & Deleted', { views: [{ state: 'frozen', ySplit: 4 }] });
+        addBranding(wsRD, 7);
+        const rdHdr = wsRD.addRow(['Date / Time', 'Action', 'Subject', 'Reason', 'Originator / Target', 'Acted By', 'Prior Status']);
+        styleHeaderRow(wsRD, rdHdr.number, 7);
+
+        const rejectActions = new Set(['ASSET_REJECTED', 'DRAFT_REJECTED', 'ASSET_DELETED', 'USER_REJECTED']);
+        const rdLogs = (globalLogs || []).filter(l => rejectActions.has(l.action));
+        const actionLabel = {
+            ASSET_REJECTED:  'Asset Rejected (returned to Draft)',
+            DRAFT_REJECTED:  'Draft Rejected (discarded)',
+            ASSET_DELETED:   'Asset Deleted (permanent)',
+            USER_REJECTED:   'User Account Rejected',
+        };
+        const actionFill = {
+            ASSET_REJECTED:  'FF3A2E15',
+            DRAFT_REJECTED:  'FF3A1F1F',
+            ASSET_DELETED:   'FF2E1A2E',
+            USER_REJECTED:   'FF1A1A2E',
+        };
+        const actionFg = {
+            ASSET_REJECTED:  'FFFFC966',
+            DRAFT_REJECTED:  'FFFF8C8C',
+            ASSET_DELETED:   'FFFF8C42',
+            USER_REJECTED:   'FFA0A0FF',
+        };
+
+        if (!rdLogs.length) {
+            const rNone = wsRD.addRow([
+                todayISO, '— none —', 'No rejections or deletions recorded',
+                'This audit period contains no negative actions. Every submission has been approved or is still in flight.',
+                '—', '—', '—'
+            ]);
+            rNone.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            rNone.getCell(2).font = { italic: true, color: { argb: 'FFB5B5C5' } };
+            rNone.getCell(4).font = { italic: true, color: { argb: 'FFB5B5C5' } };
+            styleBodyCells(wsRD, rNone.number, 7);
+            rNone.height = 24;
+        } else {
+            rdLogs.forEach(l => {
+                const parsed = parseLogDetails(l.details);
+                const subject = l.action === 'USER_REJECTED'
+                    ? (parsed.target || 'Unknown user')
+                    : (l.asset_id || '—');
+                const counterParty = l.action === 'USER_REJECTED'
+                    ? (`${parsed.target || '—'} (requested ${parsed.requestedRole || 'role'})`)
+                    : (parsed.originator || '—');
+                const r = wsRD.addRow([
+                    fmtDateTime(l.created_at),
+                    actionLabel[l.action] || l.action,
+                    subject,
+                    parsed.reason || '— no reason recorded —',
+                    counterParty,
+                    l.user_email || '—',
+                    parsed.priorStatus || (l.action === 'ASSET_DELETED' ? 'unknown' : '—')
+                ]);
+                r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+                r.getCell(2).font = { bold: true, color: { argb: actionFg[l.action] || 'FFFFFFFF' } };
+                r.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: actionFill[l.action] || 'FF1A1A22' } };
+                r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+                r.getCell(3).font = { bold: true };
+                if (parsed.reason) {
+                    r.getCell(4).font = { color: { argb: 'FFE8E8F0' } };
+                } else {
+                    r.getCell(4).font = { italic: true, color: { argb: 'FF8888A0' } };
+                }
+                r.getCell(4).alignment = { wrapText: true, vertical: 'top' };
+                r.getCell(7).alignment = { horizontal: 'center', vertical: 'middle' };
+                styleBodyCells(wsRD, r.number, 7);
+                r.height = Math.min(56, 22 + Math.ceil((parsed.reason || '').length / 60) * 12);
+            });
+
+            wsRD.addRow([]);
+            const sumHdr = wsRD.addRow(['Summary by action', '', '', '', '', '', '']);
+            styleHeaderRow(wsRD, sumHdr.number, 7);
+            const counts = {};
+            rdLogs.forEach(l => { counts[l.action] = (counts[l.action] || 0) + 1; });
+            Object.keys(actionLabel).forEach(act => {
+                if (!counts[act]) return;
+                const sr = wsRD.addRow([
+                    actionLabel[act], `${counts[act]} record${counts[act] === 1 ? '' : 's'}`,
+                    '', '', '', '', ''
+                ]);
+                sr.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+                sr.getCell(2).font = { bold: true };
+                styleBodyCells(wsRD, sr.number, 7);
+            });
+        }
+        setCols(wsRD, [22, 32, 22, 56, 32, 28, 16]);
+    }
+
+    // =====================================================
+    // Admin-only sheets — auto-populate from logs + stats so they
+    // are never blank, while still honoring manual ReportData entries.
+    // =====================================================
+    if (isAdmin) {
+
+        // Asset activity stats — used in Highlights aggregations.
+        const total       = globalAssets.length;
+        const exported    = assets.length;
+        const approved    = globalAssets.filter(a => a.status === ASSET_STATUS.APPROVED).length;
+        const pending     = globalAssets.filter(a => a.status === ASSET_STATUS.PENDING).length;
+        const draft       = globalAssets.filter(a => a.status === ASSET_STATUS.DRAFT).length;
+        const high        = globalAssets.filter(a => (a.residual || '').toLowerCase() === 'high').length;
+        const moderate    = globalAssets.filter(a => (a.residual || '').toLowerCase() === 'moderate').length;
+        const pii         = globalAssets.filter(a => a.pii === 'Y').length;
+        const internet    = globalAssets.filter(a => a.environment === 'Internet Facing').length;
+        const dueIn14     = globalAssets.filter(a => {
+            if (!a.actionDate) return false;
+            const t = new Date(a.actionDate).getTime();
+            const now = Date.now();
+            return t >= now && t - now <= 14 * 24 * 3600 * 1000;
+        }).length;
+        // Negative-action audit stats (drive sheet 8 + KPI block on Highlights)
+        const cntAssetRejected = (globalLogs || []).filter(l => l.action === 'ASSET_REJECTED').length;
+        const cntDraftRejected = (globalLogs || []).filter(l => l.action === 'DRAFT_REJECTED').length;
+        const cntAssetDeleted  = (globalLogs || []).filter(l => l.action === 'ASSET_DELETED').length;
+        const cntUserRejected  = (globalLogs || []).filter(l => l.action === 'USER_REJECTED').length;
+        const negativeTotal    = cntAssetRejected + cntDraftRejected + cntAssetDeleted + cntUserRejected;
+
+        // -----------------------------------------------------------
+        // Sheet 8 — Document History (real audit trail from SystemLogs)
+        // -----------------------------------------------------------
+        const wsH = wb.addWorksheet('8 — Document History');
+        addBranding(wsH, 5);
+        const histHdr = wsH.addRow(['Date', 'Version', 'Description', 'Author', 'Approval']);
+        styleHeaderRow(wsH, histHdr.number, 5);
+
+        // 1) Manual ReportData entry (master row) if any field is filled.
+        if (rep.docDate || rep.docVersion || rep.docDesc || rep.docAuthor || rep.docApproval) {
+            const rManual = wsH.addRow([
+                fmtDate(rep.docDate) || todayISO,
+                rep.docVersion || 'v1.0.0',
+                rep.docDesc    || 'Master ImpactLens Information Asset Register — current revision.',
+                rep.docAuthor  || 'Information Security Office, ICTO',
+                rep.docApproval|| 'CISO Approved'
+            ]);
+            rManual.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            rManual.getCell(2).font = { bold: true };
+            styleBodyCells(wsH, rManual.number, 5);
+            rManual.height = 22;
+        }
+
+        // 2) Auto-derived rows from SystemLogs (newest first).
+        const trackedActions = ['ASSET_APPROVED','ASSET_REJECTED','DRAFT_REJECTED','ASSET_DELETED',
+                                'ASSET_SUBMITTED_FOR_APPROVAL','ASSET_DRAFT_CREATED','ASSET_UPDATED','ASSET_CREATED',
+                                'USER_APPROVED','USER_REJECTED','EXPORT_XLSX'];
+        const histLogs = (globalLogs || [])
+            .filter(l => trackedActions.includes(l.action))
+            .slice(0, 80);
+        let revCounter = histLogs.length;
+        if (!histLogs.length) {
+            const rEmpty = wsH.addRow([
+                todayISO,
+                'v1.0.0',
+                'Initial issuance of the ImpactLens Information Asset Register. ' +
+                `${exported} of ${total} asset records included in this export.`,
+                'Information Security Office, ICTO',
+                'CISO Approved'
+            ]);
+            rEmpty.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            styleBodyCells(wsH, rEmpty.number, 5);
+            rEmpty.height = 22;
+        } else {
+            histLogs.forEach((l) => {
+                const version = `v1.${Math.max(1, Math.floor(revCounter / 10))}.${(revCounter % 10)}`;
+                revCounter--;
+                let approval = 'Logged';
+                if (l.action === 'ASSET_APPROVED' || l.action === 'USER_APPROVED') approval = 'Approved';
+                else if (l.action === 'ASSET_REJECTED' || l.action === 'USER_REJECTED' || l.action === 'DRAFT_REJECTED') approval = 'Rejected';
+                else if (l.action === 'ASSET_DELETED') approval = 'Deleted';
+                else if (l.action === 'ASSET_SUBMITTED_FOR_APPROVAL') approval = 'Submitted for CISO Approval';
+                else if (l.action === 'ASSET_DRAFT_CREATED') approval = 'Draft (awaiting Info Sec)';
+                else if (l.action === 'EXPORT_XLSX') approval = 'Exported';
+                const desc = `${l.action.replace(/_/g, ' ')}` +
+                             (l.asset_id ? ` · Asset ${l.asset_id}` : '') +
+                             (l.details  ? ` — ${l.details}` : '');
+                const r3 = wsH.addRow([
+                    fmtDateTime(l.created_at),
+                    version,
+                    desc,
+                    l.user_email || '—',
+                    approval
+                ]);
+                r3.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+                if (approval === 'Approved') r3.getCell(5).font = { bold: true, color: { argb: 'FF7CFF7C' } };
+                if (approval === 'Rejected') r3.getCell(5).font = { bold: true, color: { argb: 'FFFF6666' } };
+                if (approval === 'Deleted')  r3.getCell(5).font = { bold: true, color: { argb: 'FFFF8C42' } };
+                styleBodyCells(wsH, r3.number, 5);
+            });
+        }
+        setCols(wsH, [22, 12, 60, 32, 30]);
+
+        // -----------------------------------------------------------
+        // Sheet 9 — Highlights (revision narrative + aggregate stats)
+        // -----------------------------------------------------------
+        const wsX = wb.addWorksheet('9 — Highlights');
+        addBranding(wsX, 2);
+        setCols(wsX, [32, 92]);
+
+        // Revision Highlights
+        const a1 = wsX.addRow(['Revision Highlights', '']); styleHeaderRow(wsX, a1.number, 2);
+        const recentApproved = (globalLogs || [])
+            .filter(l => l.action === 'ASSET_APPROVED')
+            .slice(0, 10)
+            .map(l => `• ${fmtDate(l.created_at)} — Asset ${l.asset_id || ''} approved by ${l.user_email || 'CISO'}`);
+        const recentRejected = (globalLogs || [])
+            .filter(l => l.action === 'ASSET_REJECTED' || l.action === 'DRAFT_REJECTED')
+            .slice(0, 8)
+            .map(l => {
+                const p = parseLogDetails(l.details);
+                const verb = l.action === 'DRAFT_REJECTED' ? 'draft rejected' : 'returned to Info Sec';
+                const reasonTxt = p.reason ? ` — ${p.reason}` : ' — no reason recorded';
+                return `• ${fmtDate(l.created_at)} — Asset ${l.asset_id || ''} ${verb} by ${l.user_email || 'CISO'}${reasonTxt}`;
+            });
+        const recentDeleted = (globalLogs || [])
+            .filter(l => l.action === 'ASSET_DELETED')
+            .slice(0, 6)
+            .map(l => {
+                const p = parseLogDetails(l.details);
+                const reasonTxt = p.reason ? ` — ${p.reason}` : ' — no reason recorded';
+                const prior = p.priorStatus ? ` (was ${p.priorStatus})` : '';
+                return `• ${fmtDate(l.created_at)} — Asset ${l.asset_id || ''} deleted by ${l.user_email || '—'}${prior}${reasonTxt}`;
+            });
+        const recentSubmitted = (globalLogs || [])
+            .filter(l => l.action === 'ASSET_SUBMITTED_FOR_APPROVAL')
+            .slice(0, 5)
+            .map(l => `• ${fmtDate(l.created_at)} — Asset ${l.asset_id || ''} submitted by ${l.user_email || 'Info Sec'}`);
+        const revText = [
+            rep.revHigh ? rep.revHigh.trim() : '',
+            recentApproved.length ? 'Recently Approved Assets:\n' + recentApproved.join('\n') : '',
+            recentSubmitted.length ? '\nRecently Submitted for Approval:\n' + recentSubmitted.join('\n') : '',
+            recentRejected.length ? '\nRecently Rejected:\n' + recentRejected.join('\n') : '',
+            recentDeleted.length ? '\nRecently Deleted:\n' + recentDeleted.join('\n') : ''
+        ].filter(Boolean).join('\n\n') ||
+            'No revisions recorded yet. This is the initial issuance of the Information Asset Register.';
+        const b1 = wsX.addRow(['Narrative', revText]);
+        b1.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+        b1.getCell(2).alignment = { wrapText: true, vertical: 'top' };
+        styleBodyCells(wsX, b1.number, 2);
+        b1.height = Math.min(220, 30 + revText.split('\n').length * 14);
+
+        wsX.addRow([]);
+
+        // Initial Overall Highlights — aggregate KPI snapshot
+        const a2 = wsX.addRow(['Initial Overall Highlights', '']); styleHeaderRow(wsX, a2.number, 2);
+        const summaryRows = [
+            ['Total Asset Records',           `${total}`],
+            ['Exported in This Workbook',     `${exported} (Approved + Pending Approval)`],
+            ['Approved (CISO Signed)',        `${approved}`],
+            ['Pending CISO Approval',         `${pending}`],
+            ['In Draft (Info Sec Profiling)', `${draft}`],
+            ['High Residual Risk',            `${high}`],
+            ['Moderate Residual Risk',        `${moderate}`],
+            ['Assets Holding PII / SPI',      `${pii}`],
+            ['Internet-Facing Assets',        `${internet}`],
+            ['Action Plans Due ≤ 14 Days',    `${dueIn14}`],
+            ['Rejections & Deletions (audit)', `${negativeTotal} total — ${cntAssetRejected} returned, ${cntDraftRejected} draft-rejected, ${cntAssetDeleted} deleted, ${cntUserRejected} user-rejected (see sheet 7)`],
+            ['Report Generated',              `${fmtDateTime(new Date())} by ${reviewerEmail}`]
+        ];
+        if (rep.initHigh && rep.initHigh.trim()) {
+            const intro = wsX.addRow(['Executive Summary', rep.initHigh.trim()]);
+            intro.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            intro.getCell(2).alignment = { wrapText: true, vertical: 'top' };
+            styleBodyCells(wsX, intro.number, 2);
+            intro.height = Math.min(180, 28 + rep.initHigh.split('\n').length * 14);
+        }
+        summaryRows.forEach(([label, value]) => {
+            const r4 = wsX.addRow([label, value]);
+            r4.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            r4.getCell(2).font = { bold: true };
+            styleBodyCells(wsX, r4.number, 2);
+            r4.height = 22;
+        });
+
+        // -----------------------------------------------------------
+        // Sheet 10 — Sign Off (always populated with realistic defaults)
+        // -----------------------------------------------------------
+        const wsS = wb.addWorksheet('10 — Sign Off');
+        addBranding(wsS, 4);
+        const sHdr = wsS.addRow(['Role', 'Name', 'Title / Office', 'Date Signed']);
+        styleHeaderRow(wsS, sHdr.number, 4);
+
+        const signRows = [
+            [
+                'Prepared By',
+                rep.prepName  || 'Information Security Officer',
+                rep.prepTitle || 'Information Security Office, ICTO — Pamantasan ng Lungsod ng Maynila',
+                rep.docDate ? fmtDate(rep.docDate) : todayISO
+            ],
+            [
+                'Reviewed By',
+                rep.revName  || 'Risk Management Committee Chair',
+                rep.revTitle || 'Office of the Vice President for Administration',
+                rep.docDate ? fmtDate(rep.docDate) : todayISO
+            ],
+            [
+                'Approved By',
+                rep.appName  || (isAdmin ? reviewerEmail : 'Chief Information Security Officer'),
+                rep.appTitle || 'Chief Information Security Officer (CISO) — Pamantasan ng Lungsod ng Maynila',
+                rep.docDate ? fmtDate(rep.docDate) : todayISO
+            ]
+        ];
+        signRows.forEach(rowVals => {
+            const r2 = wsS.addRow(rowVals);
+            r2.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            r2.getCell(2).font = { bold: true };
+            r2.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+            styleBodyCells(wsS, r2.number, 4);
+            r2.height = 28;
+        });
+
+        // Signature block — visible "X______" placeholder lines underneath.
+        wsS.addRow([]);
+        const sigHdr = wsS.addRow(['Signatures', '', '', '']);
+        styleHeaderRow(wsS, sigHdr.number, 4);
+        signRows.forEach(([role, name]) => {
+            const blank = wsS.addRow([role, '_______________________________', name, '_____________']);
+            blank.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            blank.getCell(2).alignment = { vertical: 'middle' };
+            blank.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+            styleBodyCells(wsS, blank.number, 4);
+            blank.height = 32;
+        });
+
+        wsS.addRow([]);
+        const noteRow = wsS.addRow(['Note', 'Manual entries on the ImpactLens Reporting & Sign-offs page override these defaults at the next export.', '', '']);
+        wsS.mergeCells(noteRow.number, 2, noteRow.number, 4);
+        noteRow.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+        noteRow.getCell(2).font = { italic: true, color: { argb: 'FFB5B5C5' } };
+        styleBodyCells(wsS, noteRow.number, 4);
+
+        setCols(wsS, [16, 36, 52, 18]);
+    }
+
+    // ---------- write ----------
     const buffer = await wb.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'ImpactLens_IAR_Export.xlsx';
-    a.click();
+    const link = document.createElement('a');
+    link.href = url;
+    const stamp = new Date().toISOString().slice(0,10);
+    const roleSlug = isAdmin ? 'Admin-CISO' : 'InfoSec';
+    link.download = `ImpactLens_IAR_${roleSlug}_${stamp}.xlsx`;
+    link.click();
     URL.revokeObjectURL(url);
-    await logSystemEvent('EXPORT_XLSX', `Exported ${assets.length} approved assets`);
-    notify('Branded Excel export complete.');
+    await logSystemEvent('EXPORT_XLSX', `Exported ${assets.length} assets (${roleSlug} template)`);
+    notify(`Exported ${assets.length} assets — ${isAdmin ? 'Admin (full audit)' : 'Info Sec (audit + working set)'} template.`);
 }
 
 // ==========================================
@@ -1602,9 +3191,14 @@ async function exportDataXLSX() {
             await enterAuthenticatedApp(session);
             return;
         }
+        if (event === 'TOKEN_REFRESHED' && session?.access_token) {
+            currentAccessToken = session.access_token;
+            return;
+        }
         if (event === 'SIGNED_OUT' || (event === 'TOKEN_REFRESHED' && !session)) {
             currentUser = null;
             currentRole = null;
+            currentAccessToken = null;
             authUiReady = false;
             showAuthScreen();
         }
@@ -1615,7 +3209,37 @@ window.handleLogin = handleLogin;
 window.handleLogout = handleLogout;
 window.handleRegister = handleRegister;
 window.showAuthTab = showAuthTab;
-window.completeMfaStep = completeMfaStep;
-window.cancelMfaStep = cancelMfaStep;
+window.resendVerificationEmail = resendVerificationEmail;
+window.resetAuthSteps = resetAuthSteps;
+
+// Inline-handler exports (defensive — also auto-bound by browsers, but explicit avoids edge cases)
+window.saveAssetToDB        = saveAssetToDB;
+window.editAsset            = editAsset;
+window.deleteAsset          = deleteAsset;
+window.approveAsset         = approveAsset;
+window.rejectAsset          = rejectAsset;
+window.rejectDraftAsset     = rejectDraftAsset;
+window.promptReason         = promptReason;
+window.showSection          = showSection;
+window.runEnforcementEngine = runEnforcementEngine;
+window.applyRiskTemplate    = applyRiskTemplate;
+window.updateTags           = updateTags;
+window.removeTag            = removeTag;
+window.clearForm            = clearForm;
+window.exportDataXLSX       = exportDataXLSX;
+window.setSaveStatus        = setSaveStatus;
+
+function togglePassword(btn) {
+    const id = btn?.dataset?.target;
+    if (!id) return;
+    const input = document.getElementById(id);
+    if (!input) return;
+    const isHidden = input.type === 'password';
+    input.type = isHidden ? 'text' : 'password';
+    btn.textContent = isHidden ? 'Hide' : 'Show';
+    btn.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+    btn.setAttribute('aria-pressed', String(isHidden));
+}
+window.togglePassword = togglePassword;
 window.approveUserAccount = approveUserAccount;
 window.rejectUserAccount = rejectUserAccount;
