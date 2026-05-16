@@ -43,6 +43,8 @@ let globalLogs = [];
 let editingId = null;
 let currentUser = null;
 let currentRole = null; // 'user' | 'infosec' | 'admin'
+let currentProfile = null;
+let pendingMfaSession = null;
 let syncInFlight = null;
 const ASSET_STATUS = { DRAFT: 'Draft', PENDING: 'Pending Approval', APPROVED: 'Approved', REJECTED: 'Rejected' };
 
@@ -71,6 +73,25 @@ const CTRL_NAMES = [
   'Encryption (At Rest / In Transit)', 'Asset disposal procedures', 'Endpoint Detection & Response (EDR)', 
   'Network Firewall / WAF', 'Vulnerability Scanning & Patching', 'Network Segmentation (VLANs)', 'Incident Response Plan'
 ];
+
+/** Per-control framework mapping (1–13). PCI-DSS applies when asset type is FA. */
+const CONTROL_COMPLIANCE = {
+  1:  { nist: 'Identify', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
+  2:  { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
+  3:  { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
+  4:  { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
+  5:  { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: null },
+  6:  { nist: 'Recover', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
+  7:  { nist: 'Protect', iso: 'ISMS Implementation', cis: null, soc2: 'Trust Services Criteria', pci: 'PCI-DSS (FA)' },
+  8:  { nist: 'Protect', iso: 'ISMS Implementation', cis: null, soc2: null },
+  9:  { nist: 'Detect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
+  10: { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: 'Trust Services Criteria' },
+  11: { nist: 'Detect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: null },
+  12: { nist: 'Protect', iso: 'ISMS Implementation', cis: 'Foundational Cyber Hygiene', soc2: null },
+  13: { nist: 'Respond', iso: 'ISMS Implementation', cis: null, soc2: 'Trust Services Criteria' }
+};
+
+const MFA_DEMO_CODE = '123456';
 
 const controlMap = {
     'phys_theft': [5, 7, 8], 'phys_destruct': [5, 6, 13], 'hr_insider': [2, 3, 4, 12],
@@ -242,6 +263,14 @@ function calculateRiskMath() {
     if ((currentPii === 'Y' || currentSpi === 'Y') && (threat === 'cyber_ext_leak' || threat === 'legal_dpa')) s = 5;
 
     const inherentRating = INHERIT[s + '-' + p] || 'Moderate';
+    const probDisp = document.getElementById('f-prob-display');
+    const sevDisp = document.getElementById('f-sev-display');
+    const probH = document.getElementById('f-prob');
+    const sevH = document.getElementById('f-sev');
+    if (probH) probH.value = String(p);
+    if (sevH) sevH.value = String(s);
+    if (probDisp) probDisp.value = String(p);
+    if (sevDisp) sevDisp.value = String(s);
     const rEl = document.getElementById('r-inherit');
     if(rEl) { rEl.textContent = inherentRating; rEl.style.color = riskColor(inherentRating); }
     
@@ -264,6 +293,10 @@ function calculateRiskMath() {
     
     const resEl = document.getElementById('r-residual');
     if(resEl) { resEl.textContent = residualRating; resEl.style.color = riskColor(residualRating); }
+    const resProbDisp = document.getElementById('f-res-prob-display');
+    const resSevDisp = document.getElementById('f-res-sev-display');
+    if (resProbDisp) resProbDisp.value = String(resP);
+    if (resSevDisp) resSevDisp.value = String(resS);
     
     const fbEl = document.getElementById('control-feedback');
     if (fbEl) fbEl.textContent = `(${activeValidCount} relevant mitigating controls applied)`;
@@ -287,6 +320,7 @@ function calculateRiskMath() {
     if(apSection && actTypeSelect) {
         apSection.style.display = (actTypeSelect.value === 'Accept' || residualRating === 'Very Low') ? 'none' : 'block';
     }
+    renderComplianceMapping();
 }
 
 function applyRiskTemplate(skipEngineUpdate = false) {
@@ -314,11 +348,65 @@ function riskBadge(r) { const cls = { 'Very Low': 'badge-vl', 'Low': 'badge-lo',
 // 4. AUTH, RBAC & SUPABASE SYNC
 // ==========================================
 
-function resolveRole(user) {
-    const email = (user?.email || '').toLowerCase();
-    if (email.includes('admin') || email.includes('ciso')) return 'admin';
-    if (email.includes('infosec') || email.includes('security')) return 'infosec';
+function resolveRoleFromEmail(email) {
+    const e = (email || '').toLowerCase();
+    if (e.includes('admin') || e.includes('ciso')) return 'admin';
+    if (e.includes('infosec') || e.includes('security')) return 'infosec';
     return 'user';
+}
+
+function effectiveRole(profile) {
+    if (!profile) return null;
+    if (profile.account_status === 'active' && profile.approved_role) return profile.approved_role;
+    return profile.requested_role || 'user';
+}
+
+function getActiveControlIds(assetId) {
+    if (assetId) return globalControls.filter(c => c.asset_id === assetId).map(c => c.ctrl_id);
+    const ids = [];
+    for (let i = 1; i <= 13; i++) {
+        const cb = document.getElementById('ctrl' + i);
+        if (cb && cb.checked && !cb.disabled) ids.push(i);
+    }
+    return ids;
+}
+
+function getFrameworksForControls(ctrlIds, assetType) {
+    const nist = new Set(), iso = new Set(), cis = new Set(), soc2 = new Set(), pci = new Set();
+    ctrlIds.forEach(id => {
+        const m = CONTROL_COMPLIANCE[id];
+        if (!m) return;
+        if (m.nist) nist.add('NIST CSF: ' + m.nist);
+        if (m.iso) iso.add('ISO/IEC 27001 & 27002: ' + m.iso);
+        if (m.cis) cis.add('CIS Controls: ' + m.cis);
+        if (m.soc2) soc2.add('SOC 2: ' + m.soc2);
+        if (m.pci && assetType === 'FA') pci.add('PCI-DSS: ' + m.pci);
+    });
+    return {
+        nist: [...nist].join('; ') || '—',
+        iso: [...iso].join('; ') || '—',
+        cis: [...cis].join('; ') || '—',
+        soc2: [...soc2].join('; ') || '—',
+        pci: assetType === 'FA' ? ([...pci].join('; ') || '—') : 'N/A (non-FA)'
+    };
+}
+
+function renderComplianceMapping() {
+    const panel = document.getElementById('compliance-mapping-panel');
+    const tags = document.getElementById('compliance-tags');
+    if (!panel || !tags) return;
+    const show = currentRole === 'infosec' || currentRole === 'admin';
+    panel.classList.toggle('hidden', !show);
+    if (!show) return;
+    const type = g('f-type');
+    const fw = getFrameworksForControls(getActiveControlIds(), type);
+    const items = [
+        ['NIST CSF', fw.nist], ['ISO 27001/27002', fw.iso], ['CIS', fw.cis],
+        ['SOC 2', fw.soc2], ['PCI-DSS', fw.pci]
+    ];
+    tags.innerHTML = items.map(([label, val]) =>
+        `<span class="compliance-tag"><strong>${label}</strong> ${val}</span>`
+    ).join('');
 }
 
 function roleLabel(role) {
@@ -328,6 +416,59 @@ function roleLabel(role) {
 function showAuthScreen() {
     document.getElementById('auth-screen')?.classList.remove('hidden');
     document.getElementById('app-shell')?.classList.add('hidden');
+    resetAuthSteps();
+}
+
+function resetAuthSteps() {
+    document.getElementById('auth-step-credentials')?.classList.remove('hidden');
+    document.getElementById('auth-step-mfa')?.classList.add('hidden');
+    document.getElementById('auth-step-pending')?.classList.add('hidden');
+    pendingMfaSession = null;
+}
+
+function showAuthTab(tab) {
+    const loginForm = document.getElementById('login-form');
+    const regForm = document.getElementById('register-form');
+    document.getElementById('tab-login')?.classList.toggle('active', tab === 'login');
+    document.getElementById('tab-register')?.classList.toggle('active', tab === 'register');
+    loginForm?.classList.toggle('hidden', tab !== 'login');
+    regForm?.classList.toggle('hidden', tab !== 'register');
+    const errEl = document.getElementById('login-error');
+    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+}
+
+function showPendingApproval(profile) {
+    document.getElementById('auth-step-credentials')?.classList.add('hidden');
+    document.getElementById('auth-step-mfa')?.classList.add('hidden');
+    document.getElementById('auth-step-pending')?.classList.remove('hidden');
+    const msg = document.getElementById('pending-approval-msg');
+    const who = profile.requested_role === 'infosec' ? 'an Admin (CISO)' : 'Info Sec or Admin';
+    if (msg) msg.textContent = `Your ${roleLabel(profile.requested_role)} account (${profile.email}) is pending approval by ${who}.`;
+}
+
+function showMfaStep() {
+    document.getElementById('auth-step-credentials')?.classList.add('hidden');
+    document.getElementById('auth-step-mfa')?.classList.remove('hidden');
+    const codeEl = document.getElementById('mfa-code');
+    if (codeEl) { codeEl.value = ''; codeEl.focus(); }
+}
+
+async function loadUserProfile(userId) {
+    const { data, error } = await supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle();
+    if (error) throw error;
+    return data;
+}
+
+async function ensureUserProfile(user) {
+    let profile = await loadUserProfile(user.id);
+    if (profile) return profile;
+    const role = resolveRoleFromEmail(user.email);
+    profile = {
+        id: user.id, email: user.email, requested_role: role,
+        approved_role: role, account_status: 'active'
+    };
+    await supabase.from('user_profiles').upsert(profile);
+    return profile;
 }
 
 function showAppShell() {
@@ -349,14 +490,47 @@ function formatAuthError(err) {
     return msg;
 }
 
-async function handleLogin(event) {
+async function handleRegister(event) {
     event.preventDefault();
-    if (!supabase) {
-        notify('Supabase is not initialized. Refresh the page.', true);
+    if (!supabase) return notify('Supabase is not initialized.', true);
+    const email = document.getElementById('register-email')?.value?.trim();
+    const password = document.getElementById('register-password')?.value;
+    const password2 = document.getElementById('register-password2')?.value;
+    const role = document.getElementById('register-role')?.value || 'user';
+    const errEl = document.getElementById('login-error');
+    if (password !== password2) {
+        if (errEl) { errEl.textContent = 'Passwords do not match.'; errEl.hidden = false; }
         return;
     }
+    const btn = document.getElementById('register-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+    try {
+        const { data, error } = await supabase.auth.signUp({
+            email, password,
+            options: { data: { requested_role: role } }
+        });
+        if (error) throw error;
+        if (data.user) {
+            await supabase.from('user_profiles').upsert({
+                id: data.user.id, email, requested_role: role, account_status: 'pending'
+            });
+        }
+        notify('Account created. Await approval before signing in.');
+        showAuthTab('login');
+    } catch (err) {
+        const text = formatAuthError(err);
+        if (errEl) { errEl.textContent = text; errEl.hidden = false; }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Create Account →'; }
+    }
+}
+
+async function handleLogin(event) {
+    event.preventDefault();
+    if (!supabase) return notify('Supabase is not initialized. Refresh the page.', true);
     const email = document.getElementById('login-email')?.value?.trim();
     const password = document.getElementById('login-password')?.value;
+    const selectedRole = document.getElementById('login-role')?.value || 'user';
     const errEl = document.getElementById('login-error');
     const btn = document.getElementById('login-btn');
     if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
@@ -364,21 +538,56 @@ async function handleLogin(event) {
     try {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        if (!data.session) throw new Error('No session returned. Check Auth settings in Supabase.');
-        await enterAuthenticatedApp(data.session);
+        if (!data.session) throw new Error('No session returned.');
+        const profile = await ensureUserProfile(data.session.user);
+        const role = effectiveRole(profile);
+        if (profile.account_status === 'pending') {
+            currentUser = data.session.user;
+            currentProfile = profile;
+            showAuthScreen();
+            showPendingApproval(profile);
+            return;
+        }
+        if (profile.account_status !== 'active' || profile.approved_role !== selectedRole) {
+            await supabase.auth.signOut();
+            throw new Error(`Role mismatch or inactive account. Sign in as ${roleLabel(profile.approved_role || role)}.`);
+        }
+        pendingMfaSession = data.session;
+        showAuthScreen();
+        showMfaStep();
     } catch (err) {
         const text = formatAuthError(err);
         if (errEl) { errEl.textContent = text; errEl.hidden = false; }
         notify(text, true);
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Sign In →'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Continue →'; }
     }
+}
+
+function cancelMfaStep() {
+    pendingMfaSession = null;
+    if (supabase) supabase.auth.signOut();
+    resetAuthSteps();
+}
+
+async function completeMfaStep() {
+    const code = document.getElementById('mfa-code')?.value?.trim();
+    if (!/^\d{6}$/.test(code || '')) return notify('Enter the 6-digit verification code.', true);
+    if (code !== MFA_DEMO_CODE && code !== '000000') {
+        return notify('Invalid MFA code. Use demo code 123456.', true);
+    }
+    if (!pendingMfaSession) return notify('Session expired. Sign in again.', true);
+    await enterAuthenticatedApp(pendingMfaSession);
+    pendingMfaSession = null;
 }
 
 async function handleLogout() {
     if (supabase) await supabase.auth.signOut();
     currentUser = null;
     currentRole = null;
+    currentProfile = null;
+    pendingMfaSession = null;
+    authUiReady = false;
     showAuthScreen();
     notify('Signed out.');
 }
@@ -388,7 +597,14 @@ let authUiReady = false;
 async function enterAuthenticatedApp(session) {
     if (!session?.user) return;
     currentUser = session.user;
-    currentRole = resolveRole(currentUser);
+    currentProfile = await ensureUserProfile(currentUser);
+    if (currentProfile.account_status !== 'active') {
+        showAuthScreen();
+        showPendingApproval(currentProfile);
+        return;
+    }
+    currentRole = currentProfile.approved_role || effectiveRole(currentProfile);
+    document.getElementById('auth-step-mfa')?.classList.add('hidden');
     showAppShell();
     const roleEl = document.getElementById('hdr-role');
     const userEl = document.getElementById('hdr-user');
@@ -404,24 +620,28 @@ async function enterAuthenticatedApp(session) {
         renderSectionContent(document.querySelector('.section.active')?.id?.replace('sec-', '') || landing);
     } catch (err) {
         console.error('Post-login data sync:', err);
-        notify('Signed in, but some data failed to load. Check database tables and RLS.', true);
+        notify('Signed in, but some data failed to load. Run setup_database.sql and enterprise_setup.sql.', true);
     }
     authUiReady = true;
 }
 
 function applyRoleUI() {
     document.body.dataset.role = currentRole || '';
-    document.querySelectorAll('.nav-admin-only, .nav-infosec-only, .nav-user-only').forEach(el => {
+    document.querySelectorAll('.nav-admin-only, .nav-infosec-only, .nav-user-only, .nav-admin-users').forEach(el => {
         el.style.display = 'none';
     });
+    document.querySelectorAll('.nav-export-only').forEach(el => el.classList.add('hidden'));
     if (currentRole === 'admin') {
-        document.querySelectorAll('.nav-admin-only').forEach(el => { el.style.display = ''; });
+        document.querySelectorAll('.nav-admin-only, .nav-admin-users').forEach(el => { el.style.display = ''; });
+        document.querySelectorAll('.nav-export-only').forEach(el => el.classList.remove('hidden'));
     } else if (currentRole === 'infosec') {
-        document.querySelectorAll('.nav-infosec-only, .nav-user-only').forEach(el => { el.style.display = ''; });
+        document.querySelectorAll('.nav-infosec-only, .nav-user-only, .nav-admin-users').forEach(el => { el.style.display = ''; });
+        document.querySelectorAll('.nav-export-only').forEach(el => el.classList.remove('hidden'));
     } else {
         document.querySelectorAll('.nav-user-only').forEach(el => { el.style.display = ''; });
     }
     setFormSectionsLocked(currentRole === 'user');
+    lockSystemDerivedRiskFields(currentRole !== 'user');
     const saveBtn = document.getElementById('btn-save-asset');
     if (saveBtn) {
         if (currentRole === 'user') saveBtn.textContent = 'Submit Draft →';
@@ -436,9 +656,16 @@ function setFormSectionsLocked(locked) {
     });
 }
 
+function lockSystemDerivedRiskFields(lock) {
+    ['f-prob-display', 'f-sev-display', 'f-res-prob-display', 'f-res-sev-display'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.readOnly = true; el.title = lock ? 'System Derived — cannot edit' : ''; }
+    });
+}
+
 function assetsForCurrentRole(list = globalAssets) {
     if (currentRole === 'infosec') {
-        return list.filter(a => a.status === ASSET_STATUS.DRAFT || a.status === ASSET_STATUS.REJECTED);
+        return list.filter(a => a.status === ASSET_STATUS.DRAFT);
     }
     if (currentRole === 'admin') {
         return list.filter(a => a.status === ASSET_STATUS.APPROVED || a.status === ASSET_STATUS.PENDING);
@@ -484,7 +711,11 @@ async function syncFromCloud(silent = false) {
         globalLogs = lData || globalLogs;
     } catch (err) {
         console.error('Cloud Sync Error: ', err);
-        if (!silent) notify('Failed to connect to Supabase DB.', true);
+        const msg = err?.message || String(err);
+        const hint = /relation.*does not exist|schema cache/i.test(msg)
+            ? ' Database tables missing — run supabase/setup_database.sql in the Supabase SQL Editor.'
+            : '';
+        if (!silent) notify('Failed to connect to Supabase DB.' + hint, true);
     }
 }
 
@@ -495,7 +726,7 @@ function refreshCloudInBackground() {
 }
 
 function updateWorkflowBadges() {
-    const drafts = globalAssets.filter(a => a.status === ASSET_STATUS.DRAFT || a.status === ASSET_STATUS.REJECTED).length;
+    const drafts = globalAssets.filter(a => a.status === ASSET_STATUS.DRAFT).length;
     const pending = globalAssets.filter(a => a.status === ASSET_STATUS.PENDING).length;
     const nd = document.getElementById('nav-drafts');
     const np = document.getElementById('nav-pending');
@@ -503,53 +734,20 @@ function updateWorkflowBadges() {
     if (np) np.textContent = pending;
 }
 
-// THE CLOUD AUTO-SEEDER: If Supabase is totally empty, push the 12 assets up!
 async function seedSupabaseIfEmpty() {
     try {
         const { data, error } = await supabase.from('Assets').select('id').limit(1);
-        if (error) return; // table might not exist yet
-        
-        if (data.length === 0) {
-            notify("Initializing Cloud Database with predefined assets...", false);
-            
-            const seedAssets = [
-                { id: 'IA-001', status: 'Approved', type: 'IA', name: 'University Clinic Medical Records', group_name: 'Clinic', hostname: 'CLINIC-DB-01', server: 'Clinic Primary DB', custodian: 'Clinic Records Admin', description: 'Physical and digital health records.', ip_address: '10.50.1.10', environment: 'Internal', department: 'Medical Services', pii: 'Y', spi: 'Y', corp: 'Y', ciaC: 3, ciaI: 3, ciaA: 3, ciaScore: 9, ciaClass: 'Restricted', riskCategory: 'cyber_ext_leak', riskDesc: 'Accidental data leak of sensitive health information.', prob: 3, sev: 5, inherit: 'High', residual: 'Moderate', actionType: 'Mitigate', actionStatus: 'In Progress', actionPlan: 'Enforce strict physical access and implement DLP tools.', actionOwner: 'Head Physician', actionDate: getDynamicDate(5) },
-                { status: 'Approved', id: 'PhA-001', type: 'PhA', name: 'CET Engineering Lab Computers', group_name: 'CET', hostname: 'CET-LAB-XX', server: 'Lab Workstations', custodian: 'CET Lab Technician', description: 'High-performance desktops used for CAD.', ip_address: 'DHCP', environment: 'Internal', department: 'Engineering', pii: 'N', spi: 'N', corp: 'N', ciaC: 1, ciaI: 1, ciaA: 2, ciaScore: 4, ciaClass: 'Internal Use', riskCategory: 'phys_theft', riskDesc: 'Theft of physical hardware components.', prob: 3, sev: 3, inherit: 'Moderate', residual: 'Moderate', actionType: 'Mitigate', actionStatus: 'Pending', actionPlan: 'Install physical cable locks on all lab PCs.', actionOwner: 'Security Office', actionDate: getDynamicDate(10) },
-                { status: 'Approved', id: 'SA-001', type: 'SA', name: 'PLM Library Management System', group_name: 'Library', hostname: 'LIB-APP-01', server: 'Library App Server', custodian: 'ITC Database Administrator', description: 'System managing book inventory.', ip_address: '10.20.5.15', environment: 'Hybrid', department: 'Library Services', pii: 'N', spi: 'N', corp: 'Y', ciaC: 2, ciaI: 3, ciaA: 3, ciaScore: 8, ciaClass: 'Restricted', riskCategory: 'cyber_int_vuln', riskDesc: 'Unpatched software vulnerabilities leading to system disruption.', prob: 4, sev: 3, inherit: 'High', residual: 'Moderate', actionType: 'Mitigate', actionStatus: 'Done', actionPlan: 'Establish a monthly patch management routine.', actionOwner: 'ITC SecOps', actionDate: getDynamicDate(-5) },
-                { status: 'Approved', id: 'PA-001', type: 'PA', name: 'University President & Board', group_name: 'Admin', hostname: 'EXEC-LPT-XX', server: 'Exec Endpoints', custodian: 'Office of the University Sec', description: 'Top-level executive management.', ip_address: 'DHCP', environment: 'Hybrid', department: 'Administration', pii: 'Y', spi: 'N', corp: 'Y', ciaC: 3, ciaI: 2, ciaA: 2, ciaScore: 7, ciaClass: 'Confidential', riskCategory: 'hr_insider', riskDesc: 'Targeted spear-phishing (Whaling) attempting to authorize wire transfers.', prob: 3, sev: 5, inherit: 'High', residual: 'High', actionType: 'Avoid', actionStatus: 'Pending', actionPlan: 'Cease email wire transfer authorizations entirely.', actionOwner: 'CISO', actionDate: getDynamicDate(40) },
-                { status: 'Approved', id: 'SV-001', type: 'SV', name: 'PLM Official Website', group_name: 'ITC', hostname: 'WEB-PROD-01', server: 'Public Web Server', custodian: 'ITC Web Development Team', description: 'Primary public-facing portal.', ip_address: '203.177.X.X', environment: 'Internet Facing', department: 'ITC', pii: 'N', spi: 'N', corp: 'Y', ciaC: 2, ciaI: 2, ciaA: 3, ciaScore: 7, ciaClass: 'Confidential', riskCategory: 'cyber_ext_ddos', riskDesc: 'DDoS attack rendering site inaccessible.', prob: 4, sev: 3, inherit: 'High', residual: 'Moderate', actionType: 'Transfer', actionStatus: 'In Progress', actionPlan: 'Route website traffic through a cloud DDoS mitigation service.', actionOwner: 'ITC Infra', actionDate: getDynamicDate(2) },
-                { status: 'Approved', id: 'FA-001', type: 'FA', name: 'University Cashier Main Vault', group_name: 'Finance', hostname: 'N/A', server: 'N/A', custodian: 'Head Cashier / Security', description: 'Physical safe holding daily collections.', ip_address: 'N/A', environment: 'Internal', department: 'Finance', pii: 'Y', spi: 'Y', corp: 'Y', ciaC: 3, ciaI: 3, ciaA: 3, ciaScore: 9, ciaClass: 'Restricted', riskCategory: 'phys_theft', riskDesc: 'Theft or armed robbery targeting physical cash collections.', prob: 2, sev: 4, inherit: 'Moderate', residual: 'Low', actionType: 'Transfer', actionStatus: 'Done', actionPlan: 'Insure the vault contents via third party.', actionOwner: 'Security', actionDate: getDynamicDate(60) },
-                { status: 'Approved', id: 'IA-002', type: 'IA', name: 'PLM Alumni Database', group_name: 'Alumni Office', hostname: 'ALUM-DB-01', server: 'Alumni Records DB', custodian: 'ITC Enterprise Systems Team', description: 'Contact info and employment history.', ip_address: '10.50.2.20', environment: 'Internal', department: 'Alumni Affairs', pii: 'Y', spi: 'Y', corp: 'Y', ciaC: 3, ciaI: 3, ciaA: 3, ciaScore: 9, ciaClass: 'Restricted', riskCategory: 'hr_insider', riskDesc: 'Unauthorized extraction of the database by an insider.', prob: 3, sev: 4, inherit: 'High', residual: 'High', actionType: 'Mitigate', actionStatus: 'Pending', actionPlan: 'Enforce strict RBAC limiting export capabilities.', actionOwner: 'ITC SecOps', actionDate: getDynamicDate(12) },
-                { status: 'Approved', id: 'PhA-002', type: 'PhA', name: 'Campus Security CCTV NVR', group_name: 'Security', hostname: 'SEC-NVR-01', server: 'Video Storage Array', custodian: 'ITC Infrastructure Team', description: 'NVR storing 30 days of security footage.', ip_address: '10.99.1.50', environment: 'Internal', department: 'Campus Security', pii: 'N', spi: 'N', corp: 'N', ciaC: 1, ciaI: 1, ciaA: 2, ciaScore: 4, ciaClass: 'Internal Use', riskCategory: 'phys_destruct', riskDesc: 'Hardware failure due to overheating in the security office closet.', prob: 3, sev: 4, inherit: 'High', residual: 'Moderate', actionType: 'Mitigate', actionStatus: 'In Progress', actionPlan: 'Relocate the NVR to the main climate-controlled server room.', actionOwner: 'Chief of Security', actionDate: getDynamicDate(45) },
-                { status: 'Approved', id: 'SA-002', type: 'SA', name: 'HR Payroll & Benefits System', group_name: 'HR', hostname: 'HR-APP-01', server: 'Payroll Application', custodian: 'ITC Database Administrator', description: 'System calculating faculty salaries.', ip_address: '10.30.1.10', environment: 'Internal', department: 'Human Resources', pii: 'N', spi: 'N', corp: 'Y', ciaC: 2, ciaI: 3, ciaA: 3, ciaScore: 8, ciaClass: 'Restricted', riskCategory: 'hr_insider', riskDesc: 'Disgruntled employee modifying salary bands.', prob: 2, sev: 5, inherit: 'Moderate', residual: 'Moderate', actionType: 'Mitigate', actionStatus: 'Pending', actionPlan: 'Implement strict segregation of duties (maker-checker rule).', actionOwner: 'HR Director', actionDate: getDynamicDate(8) },
-                { status: 'Approved', id: 'FA-002', type: 'FA', name: 'University Digital Banking Portal', group_name: 'Finance', hostname: 'BANK-GW-01', server: 'Banking Gateway', custodian: 'Finance IT Support', description: 'Online access to operational bank accounts.', ip_address: '10.40.1.5', environment: 'Internet Facing', department: 'Finance', pii: 'Y', spi: 'Y', corp: 'Y', ciaC: 3, ciaI: 3, ciaA: 3, ciaScore: 9, ciaClass: 'Restricted', riskCategory: 'cyber_int_unauth', riskDesc: 'Unauthorized access to admin accounts via credential stuffing.', prob: 3, sev: 5, inherit: 'High', residual: 'Low', actionType: 'Mitigate', actionStatus: 'Pending', actionPlan: 'Require physical hardware security keys for banking portal access.', actionOwner: 'VP for Finance', actionDate: getDynamicDate(50) },
-                { status: 'Approved', id: 'SV-002', type: 'SV', name: 'Cloud Student Email Services', group_name: 'ITC', hostname: 'CLOUD-MAIL', server: 'O365 Tenant', custodian: 'ITC Mail Admin', description: 'Student email hosting.', ip_address: 'Cloud', environment: 'Internet Facing', department: 'ITC', pii: 'N', spi: 'N', corp: 'Y', ciaC: 2, ciaI: 2, ciaA: 3, ciaScore: 7, ciaClass: 'Confidential', riskCategory: 'cyber_ext_supply', riskDesc: 'Supply chain breach of cloud provider.', prob: 2, sev: 4, inherit: 'Moderate', residual: 'Moderate', actionType: 'Transfer', actionStatus: 'Done', actionPlan: 'Managed via Microsoft SLA.', actionOwner: 'ITC Dir', actionDate: getDynamicDate(30) },
-                { status: 'Approved', id: 'SA-003', type: 'SA', name: 'PLM E-Learning LMS', group_name: 'Academic', hostname: 'LMS-APP-01', server: 'Moodle Server', custodian: 'Academic IT', description: 'Online modules and quizzes.', ip_address: '10.20.10.5', environment: 'Hybrid', department: 'Academic Affairs', pii: 'N', spi: 'N', corp: 'Y', ciaC: 2, ciaI: 3, ciaA: 3, ciaScore: 8, ciaClass: 'Restricted', riskCategory: 'cyber_ext_ddos', riskDesc: 'Volumetric DDoS during finals week.', prob: 3, sev: 3, inherit: 'Moderate', residual: 'Very Low', actionType: 'Accept', actionStatus: 'Done', actionPlan: 'Risk is accepted during off-peak seasons.', actionOwner: 'Dean', actionDate: getDynamicDate(100) }
-            ];
-            
-            const seedControls = [
-                { asset_id: 'IA-001', ctrl_id: 1 }, { asset_id: 'IA-001', ctrl_id: 3 }, { asset_id: 'IA-001', ctrl_id: 7 }, { asset_id: 'IA-001', ctrl_id: 12 },
-                { asset_id: 'PhA-001', ctrl_id: 5 }, { asset_id: 'PhA-001', ctrl_id: 8 },
-                { asset_id: 'SA-001', ctrl_id: 1 }, { asset_id: 'SA-001', ctrl_id: 11 },
-                { asset_id: 'PA-001', ctrl_id: 1 },
-                { asset_id: 'SV-001', ctrl_id: 10 }, { asset_id: 'SV-001', ctrl_id: 12 }, { asset_id: 'SV-001', ctrl_id: 13 },
-                { asset_id: 'FA-001', ctrl_id: 1 }, { asset_id: 'FA-001', ctrl_id: 2 }, { asset_id: 'FA-001', ctrl_id: 5 },
-                { asset_id: 'IA-002', ctrl_id: 1 }, { asset_id: 'IA-002', ctrl_id: 3 }, { asset_id: 'IA-002', ctrl_id: 12 },
-                { asset_id: 'PhA-002', ctrl_id: 1 }, { asset_id: 'PhA-002', ctrl_id: 5 }, { asset_id: 'PhA-002', ctrl_id: 6 },
-                { asset_id: 'SA-002', ctrl_id: 1 }, { asset_id: 'SA-002', ctrl_id: 2 }, { asset_id: 'SA-002', ctrl_id: 3 }, { asset_id: 'SA-002', ctrl_id: 4 },
-                { asset_id: 'FA-002', ctrl_id: 3 }, { asset_id: 'FA-002', ctrl_id: 4 }, { asset_id: 'FA-002', ctrl_id: 10 },
-                { asset_id: 'SV-002', ctrl_id: 1 }, { asset_id: 'SV-002', ctrl_id: 3 }, { asset_id: 'SV-002', ctrl_id: 4 },
-                { asset_id: 'SA-003', ctrl_id: 1 }, { asset_id: 'SA-003', ctrl_id: 6 }, { asset_id: 'SA-003', ctrl_id: 10 }, { asset_id: 'SA-003', ctrl_id: 13 }
-            ];
-
-            await supabase.from('Assets').insert(seedAssets);
-            await supabase.from('AssetControls').insert(seedControls);
-            await supabase.from('ReportData').insert([{ id: 1, docDate: '', docVersion: '', docAuthor: '', docApproval: '', docDesc: '', revHigh: '', initHigh: '', prepName: '', prepTitle: '', revName: '', revTitle: '', appName: '', appTitle: '' }]);
-
-            await syncFromCloud();
-            renderDashboard();
+        if (error) {
+            console.error('Seed check failed:', error);
+            if (/relation.*does not exist/i.test(error.message || '')) {
+                notify('Run supabase/setup_database.sql then enterprise_setup.sql and seed_plm_assets.sql.', true);
+            }
+            return;
         }
-    } catch(e) { console.error("Auto-Seed Failed:", e); }
+        if (data.length === 0) {
+            notify('No assets in database. Run supabase/seed_plm_assets.sql in Supabase SQL Editor (57 PLM assets).', true);
+        }
+    } catch (e) { console.error('Seed check:', e); }
 }
 
 function renderSectionContent(name) {
@@ -562,14 +760,15 @@ function renderSectionContent(name) {
   if (name === 'draft-queue') renderDraftQueue();
   if (name === 'pending-queue') renderPendingQueue();
   if (name === 'logs') renderSystemLogs();
+  if (name === 'users') renderUserManagement();
   updateWorkflowBadges();
 }
 
 function showSection(name) {
   const allowed = {
     user: ['add', 'guidelines'],
-    infosec: ['add', 'draft-queue', 'logs', 'guidelines'],
-    admin: ['dashboard', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'report', 'guidelines']
+    infosec: ['add', 'draft-queue', 'logs', 'users', 'guidelines'],
+    admin: ['dashboard', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'report', 'users', 'logs', 'guidelines']
   };
   if (currentRole && allowed[currentRole] && !allowed[currentRole].includes(name)) {
     notify('You do not have access to that section.', true);
@@ -616,6 +815,7 @@ function updateTagsUI() {
             cont.innerHTML += `<div class="tag">${CTRL_NAMES[n-1]} <span class="tag-close" onclick="removeTag(${n}, event)">×</span></div>`;
         }
     });
+    renderComplianceMapping();
 }
 
 function updateTags() { updateTagsUI(); runEnforcementEngine(); }
@@ -776,7 +976,7 @@ async function rejectAsset(id) {
   if (currentRole !== 'admin') return;
   const reason = prompt('Rejection notes for Info Sec (optional):') || '';
   const { error } = await supabase.from('Assets').update({
-    status: ASSET_STATUS.REJECTED,
+    status: ASSET_STATUS.DRAFT,
     reviewed_at: new Date().toISOString(),
     updated_by: currentUser?.email
   }).eq('id', id);
@@ -924,7 +1124,7 @@ function statusBadge(status) {
 function renderDraftQueue() {
   const tbody = document.getElementById('draft-queue-body');
   if (!tbody) return;
-  const items = globalAssets.filter(a => a.status === ASSET_STATUS.DRAFT || a.status === ASSET_STATUS.REJECTED);
+  const items = globalAssets.filter(a => a.status === ASSET_STATUS.DRAFT);
   if (!items.length) {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No draft assets in queue.</td></tr>';
     return;
@@ -966,6 +1166,69 @@ function renderPendingQueue() {
       '</' + D + '></' + D + '>'
     ].join('');
   }).join('');
+}
+
+async function renderUserManagement() {
+  const tbody = document.getElementById('users-body');
+  if (!tbody || !supabase) return;
+  tbody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
+  const { data, error } = await supabase.from('user_profiles').select('*').order('created_at', { ascending: false });
+  if (error) {
+    tbody.innerHTML = `<tr><td colspan="4">Error: ${error.message}. Run enterprise_setup.sql.</td></tr>`;
+    return;
+  }
+  const pending = (data || []).filter(p => p.account_status === 'pending');
+  if (!pending.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No pending account approvals.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = pending.map(p => {
+    const canApprove =
+      (currentRole === 'admin') ||
+      (currentRole === 'infosec' && p.requested_role === 'user');
+    const actions = canApprove
+      ? `<button class="btn btn-sm btn-success" onclick="approveUserAccount('${p.id}')">Approve</button>
+         <button class="btn btn-sm btn-danger" onclick="rejectUserAccount('${p.id}')">Reject</button>`
+      : '<span style="color:var(--text3)">Awaiting Admin</span>';
+    return `<tr>
+      <td>${p.email}</td>
+      <td>${roleLabel(p.requested_role)}</td>
+      <td><span class="badge badge-mo">Pending</span></td>
+      <td>${actions}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function approveUserAccount(userId) {
+  if (!currentUser) return;
+  const { data: target } = await supabase.from('user_profiles').select('*').eq('id', userId).single();
+  if (!target) return notify('User not found.', true);
+  if (currentRole === 'infosec' && target.requested_role !== 'user') {
+    return notify('Info Sec can only approve Standard User accounts.', true);
+  }
+  const { error } = await supabase.from('user_profiles').update({
+    account_status: 'active',
+    approved_role: target.requested_role,
+    approved_by: currentUser.id,
+    approved_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }).eq('id', userId);
+  if (error) return notify(error.message, true);
+  await logSystemEvent('USER_APPROVED', `Approved ${target.email} as ${target.requested_role}`);
+  notify(`Account ${target.email} approved.`);
+  renderUserManagement();
+}
+
+async function rejectUserAccount(userId) {
+  if (currentRole !== 'admin' && currentRole !== 'infosec') return;
+  const { error } = await supabase.from('user_profiles').update({
+    account_status: 'rejected',
+    updated_at: new Date().toISOString()
+  }).eq('id', userId);
+  if (error) return notify(error.message, true);
+  await logSystemEvent('USER_REJECTED', `Rejected user ${userId}`);
+  notify('Account rejected.');
+  renderUserManagement();
 }
 
 function renderSystemLogs() {
@@ -1212,12 +1475,14 @@ function excelRiskFill(rating) {
 }
 
 async function exportDataXLSX() {
-    if (currentRole !== 'admin') return notify('Only CISO/Admin can export the finalized register.', true);
+    if (currentRole !== 'admin' && currentRole !== 'infosec') {
+        return notify('Export is restricted to Info Sec and Admin roles.', true);
+    }
     if (typeof ExcelJS === 'undefined') { notify('ExcelJS library not loaded.', true); return; }
 
     const rep = globalReport;
     const assets = approvedAssetsOnly();
-    const headers = ['Asset ID', 'Name', 'Description', 'Group', 'Hostname', 'Server', 'Custodian', 'IP', 'Environment', 'Department', 'Type', 'PII', 'SPI', 'Corp', 'C', 'I', 'A', 'Score', 'Class', 'Risk', 'Prob', 'Sev', 'Inherent', 'Residual', 'Strategy', 'Action Status', 'Action Plan', 'Owner', 'Target Date', 'Workflow Status'];
+    const headers = ['Asset ID', 'Name', 'Description', 'Group', 'Hostname', 'Server', 'Custodian', 'IP', 'Environment', 'Department', 'Type', 'PII', 'SPI', 'Corp', 'C', 'I', 'A', 'Score', 'Class', 'Risk', 'Prob', 'Sev', 'Inherent', 'Residual', 'Strategy', 'Action Status', 'Action Plan', 'Owner', 'Target Date', 'Workflow Status', 'NIST CSF', 'ISO 27001/27002', 'CIS Controls', 'SOC 2', 'PCI-DSS'];
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'ImpactLens';
@@ -1274,10 +1539,13 @@ async function exportDataXLSX() {
     styleHeaderRow(wsData, hdrRow.number, headers.length);
 
     assets.forEach(a => {
+        const ctrlIds = globalControls.filter(c => c.asset_id === a.id).map(c => c.ctrl_id);
+        const fw = getFrameworksForControls(ctrlIds, a.type);
         const row = wsData.addRow([
             a.id, a.name, a.description, a.group_name, a.hostname, a.server, a.custodian, a.ip_address, a.environment, a.department,
             a.type, a.pii, a.spi, a.corp, a.ciaC, a.ciaI, a.ciaA, a.ciaScore, a.ciaClass, a.riskDesc, a.prob, a.sev, a.inherit, a.residual,
-            a.actionType, a.actionStatus, a.actionPlan, a.actionOwner, a.actionDate, a.status
+            a.actionType, a.actionStatus, a.actionPlan, a.actionOwner, a.actionDate, a.status,
+            fw.nist, fw.iso, fw.cis, fw.soc2, fw.pci
         ]);
         const inhCell = row.getCell(23);
         const resCell = row.getCell(24);
@@ -1345,3 +1613,9 @@ async function exportDataXLSX() {
 
 window.handleLogin = handleLogin;
 window.handleLogout = handleLogout;
+window.handleRegister = handleRegister;
+window.showAuthTab = showAuthTab;
+window.completeMfaStep = completeMfaStep;
+window.cancelMfaStep = cancelMfaStep;
+window.approveUserAccount = approveUserAccount;
+window.rejectUserAccount = rejectUserAccount;

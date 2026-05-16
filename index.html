@@ -16,22 +16,60 @@
 <body>
 
 <div id="auth-screen" class="auth-screen">
-  <div class="auth-panel">
+  <div class="auth-panel auth-panel-wide">
     <div class="auth-brand">
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="filter: drop-shadow(0 0 8px rgba(200,255,0,0.5));">
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
       </svg>
       <div>
         <div class="auth-title">IMPACTLENS</div>
-        <div class="auth-subtitle">Phase 2 — Enterprise Risk Assessment</div>
+        <div class="auth-subtitle">Enterprise Risk Assessment — PLM ISMS</div>
       </div>
     </div>
-    <form id="login-form" onsubmit="handleLogin(event)">
-      <div class="field"><label>Email</label><input type="email" id="login-email" required placeholder="you@organization.local" autocomplete="username"></div>
-      <div class="field"><label>Password</label><input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password"></div>
-      <button type="submit" class="btn btn-primary auth-submit" id="login-btn">Sign In →</button>
-    </form>
-    <p class="auth-hint">Create users in <a href="https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/users" target="_blank" rel="noopener">Supabase → Authentication → Users</a> (check <strong>Auto Confirm</strong>). Role by email: <code>user@</code> · <code>infosec@</code> · <code>admin@</code> / <code>ciso@</code></p>
+    <div class="auth-tabs">
+      <button type="button" class="auth-tab active" id="tab-login" onclick="showAuthTab('login')">Sign In</button>
+      <button type="button" class="auth-tab" id="tab-register" onclick="showAuthTab('register')">Register</button>
+    </div>
+    <div id="auth-step-credentials">
+      <form id="login-form" onsubmit="handleLogin(event)">
+        <div class="field"><label>Role</label>
+          <select id="login-role" required>
+            <option value="user">Standard User</option>
+            <option value="infosec">Info Sec</option>
+            <option value="admin">Admin (CISO)</option>
+          </select>
+        </div>
+        <div class="field"><label>Email</label><input type="email" id="login-email" required placeholder="name@plm.edu.ph" autocomplete="username"></div>
+        <div class="field"><label>Password</label><input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password"></div>
+        <button type="submit" class="btn btn-primary auth-submit" id="login-btn">Continue →</button>
+      </form>
+      <form id="register-form" class="hidden" onsubmit="handleRegister(event)">
+        <div class="field"><label>Requested Role</label>
+          <select id="register-role" required>
+            <option value="user">Standard User</option>
+            <option value="infosec">Info Sec</option>
+            <option value="admin">Admin (CISO)</option>
+          </select>
+        </div>
+        <div class="field"><label>PLM Email</label><input type="email" id="register-email" required placeholder="name@plm.edu.ph"></div>
+        <div class="field"><label>Password</label><input type="password" id="register-password" required minlength="8" placeholder="Min. 8 characters"></div>
+        <div class="field"><label>Confirm Password</label><input type="password" id="register-password2" required placeholder="Repeat password"></div>
+        <p class="auth-hint auth-hint-inline">Standard Users need Info Sec or Admin approval. Info Sec accounts need Admin approval.</p>
+        <button type="submit" class="btn btn-primary auth-submit" id="register-btn">Create Account →</button>
+      </form>
+    </div>
+    <div id="auth-step-mfa" class="hidden">
+      <p class="auth-mfa-msg">A verification code was sent to your email.<br><strong>Demo code:</strong> <code id="mfa-demo-code">123456</code></p>
+      <div class="field"><label>6-Digit MFA Code</label><input type="text" id="mfa-code" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" placeholder="000000" autocomplete="one-time-code"></div>
+      <button type="button" class="btn btn-primary auth-submit" id="mfa-btn" onclick="completeMfaStep()">Verify & Enter →</button>
+      <button type="button" class="btn btn-sm auth-back" onclick="cancelMfaStep()">← Back</button>
+    </div>
+    <div id="auth-step-pending" class="hidden auth-pending-box">
+      <h3>Account Pending Approval</h3>
+      <p id="pending-approval-msg">Your account is awaiting approval.</p>
+      <button type="button" class="btn" onclick="handleLogout()">Sign Out</button>
+    </div>
+    <p class="auth-hint">Master admin: <code>admin@plm.edu.ph</code> — create in <a href="https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/users" target="_blank" rel="noopener">Supabase Auth</a>, then run <code>enterprise_setup.sql</code>.</p>
     <p id="login-error" class="auth-error" hidden></p>
   </div>
 </div>
@@ -62,7 +100,7 @@
     <div class="header-stat role-pill">Role: <span id="hdr-role">—</span></div>
     <div class="header-stat user-pill">User: <span id="hdr-user">—</span></div>
     <div style="display: flex; gap: 8px; margin-left: 12px;">
-      <button class="btn btn-sm btn-success nav-admin-only" onclick="exportDataXLSX()">▤ Export</button>
+      <button class="btn btn-sm btn-success nav-export-only hidden" onclick="exportDataXLSX()">▤ Export</button>
       <button class="btn btn-sm" onclick="handleLogout()">Sign Out</button>
     </div>
   </div>
@@ -76,7 +114,7 @@
     <div class="nav-section nav-admin-only"><div class="nav-label">Approval</div><div class="nav-item" data-section="pending-queue" onclick="showSection('pending-queue')"><span class="nav-icon">[◎]</span> Pending Approval <span class="nav-badge" id="nav-pending" style="color:var(--warn)">0</span></div></div>
     <div class="nav-section nav-admin-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="register" onclick="showSection('register')"><span class="nav-icon">[≡]</span> Asset Table <span class="nav-badge" id="nav-total">0</span></div></div>
     <div class="nav-section nav-admin-only"><div class="nav-label">Analysis</div><div class="nav-item" data-section="risk" onclick="showSection('risk')"><span class="nav-icon">[△]</span> Risk Register</div><div class="nav-item" data-section="controls" onclick="showSection('controls')"><span class="nav-icon">[✓]</span> Control Metrics</div><div class="nav-item" data-section="actions" onclick="showSection('actions')"><span class="nav-icon">[!]</span> Action Plans <span class="nav-badge" id="nav-actions" style="color:var(--warn)">0</span></div></div>
-    <div class="nav-section nav-infosec-only"><div class="nav-label">Audit</div><div class="nav-item" data-section="logs" onclick="showSection('logs')"><span class="nav-icon">[⌗]</span> System Logs</div></div>
+    <div class="nav-section nav-infosec-only nav-admin-users"><div class="nav-label">Governance</div><div class="nav-item" data-section="users" onclick="showSection('users')"><span class="nav-icon">[◎]</span> User Management</div><div class="nav-item" data-section="logs" onclick="showSection('logs')"><span class="nav-icon">[⌗]</span> System Logs</div></div>
     <div class="nav-section"><div class="nav-label">Documentation</div><div class="nav-item nav-admin-only" data-section="report" onclick="showSection('report')"><span class="nav-icon">[✎]</span> Reporting & Sign-offs</div><div class="nav-item" data-section="guidelines" onclick="showSection('guidelines')"><span class="nav-icon">[?]</span> Risk Guidelines</div></div>
   </nav>
 
@@ -108,7 +146,7 @@
     </div>
 
     <div id="sec-add" class="section">
-      <div class="page-header"><div><div class="page-title" id="form-title">INSERT <span>RECORD</span></div></div><p class="page-desc">Workflow: <span id="form-workflow-status" class="badge badge-type">Draft</span></p></div></div>
+      <div class="page-header"><div><div class="page-title" id="form-title">INSERT <span>RECORD</span></div><p class="page-desc">Workflow: <span id="form-workflow-status" class="badge badge-type">Draft</span></p></div>
       
       <div class="card">
         <div class="card-header">01 — Primary Details & Network Context</div>
@@ -204,12 +242,12 @@
         
         <div class="form-row grid-2" style="margin-top:16px;">
           <div class="field">
-              <label>Inherent Probability (1-5) 🔒</label>
+              <label>Inherent Probability (1-5) — System Derived</label>
               <input type="hidden" id="f-prob" value="3">
               <input type="text" id="f-prob-display" readonly style="background:var(--bg4); cursor:not-allowed; font-weight:600;" placeholder="Auto-calculated...">
           </div>
           <div class="field">
-              <label>Inherent Severity (1-5) 🔒</label>
+              <label>Inherent Severity (1-5) — System Derived</label>
               <input type="hidden" id="f-sev" value="3">
               <input type="text" id="f-sev-display" readonly style="background:var(--bg4); cursor:not-allowed; font-weight:600;" placeholder="Auto-calculated...">
           </div>
@@ -239,24 +277,36 @@
             </div>
           </div>
           <div class="selected-tags" id="selected-controls-tags"></div>
+        <div id="compliance-mapping-panel" class="compliance-panel hidden">
+          <label style="margin-top:16px;display:block;color:var(--accent2);">Framework Compliance Mapping</label>
+          <div id="compliance-tags" class="compliance-tags"></div>
+          <p class="compliance-hint">Mapped from implemented controls — NIST CSF, ISO/IEC 27001/27002, CIS, SOC 2, PCI-DSS (FA assets).</p>
+        </div>
+
         </div>
       </div>
 
       <div class="card role-locked-section" id="sec-action-plan">
         <div class="card-header">04 — Residual risk & action plan</div>
-        <div style="display:flex; gap:16px; margin-bottom:16px; align-items:center;">
-           <span style="font-family:var(--mono); color:var(--text3); text-transform:uppercase; font-size:10px;">Calculated Residual Risk:</span>
+        <div style="display:flex; gap:16px; margin-bottom:16px; align-items:center; flex-wrap:wrap;">
+           <span style="font-family:var(--mono); color:var(--text3); text-transform:uppercase; font-size:10px;">System Derived Inherent Risk:</span>
+           <span class="badge badge-mo" id="r-inherit" style="font-size:14px; padding:6px 12px;">Moderate</span>
+           <span class="metric-enforced">Enforced Metric</span>
+        </div>
+        <div style="display:flex; gap:16px; margin-bottom:16px; align-items:center; flex-wrap:wrap;">
+           <span style="font-family:var(--mono); color:var(--text3); text-transform:uppercase; font-size:10px;">System Derived Residual Risk:</span>
            <span class="badge badge-mo" id="r-residual" style="font-size:14px; padding:6px 12px;">Moderate</span>
+           <span class="metric-enforced">Enforced Metric</span>
            <span id="control-feedback" style="font-size:11px; color:var(--text2); margin-left:8px;"></span>
         </div>
         
         <div class="form-row grid-2" style="margin-bottom:16px; padding:12px; background:var(--bg3); border-radius:4px; border:1px solid var(--border);">
             <div class="field" style="margin-bottom:0;">
-                <label>Residual Probability (Post-Controls) 🔒</label>
+                <label>Residual Probability — System Derived</label>
                 <input type="text" id="f-res-prob-display" readonly style="background:var(--bg4); cursor:not-allowed; font-weight:600;">
             </div>
             <div class="field" style="margin-bottom:0;">
-                <label>Residual Severity (Post-Controls) 🔒</label>
+                <label>Residual Severity — System Derived</label>
                 <input type="text" id="f-res-sev-display" readonly style="background:var(--bg4); cursor:not-allowed; font-weight:600;">
             </div>
         </div>
@@ -302,6 +352,11 @@
     <div id="sec-pending-queue" class="section">
       <div class="page-header"><div><div class="page-title">PENDING <span>APPROVAL</span></div><div class="page-desc">// CISO review queue</div></div></div>
       <div id="pending-queue-content"></div>
+    </div>
+
+    <div id="sec-users" class="section">
+      <div class="page-header"><div><div class="page-title">USER <span>MANAGEMENT</span></div><div class="page-desc">// Approve Standard User and Info Sec accounts</div></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Email</th><th>Requested Role</th><th>Status</th><th>Actions</th></tr></thead><tbody id="users-body"></tbody></table></div>
     </div>
     <div id="sec-logs" class="section">
       <div class="page-header"><div><div class="page-title">SYSTEM <span>LOGS</span></div><div class="page-desc">// Audit trail</div></div></div>
@@ -384,7 +439,7 @@
             <div><div class="page-title">REPORTING & <span>SIGN-OFFS</span></div><div class="page-desc">// Document context, executive highlights, and official management approvals</div></div>
             <div style="display:flex; gap: 8px;">
                 <button class="btn btn-primary" onclick="saveReportData()">Save Report Details</button>
-                <button class="btn btn-success" onclick="exportDataXLSX()">▤ Export Excel</button>
+                <button class="btn btn-success nav-export-only hidden" onclick="exportDataXLSX()">▤ Export Excel</button>
             </div>
         </div>
         
