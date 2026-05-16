@@ -59,8 +59,11 @@
     <div class="header-stat" style="background: rgba(255,153,0,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--warn);">
         Action Plans Due (14 days): <span id="hdr-deadlines" style="color:var(--warn); font-weight:bold;">0</span>
     </div>
+    <div class="header-stat role-pill">Role: <span id="hdr-role">—</span></div>
+    <div class="header-stat user-pill">User: <span id="hdr-user">—</span></div>
     <div style="display: flex; gap: 8px; margin-left: 12px;">
-      <button class="btn btn-sm btn-success" onclick="exportDataXLSX()">▤ Export</button>
+      <button class="btn btn-sm btn-success nav-admin-only" onclick="exportDataXLSX()">▤ Export</button>
+      <button class="btn btn-sm" onclick="handleLogout()">Sign Out</button>
     </div>
   </div>
 </header>
