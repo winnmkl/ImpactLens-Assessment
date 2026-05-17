@@ -830,19 +830,183 @@ function showAuthScreen() {
     if (trig) trig.style.display = 'none';
     document.getElementById('notif-dropdown')?.classList.add('hidden');
     resetAuthSteps();
+    // Lazily boot the background wave animation the first time we land here.
+    initAuthWave();
 }
 
 function resetAuthSteps() {
+    // Reset back to the role-selector stage (Stage 1)
+    const stageRoles = document.getElementById('auth-stage-roles');
+    const stageForm  = document.getElementById('auth-stage-form');
+    const page       = document.getElementById('auth-page');
+    if (page) page.classList.remove('out');
+    if (stageRoles) stageRoles.classList.remove('hidden');
+    if (stageForm)  stageForm.classList.add('hidden');
+
+    // Reset inner form sub-steps to the credentials view
     document.getElementById('auth-step-credentials')?.classList.remove('hidden');
     document.getElementById('auth-step-verify')?.classList.add('hidden');
     document.getElementById('auth-step-pending')?.classList.add('hidden');
     showAuthTab('login');
-    const errEl = document.getElementById('login-error');
-    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+
+    // Clear any stale error message
+    clearAuthError();
+    // Forget any half-typed password from the previous attempt
+    const pw  = document.getElementById('login-password');
+    const pw1 = document.getElementById('register-password');
+    const pw2 = document.getElementById('register-password2');
+    if (pw)  pw.value  = '';
+    if (pw1) pw1.value = '';
+    if (pw2) pw2.value = '';
+}
+
+function clearAuthError() {
+    ['login-error', 'register-error'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.hidden = true; el.textContent = ''; }
+    });
+}
+
+function showAuthError(text, opts = {}) {
+    // Show on whichever tab is currently active; default to login-error.
+    const onRegister = !document.getElementById('register-form')?.classList.contains('hidden');
+    const elId = (opts.target === 'register' || (opts.target == null && onRegister))
+        ? 'register-error' : 'login-error';
+    const el = document.getElementById(elId);
+    if (!el) return;
+    el.textContent = text;
+    el.hidden = false;
+    // Re-trigger the shake animation
+    el.style.animation = 'none';
+    void el.offsetWidth;
+    el.style.animation = '';
+}
+
+/* -----------------------------------------------------------
+   Role selector → form transition (Stage 1 ↔ Stage 2)
+   ----------------------------------------------------------- */
+const AUTH_ROLE_LABELS = { user: 'Standard User', infosec: 'Info Sec', admin: 'Admin (CISO)' };
+
+function _createAuthRipple(el, ev) {
+    const rect = el.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height);
+    const x = (ev?.clientX ?? rect.left + rect.width / 2) - rect.left;
+    const y = (ev?.clientY ?? rect.top  + rect.height / 2) - rect.top;
+    const ripple = document.createElement('span');
+    ripple.className = 'ripple';
+    ripple.style.cssText =
+        `width:${size}px;height:${size}px;left:${x - size/2}px;top:${y - size/2}px;`;
+    el.appendChild(ripple);
+    setTimeout(() => ripple.remove(), 520);
+}
+
+function setAuthRole(role) {
+    const safeRole = ['user', 'infosec', 'admin'].includes(role) ? role : 'user';
+    const loginRoleEl = document.getElementById('login-role');
+    const regRoleEl   = document.getElementById('register-role');
+    if (loginRoleEl) loginRoleEl.value = safeRole;
+    if (regRoleEl)   regRoleEl.value   = safeRole;
+    const label = document.getElementById('auth-role-pill-label');
+    if (label) label.textContent = AUTH_ROLE_LABELS[safeRole] || safeRole;
+}
+
+function selectAuthRole(el, role, ev) {
+    if (ev) _createAuthRipple(el, ev);
+    // Visually highlight the chosen card while the transition plays
+    document.querySelectorAll('#auth-screen .auth-role-btn').forEach(b => {
+        b.style.opacity = (b === el) ? '1' : '0.35';
+        if (b !== el) b.style.transform = 'translateY(0)';
+    });
+    el.style.borderColor = 'rgba(200,255,0,0.55)';
+
+    setAuthRole(role);
+    clearAuthError();
+
+    setTimeout(() => {
+        const stageRoles = document.getElementById('auth-stage-roles');
+        const stageForm  = document.getElementById('auth-stage-form');
+        if (stageRoles) stageRoles.classList.add('hidden');
+        if (stageForm)  stageForm.classList.remove('hidden');
+        // Reset the cards for next time
+        document.querySelectorAll('#auth-screen .auth-role-btn').forEach(b => {
+            b.style.opacity = '';
+            b.style.borderColor = '';
+        });
+        // Focus first input for keyboard users
+        showAuthTab('login');
+        document.getElementById('login-email')?.focus();
+    }, 320);
+}
+window.selectAuthRole = selectAuthRole;
+
+function backToRoleSelect() {
+    clearAuthError();
+    const stageRoles = document.getElementById('auth-stage-roles');
+    const stageForm  = document.getElementById('auth-stage-form');
+    if (stageRoles) stageRoles.classList.remove('hidden');
+    if (stageForm)  stageForm.classList.add('hidden');
+    // Reset any sub-step (verify/pending) so a returning user lands on creds next time
+    document.getElementById('auth-step-credentials')?.classList.remove('hidden');
+    document.getElementById('auth-step-verify')?.classList.add('hidden');
+    document.getElementById('auth-step-pending')?.classList.add('hidden');
+}
+window.backToRoleSelect = backToRoleSelect;
+
+/* -----------------------------------------------------------
+   Background wave canvas — runs only while the auth screen is visible
+   ----------------------------------------------------------- */
+let _authWaveInited = false;
+function initAuthWave() {
+    if (_authWaveInited) return;
+    const canvas = document.getElementById('auth-wave-canvas');
+    if (!canvas || !canvas.getContext) return;
+    _authWaveInited = true;
+    const ctx = canvas.getContext('2d');
+    let W = 0, H = 0, t = 0;
+
+    function resize() {
+        W = canvas.width  = window.innerWidth;
+        H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    const waves = [
+        { amp: 90,  freq: 0.0028, speed:  0.008, yBase: 0.40, color: 'rgba(200,255,0,0.28)', lw: 1.6 },
+        { amp: 70,  freq: 0.0035, speed: -0.010, yBase: 0.55, color: 'rgba(200,255,0,0.18)', lw: 1.1 },
+        { amp: 110, freq: 0.0022, speed:  0.006, yBase: 0.68, color: 'rgba(200,255,0,0.10)', lw: 0.8 }
+    ];
+
+    function authScreenVisible() {
+        const s = document.getElementById('auth-screen');
+        return s && !s.classList.contains('hidden');
+    }
+
+    function frame() {
+        if (authScreenVisible()) {
+            ctx.clearRect(0, 0, W, H);
+            for (const w of waves) {
+                ctx.beginPath();
+                ctx.strokeStyle = w.color;
+                ctx.lineWidth = w.lw;
+                for (let x = 0; x <= W; x += 2) {
+                    const y = H * w.yBase + Math.sin(x * w.freq + t * w.speed * 60) * w.amp;
+                    if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+            }
+            t += 0.016;
+        }
+        requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
 }
 
 function showVerificationStep(email) {
     pendingVerifyEmail = email;
+    // Make sure we are on Stage 2 (the form card hosts the verify sub-step)
+    document.getElementById('auth-stage-roles')?.classList.add('hidden');
+    document.getElementById('auth-stage-form')?.classList.remove('hidden');
     document.getElementById('auth-step-credentials')?.classList.add('hidden');
     document.getElementById('auth-step-verify')?.classList.remove('hidden');
     document.getElementById('auth-step-pending')?.classList.add('hidden');
@@ -868,11 +1032,14 @@ function showAuthTab(tab) {
     document.getElementById('tab-register')?.classList.toggle('active', tab === 'register');
     loginForm?.classList.toggle('hidden', tab !== 'login');
     regForm?.classList.toggle('hidden', tab !== 'register');
-    const errEl = document.getElementById('login-error');
-    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+    // Clear both error banners when switching tabs so the user sees a clean slate.
+    clearAuthError();
 }
 
 function showPendingApproval(profile) {
+    // Make sure we are on Stage 2 so the pending sub-step is visible
+    document.getElementById('auth-stage-roles')?.classList.add('hidden');
+    document.getElementById('auth-stage-form')?.classList.remove('hidden');
     document.getElementById('auth-step-credentials')?.classList.add('hidden');
     document.getElementById('auth-step-verify')?.classList.add('hidden');
     document.getElementById('auth-step-pending')?.classList.remove('hidden');
@@ -921,14 +1088,22 @@ async function handleRegister(event) {
     const password = document.getElementById('register-password')?.value;
     const password2 = document.getElementById('register-password2')?.value;
     const role = document.getElementById('register-role')?.value || 'user';
-    const errEl = document.getElementById('login-error');
-    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+    clearAuthError();
+    if (!email || !password) {
+        showAuthError('Please fill in every field before creating an account.', { target: 'register' });
+        return;
+    }
+    if (password.length < 8) {
+        showAuthError('Password must be at least 8 characters.', { target: 'register' });
+        return;
+    }
     if (password !== password2) {
-        if (errEl) { errEl.textContent = 'Passwords do not match.'; errEl.hidden = false; }
+        showAuthError('Passwords do not match.', { target: 'register' });
         return;
     }
     const btn = document.getElementById('register-btn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+    const originalLabel = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = 'Creating account…'; }
     try {
         const { error } = await supabase.auth.signUp({
             email,
@@ -944,10 +1119,9 @@ async function handleRegister(event) {
         showVerificationStep(email);
         notify('Verification email sent. Click the link in your inbox.');
     } catch (err) {
-        const text = formatAuthError(err);
-        if (errEl) { errEl.textContent = text; errEl.hidden = false; }
+        showAuthError(formatAuthError(err), { target: 'register' });
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Create Account →'; }
+        if (btn) { btn.disabled = false; btn.innerHTML = originalLabel || 'Create Account <span aria-hidden="true">→</span>'; }
     }
 }
 
@@ -957,10 +1131,14 @@ async function handleLogin(event) {
     const email = document.getElementById('login-email')?.value?.trim();
     const password = document.getElementById('login-password')?.value;
     const selectedRole = document.getElementById('login-role')?.value || 'user';
-    const errEl = document.getElementById('login-error');
     const btn = document.getElementById('login-btn');
-    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
-    if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+    const originalLabel = btn ? btn.innerHTML : '';
+    clearAuthError();
+    if (!email || !password) {
+        showAuthError('Enter your email and password to sign in.', { target: 'login' });
+        return;
+    }
+    if (btn) { btn.disabled = true; btn.innerHTML = 'Authenticating…'; }
     try {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) {
@@ -970,14 +1148,23 @@ async function handleLogin(event) {
             }
             throw error;
         }
-        if (!data.session) throw new Error('No session returned.');
+        if (!data?.session) throw new Error('No session returned.');
+        // enterAuthenticatedApp will either move us into the app shell OR keep
+        // us on the auth screen with the appropriate error/pending message.
         await enterAuthenticatedApp(data.session, selectedRole);
     } catch (err) {
         const text = formatAuthError(err);
-        if (errEl) { errEl.textContent = text; errEl.hidden = false; }
+        showAuthError(text, { target: 'login' });
         notify(text, true);
+        // Belt-and-suspenders: if anything went wrong, make sure we are NOT
+        // showing the app shell. The error stays visible until next attempt.
+        document.getElementById('app-shell')?.classList.add('hidden');
+        document.getElementById('auth-screen')?.classList.remove('hidden');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Sign In →'; }
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalLabel || 'Authenticate <span aria-hidden="true">→</span>';
+        }
     }
 }
 
@@ -1026,6 +1213,9 @@ function forceResetSession() {
 window.forceResetSession = forceResetSession;
 
 let authUiReady = false;
+// Tells the global onAuthStateChange listener to skip its reset cycle when
+// we intentionally trigger a signOut and want to keep the current error banner.
+let suppressAuthReset = false;
 
 async function enterAuthenticatedApp(session, requestedRole = null) {
     if (!session?.user) return;
@@ -1045,10 +1235,27 @@ async function enterAuthenticatedApp(session, requestedRole = null) {
         return;
     }
     if (requestedRole && currentProfile.approved_role !== requestedRole) {
-        await supabase.auth.signOut();
-        const errEl = document.getElementById('login-error');
-        const text = `This account is approved as ${roleLabel(currentProfile.approved_role)}. Re-sign-in with the correct role.`;
-        if (errEl) { errEl.textContent = text; errEl.hidden = false; }
+        // Right credentials, wrong role — refuse entry, clear local session, and
+        // surface the mismatch on the auth screen. NEVER fall through to the app shell.
+        const approved = roleLabel(currentProfile.approved_role);
+        const tried   = roleLabel(requestedRole);
+        const text = `Access denied. These credentials are approved as "${approved}", not "${tried}". Pick the correct role and try again.`;
+        // Tell the auth-state listener to skip its reset, otherwise the
+        // SIGNED_OUT event would wipe the error we are about to display.
+        suppressAuthReset = true;
+        try { await supabase.auth.signOut(); } catch (_) { /* noop */ }
+        currentUser = null;
+        currentRole = null;
+        currentProfile = null;
+        currentAccessToken = null;
+        authUiReady = false;
+        document.getElementById('app-shell')?.classList.add('hidden');
+        document.getElementById('auth-screen')?.classList.remove('hidden');
+        backToRoleSelect();
+        showAuthError(text, { target: 'login' });
+        notify(text, true);
+        // Re-arm the listener after the SIGNED_OUT event has had a chance to fire.
+        setTimeout(() => { suppressAuthReset = false; }, 800);
         return;
     }
     currentRole = currentProfile.approved_role;
@@ -2477,7 +2684,39 @@ function renderActions() {
 function renderDashboard() {
   const approved = approvedAssetsOnly();
   const total = approved.length;
-  
+
+  /* -------- Risk posture KPIs (elevated = High + Moderate residual) -------- */
+  const elevated = approved.filter(a => a.residual === 'High' || a.residual === 'Moderate');
+  const elevatedN = elevated.length;
+  const thresholdPct = total ? Math.round((elevatedN / total) * 1000) / 10 : 0;
+
+  const inhMap = { High: 4, Moderate: 3, Low: 2, 'Very Low': 1 };
+  const inhVals = approved.map(a => inhMap[a.inherit]).filter(v => v > 0);
+  const avgInh = inhVals.length ? inhVals.reduce((x, y) => x + y, 0) / inhVals.length : 0;
+
+  const assessed = approved.filter(a =>
+    (a.riskDesc && String(a.riskDesc).trim().length > 0) && a.prob && a.sev
+  ).length;
+  const analysisPct = total ? Math.round((assessed / total) * 1000) / 10 : 0;
+
+  const respEl = document.getElementById('dm-risk-response-detail');
+  let responsePct = 100;
+  if (elevatedN === 0) {
+    responsePct = 100;
+    if (respEl) respEl.textContent = 'No elevated residual risks in register';
+  } else {
+    const advancing = elevated.filter(a => a.actionStatus === 'Done' || a.actionStatus === 'In Progress').length;
+    responsePct = Math.round((advancing / elevatedN) * 1000) / 10;
+    if (respEl) respEl.textContent = `${advancing} of ${elevatedN} with treatment in flight or closed`;
+  }
+
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('dm-risk-threshold-pct', `${thresholdPct}%`);
+  setTxt('dm-risk-threshold-n', String(elevatedN));
+  setTxt('dm-risk-avg-inherit', avgInh ? `Avg inherent tier: ${avgInh.toFixed(2)} (1=Very Low … 4=High)` : 'Avg inherent tier: —');
+  setTxt('dm-risk-analysis-pct', `${analysisPct}%`);
+  setTxt('dm-risk-response-pct', `${responsePct}%`);
+
   if(document.getElementById('hdr-total')) document.getElementById('hdr-total').textContent = total;
   if(document.getElementById('nav-total')) document.getElementById('nav-total').textContent = total;
   if(document.getElementById('dm-total')) document.getElementById('dm-total').textContent = total;
@@ -2532,7 +2771,155 @@ function renderDashboard() {
         </div>
       `).join('');
   }
+
+  /* -------- Donut charts -------- */
+  renderDashboardDonut(document.getElementById('dash-risk-donut'), [
+    { label: 'High', n: byRes.High || 0, hex: '#ff4444' },
+    { label: 'Moderate', n: byRes.Moderate || 0, hex: '#ff9900' },
+    { label: 'Low', n: byRes.Low || 0, hex: '#00d4ff' },
+    { label: 'Very Low', n: byRes['Very Low'] || 0, hex: '#00cc77' }
+  ]);
+
+  const stDone = elevated.filter(a => a.actionStatus === 'Done').length;
+  const stProg = elevated.filter(a => a.actionStatus === 'In Progress').length;
+  const stPend = elevated.filter(a => a.actionStatus === 'Pending').length;
+  const stSum = stDone + stProg + stPend;
+  const stOther = Math.max(0, elevatedN - stSum);
+  renderDashboardDonut(document.getElementById('dash-action-donut'), [
+    { label: 'Done', n: stDone, hex: '#00cc77' },
+    { label: 'In progress', n: stProg, hex: '#00d4ff' },
+    { label: 'Pending', n: stPend, hex: '#ff9900' },
+    { label: 'Other / unset', n: stOther, hex: '#6a6a78' }
+  ]);
+
+  /* -------- Compact inherent heatmap -------- */
+  const hmEl = document.getElementById('dash-heatmap');
+  if (hmEl) {
+    hmEl.innerHTML = dashboardHeatmapShell();
+    const riskCounts = {};
+    approved.forEach(a => {
+      if (a.prob && a.sev) {
+        const key = `${a.prob}-${a.sev}`;
+        riskCounts[key] = (riskCounts[key] || 0) + 1;
+      }
+    });
+    Object.entries(riskCounts).forEach(([key, count]) => {
+      const cell = document.getElementById(`dmx-${key}`);
+      if (cell) {
+        const badge = document.createElement('div');
+        badge.className = 'mx-count active';
+        badge.style.opacity = '1';
+        badge.textContent = count;
+        cell.appendChild(badge);
+      }
+    });
+  }
+
+  const topInhEl = document.getElementById('dash-top-inherent');
+  if (topInhEl) {
+    const scored = approved
+      .filter(a => a.prob && a.sev)
+      .map(a => ({ a, score: (+a.prob) * (+a.sev) }))
+      .sort((x, y) => y.score - x.score)
+      .slice(0, 5);
+    const maxS = scored[0]?.score || 25;
+    if (!scored.length) {
+      topInhEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No probability × severity recorded</p>';
+    } else {
+      topInhEl.innerHTML = scored.map(({ a, score }) => {
+        const w = Math.round((score / maxS) * 100);
+        const nm = escapeHtmlSafe((a.name || '').slice(0, 32));
+        return `<div class="chart-bar-row"><div class="chart-bar-label" style="width:150px;font-size:10px;">${nm}${(a.name || '').length > 32 ? '…' : ''}</div><div class="chart-bar-track"><div class="chart-bar-fill" style="width:${w}%;background:var(--accent);color:#0a0a0f">${score}</div></div><div class="chart-bar-count">${a.prob}×${a.sev}</div></div>`;
+      }).join('');
+    }
+  }
+
+  const stratEl = document.getElementById('dash-strategy-bars');
+  if (stratEl) {
+    if (!elevatedN) {
+      stratEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No elevated risks — treatment mix empty</p>';
+    } else {
+      const smap = { Mitigate: 0, Transfer: 0, Avoid: 0, Accept: 0 };
+      elevated.forEach(a => {
+        const t = a.actionType;
+        if (smap[t] !== undefined) smap[t]++;
+      });
+      const denom = elevatedN;
+      const scolors = { Mitigate: 'var(--accent2)', Transfer: 'var(--purple)', Avoid: 'var(--warn)', Accept: 'var(--text3)' };
+      stratEl.innerHTML = Object.keys(smap).map(k => {
+        const v = smap[k];
+        const pct = Math.round((v / denom) * 100);
+        return `<div class="chart-bar-row"><div class="chart-bar-label">${k}</div><div class="chart-bar-track"><div class="chart-bar-fill" style="width:${pct}%;background:${scolors[k]};color:#0a0a0f">${pct > 8 ? pct + '%' : ''}</div></div><div class="chart-bar-count" style="width:28px;text-align:right;">${v}</div></div>`;
+      }).join('');
+    }
+  }
+
   calculateDeadlines();
+}
+
+function dashboardHeatmapShell() {
+  return `<div class="matrix matrix--dash">
+<div class="mx-cell mx-hdr" style="grid-column:1;grid-row:1;">S↓/P→</div>
+<div class="mx-cell mx-hdr" style="grid-column:2;grid-row:1;">1</div>
+<div class="mx-cell mx-hdr" style="grid-column:3;grid-row:1;">2</div>
+<div class="mx-cell mx-hdr" style="grid-column:4;grid-row:1;">3</div>
+<div class="mx-cell mx-hdr" style="grid-column:5;grid-row:1;">4</div>
+<div class="mx-cell mx-hdr" style="grid-column:6;grid-row:1;">5</div>
+<div class="mx-cell mx-hdr" style="grid-row:2;grid-column:1;text-align:right;">5 H</div>
+<div class="mx-cell mx-mo" id="dmx-1-5" style="grid-row:2;grid-column:2;"></div>
+<div class="mx-cell mx-mo" id="dmx-2-5" style="grid-row:2;grid-column:3;"></div>
+<div class="mx-cell mx-hi" id="dmx-3-5" style="grid-row:2;grid-column:4;"></div>
+<div class="mx-cell mx-hi" id="dmx-4-5" style="grid-row:2;grid-column:5;"></div>
+<div class="mx-cell mx-hi" id="dmx-5-5" style="grid-row:2;grid-column:6;"></div>
+<div class="mx-cell mx-hdr" style="grid-row:3;grid-column:1;text-align:right;">4</div>
+<div class="mx-cell mx-lo" id="dmx-1-4" style="grid-row:3;grid-column:2;"></div>
+<div class="mx-cell mx-mo" id="dmx-2-4" style="grid-row:3;grid-column:3;"></div>
+<div class="mx-cell mx-mo" id="dmx-3-4" style="grid-row:3;grid-column:4;"></div>
+<div class="mx-cell mx-hi" id="dmx-4-4" style="grid-row:3;grid-column:5;"></div>
+<div class="mx-cell mx-hi" id="dmx-5-4" style="grid-row:3;grid-column:6;"></div>
+<div class="mx-cell mx-hdr" style="grid-row:4;grid-column:1;text-align:right;">3</div>
+<div class="mx-cell mx-lo" id="dmx-1-3" style="grid-row:4;grid-column:2;"></div>
+<div class="mx-cell mx-mo" id="dmx-2-3" style="grid-row:4;grid-column:3;"></div>
+<div class="mx-cell mx-mo" id="dmx-3-3" style="grid-row:4;grid-column:4;"></div>
+<div class="mx-cell mx-mo" id="dmx-4-3" style="grid-row:4;grid-column:5;"></div>
+<div class="mx-cell mx-hi" id="dmx-5-3" style="grid-row:4;grid-column:6;"></div>
+<div class="mx-cell mx-hdr" style="grid-row:5;grid-column:1;text-align:right;">2</div>
+<div class="mx-cell mx-lo" id="dmx-1-2" style="grid-row:5;grid-column:2;"></div>
+<div class="mx-cell mx-lo" id="dmx-2-2" style="grid-row:5;grid-column:3;"></div>
+<div class="mx-cell mx-mo" id="dmx-3-2" style="grid-row:5;grid-column:4;"></div>
+<div class="mx-cell mx-mo" id="dmx-4-2" style="grid-row:5;grid-column:5;"></div>
+<div class="mx-cell mx-mo" id="dmx-5-2" style="grid-row:5;grid-column:6;"></div>
+<div class="mx-cell mx-hdr" style="grid-row:6;grid-column:1;text-align:right;">1</div>
+<div class="mx-cell mx-vl" id="dmx-1-1" style="grid-row:6;grid-column:2;"></div>
+<div class="mx-cell mx-lo" id="dmx-2-1" style="grid-row:6;grid-column:3;"></div>
+<div class="mx-cell mx-lo" id="dmx-3-1" style="grid-row:6;grid-column:4;"></div>
+<div class="mx-cell mx-lo" id="dmx-4-1" style="grid-row:6;grid-column:5;"></div>
+<div class="mx-cell mx-mo" id="dmx-5-1" style="grid-row:6;grid-column:6;"></div>
+</div>`;
+}
+
+function renderDashboardDonut(container, segments) {
+  if (!container) return;
+  const total = segments.reduce((s, x) => s + x.n, 0);
+  if (!total) {
+    container.innerHTML = '<p style="color:var(--text3);text-align:center;padding:20px;">No data</p>';
+    return;
+  }
+  let deg = 0;
+  const parts = [];
+  segments.forEach(seg => {
+    if (!seg.n) return;
+    const span = (seg.n / total) * 360;
+    const end = deg + span;
+    parts.push(`${seg.hex} ${deg}deg ${end}deg`);
+    deg = end;
+  });
+  const grad = parts.length ? `conic-gradient(${parts.join(',')})` : 'conic-gradient(#2a2a35 0deg 360deg)';
+  const legend = segments.filter(s => s.n > 0).map(s => {
+    const pct = Math.round((s.n / total) * 1000) / 10;
+    return `<li><span class="swatch" style="background:${s.hex}"></span>${escapeHtmlSafe(s.label)} <strong>${s.n}</strong> (${pct}%)</li>`;
+  }).join('');
+  container.innerHTML = `<div class="dash-donut-ring" style="background:${grad};"></div><ul class="dash-donut-legend">${legend}</ul>`;
 }
 
 function excelRiskFill(rating) {
@@ -2542,6 +2929,16 @@ function excelRiskFill(rating) {
     if (r === 'low') return { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00D4FF' } };
     if (r.includes('very')) return { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00CC77' } };
     return { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2A2A35' } };
+}
+
+// Pick a high-contrast text color for the risk chip background returned by
+// excelRiskFill. Red ('high') needs white; yellow / cyan / green need black.
+// The dark fallback fill keeps white.
+function excelRiskTextOn(rating) {
+    const r = (rating || '').toLowerCase();
+    if (r === 'high') return 'FFFFFFFF';
+    if (r === 'moderate' || r === 'low' || r.includes('very')) return 'FF111111';
+    return 'FFFFFFFF';
 }
 
 async function exportDataXLSX() {
@@ -2576,6 +2973,17 @@ async function exportDataXLSX() {
     const COL_HDR_FG      = 'FFC8FF00';
     const COL_SUB_BG      = 'FF2A2A35';
     const COL_BORDER      = 'FFC0C0CC';   // mid-grey borders — visible on white cells
+
+    // ---- White-cell-safe ink palette ------------------------------------
+    // Default Excel cell fill is white. Use these darker tones for any body
+    // text that lands on an unfilled (white) cell so it remains legible when
+    // the spreadsheet is opened, printed, or screenshot for evidence.
+    const COL_INK_BODY    = 'FF1B1B22';   // primary body text on white
+    const COL_INK_MUTED   = 'FF6A6A78';   // captions / labels on white (~4.6:1)
+    const COL_INK_SOFT    = 'FF7A7A88';   // italic placeholders on white
+    const COL_OK_DARK     = 'FF1F7A3A';   // "Approved" green on white
+    const COL_BAD_DARK    = 'FFB02020';   // "Rejected" red   on white
+    const COL_WARN_DARK   = 'FFB35A1A';   // "Deleted"  orange on white
 
     const styleTitle = (ws, row, text, cols) => {
         ws.mergeCells(row, 1, row, cols);
@@ -2675,11 +3083,12 @@ async function exportDataXLSX() {
             [6,7,8,9].forEach(idx => { r.getCell(idx).alignment = { horizontal: 'center' }; });
             const classCell = r.getCell(10);
             const cls = (a.ciaClass || '').toLowerCase();
-            if (cls === 'restricted')      classCell.fill = excelRiskFill('high');
-            else if (cls === 'confidential') classCell.fill = excelRiskFill('moderate');
-            else if (cls === 'internal use') classCell.fill = excelRiskFill('low');
-            else if (cls === 'public')       classCell.fill = excelRiskFill('very');
-            classCell.font = { bold: true, color: { argb: 'FF000000' } };
+            let classRating = '';
+            if (cls === 'restricted')      { classCell.fill = excelRiskFill('high');     classRating = 'high'; }
+            else if (cls === 'confidential') { classCell.fill = excelRiskFill('moderate'); classRating = 'moderate'; }
+            else if (cls === 'internal use') { classCell.fill = excelRiskFill('low');      classRating = 'low'; }
+            else if (cls === 'public')       { classCell.fill = excelRiskFill('very');     classRating = 'very low'; }
+            classCell.font = { bold: true, color: { argb: excelRiskTextOn(classRating) } };
             classCell.alignment = { horizontal: 'center' };
             styleBodyCells(ws, r.number, headers.length);
         });
@@ -2699,8 +3108,8 @@ async function exportDataXLSX() {
             const r = ws.addRow([a.id, a.name, a.riskDesc || '', a.prob, a.sev, a.inherit, a.residual]);
             r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
             [4,5].forEach(i => { r.getCell(i).alignment = { horizontal: 'center' }; });
-            const inh = r.getCell(6); inh.fill = excelRiskFill(a.inherit);  inh.font = { bold: true, color: { argb: 'FFFFFFFF' } }; inh.alignment = { horizontal: 'center' };
-            const res = r.getCell(7); res.fill = excelRiskFill(a.residual); res.font = { bold: true, color: { argb: 'FF000000' } }; res.alignment = { horizontal: 'center' };
+            const inh = r.getCell(6); inh.fill = excelRiskFill(a.inherit);  inh.font = { bold: true, color: { argb: excelRiskTextOn(a.inherit)  } }; inh.alignment = { horizontal: 'center' };
+            const res = r.getCell(7); res.fill = excelRiskFill(a.residual); res.font = { bold: true, color: { argb: excelRiskTextOn(a.residual) } }; res.alignment = { horizontal: 'center' };
             styleBodyCells(ws, r.number, headers.length);
         });
         setCols(ws, [12, 38, 60, 12, 10, 12, 12]);
@@ -2720,8 +3129,8 @@ async function exportDataXLSX() {
             'C1 Documented Procedures · C2 SoD · C3 RBAC · C4 MFA · C5 Physical · C6 Backup · C7 Encryption · C8 Disposal · C9 EDR · C10 WAF · C11 Vuln/Patch · C12 VLAN · C13 IRP'
         ]);
         ws.mergeCells(legendRow.number, 2, legendRow.number, 17);
-        legendRow.getCell(1).font = { bold: true, color: { argb: 'FFB5B5C5' }, italic: true };
-        legendRow.getCell(2).font = { italic: true, color: { argb: 'FF8A8A98' }, size: 9 };
+        legendRow.getCell(1).font = { bold: true, color: { argb: COL_INK_MUTED }, italic: true };
+        legendRow.getCell(2).font = { italic: true, color: { argb: COL_INK_BODY }, size: 9 };
         legendRow.getCell(2).alignment = { horizontal: 'left', wrapText: true };
         legendRow.height = 22;
         const hdr = ws.addRow(headers);
@@ -2739,7 +3148,7 @@ async function exportDataXLSX() {
                 r.getCell(i).font = ynFont(v);
                 r.getCell(i).alignment = { horizontal: 'center' };
             }
-            const res = r.getCell(16); res.fill = excelRiskFill(a.residual); res.font = { bold: true, color: { argb: 'FF000000' } }; res.alignment = { horizontal: 'center' };
+            const res = r.getCell(16); res.fill = excelRiskFill(a.residual); res.font = { bold: true, color: { argb: excelRiskTextOn(a.residual) } }; res.alignment = { horizontal: 'center' };
             const strat = r.getCell(17);
             const map = { Mitigate: 'FF1A4D80', Transfer: 'FF6A4DBA', Avoid: 'FFB04A2E', Accept: 'FF2E7A4D' };
             strat.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: map[a.actionType] || 'FF2A2A35' } };
@@ -2764,7 +3173,7 @@ async function exportDataXLSX() {
         assets.forEach(a => {
             const r = ws.addRow([a.id, a.name, a.residual, a.actionType, a.actionStatus, a.actionPlan, a.actionOwner, a.actionDate]);
             r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
-            const res = r.getCell(3); res.fill = excelRiskFill(a.residual); res.font = { bold: true, color: { argb: 'FF000000' } }; res.alignment = { horizontal: 'center' };
+            const res = r.getCell(3); res.fill = excelRiskFill(a.residual); res.font = { bold: true, color: { argb: excelRiskTextOn(a.residual) } }; res.alignment = { horizontal: 'center' };
             const map = { Mitigate: 'FF1A4D80', Transfer: 'FF6A4DBA', Avoid: 'FFB04A2E', Accept: 'FF2E7A4D' };
             const strat = r.getCell(4);
             strat.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: map[a.actionType] || 'FF2A2A35' } };
@@ -2856,8 +3265,8 @@ async function exportDataXLSX() {
                 '—', '—', '—'
             ]);
             rNone.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
-            rNone.getCell(2).font = { italic: true, color: { argb: 'FFB5B5C5' } };
-            rNone.getCell(4).font = { italic: true, color: { argb: 'FFB5B5C5' } };
+            rNone.getCell(2).font = { italic: true, color: { argb: COL_INK_SOFT } };
+            rNone.getCell(4).font = { italic: true, color: { argb: COL_INK_SOFT } };
             styleBodyCells(wsRD, rNone.number, 7);
             rNone.height = 24;
         } else {
@@ -2884,9 +3293,9 @@ async function exportDataXLSX() {
                 r.getCell(2).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
                 r.getCell(3).font = { bold: true };
                 if (parsed.reason) {
-                    r.getCell(4).font = { color: { argb: 'FFE8E8F0' } };
+                    r.getCell(4).font = { color: { argb: COL_INK_BODY } };
                 } else {
-                    r.getCell(4).font = { italic: true, color: { argb: 'FF8888A0' } };
+                    r.getCell(4).font = { italic: true, color: { argb: COL_INK_SOFT } };
                 }
                 r.getCell(4).alignment = { wrapText: true, vertical: 'top' };
                 r.getCell(7).alignment = { horizontal: 'center', vertical: 'middle' };
@@ -3007,9 +3416,9 @@ async function exportDataXLSX() {
                     approval
                 ]);
                 r3.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
-                if (approval === 'Approved') r3.getCell(5).font = { bold: true, color: { argb: 'FF7CFF7C' } };
-                if (approval === 'Rejected') r3.getCell(5).font = { bold: true, color: { argb: 'FFFF6666' } };
-                if (approval === 'Deleted')  r3.getCell(5).font = { bold: true, color: { argb: 'FFFF8C42' } };
+                if (approval === 'Approved') r3.getCell(5).font = { bold: true, color: { argb: COL_OK_DARK   } };
+                if (approval === 'Rejected') r3.getCell(5).font = { bold: true, color: { argb: COL_BAD_DARK  } };
+                if (approval === 'Deleted')  r3.getCell(5).font = { bold: true, color: { argb: COL_WARN_DARK } };
                 styleBodyCells(wsH, r3.number, 5);
             });
         }
@@ -3151,7 +3560,7 @@ async function exportDataXLSX() {
         const noteRow = wsS.addRow(['Note', 'Manual entries on the ImpactLens Reporting & Sign-offs page override these defaults at the next export.', '', '']);
         wsS.mergeCells(noteRow.number, 2, noteRow.number, 4);
         noteRow.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
-        noteRow.getCell(2).font = { italic: true, color: { argb: 'FFB5B5C5' } };
+        noteRow.getCell(2).font = { italic: true, color: { argb: COL_INK_SOFT } };
         styleBodyCells(wsS, noteRow.number, 4);
 
         setCols(wsS, [16, 36, 52, 18]);
@@ -3200,6 +3609,13 @@ async function exportDataXLSX() {
             currentRole = null;
             currentAccessToken = null;
             authUiReady = false;
+            if (suppressAuthReset) {
+                // The auth screen / error banner is already being managed by the
+                // caller (e.g. role-mismatch path in enterAuthenticatedApp).
+                document.getElementById('app-shell')?.classList.add('hidden');
+                document.getElementById('auth-screen')?.classList.remove('hidden');
+                return;
+            }
             showAuthScreen();
         }
     });

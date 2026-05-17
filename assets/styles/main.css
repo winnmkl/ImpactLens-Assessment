@@ -335,6 +335,49 @@ input:focus, select:focus, textarea:focus {
   background: var(--bg2); 
 }
 
+/* Browsers (Chrome, Edge, Safari, Firefox) paint autofilled inputs with a
+   pale yellow / white background and re-color the text, which destroys
+   contrast against this dark theme. The :-webkit-autofill rules below use
+   the inset box-shadow trick (the property browsers honor on autofill) to
+   keep the dark surface, and pin the text color to our regular --text. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+select:-webkit-autofill,
+textarea:-webkit-autofill {
+  -webkit-text-fill-color: var(--text) !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--bg3) inset !important;
+  box-shadow: 0 0 0 1000px var(--bg3) inset !important;
+  caret-color: var(--accent);
+  transition: background-color 9999s ease-out 0s; /* defeat the autofill flash */
+}
+input:-webkit-autofill:focus,
+select:-webkit-autofill:focus,
+textarea:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--bg2) inset, 0 0 0 1px rgba(200,255,0,0.2) !important;
+  box-shadow: 0 0 0 1000px var(--bg2) inset, 0 0 0 1px rgba(200,255,0,0.2) !important;
+}
+/* Firefox uses a different selector for autofill */
+input:autofill,
+select:autofill,
+textarea:autofill {
+  background-color: var(--bg3) !important;
+  color: var(--text) !important;
+}
+
+/* Match the dark scrollbar inside the autofill dropdown (browsers respect it) */
+:root {
+  color-scheme: dark;
+}
+
+/* Highlighted/selected text — make sure selection is high-contrast and never
+   washed-out on either dark or light surfaces. */
+::selection {
+  background: rgba(200, 255, 0, 0.32);
+  color: #0a0a0f;
+}
+
 textarea { 
   resize: vertical; 
   min-height: 80px; 
@@ -641,6 +684,43 @@ tbody td strong {
   margin-top: 8px; 
 }
 
+.metric-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  margin-top: 6px;
+  line-height: 1.3;
+}
+
+.metric-hint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text3);
+  font-size: 9px;
+}
+
+.dash-section-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text3);
+  margin: 8px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.metrics-grid--risk {
+  margin-bottom: 28px;
+}
+
+@media (max-width: 1100px) {
+  .dash-risk-viz.grid-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ========================================== CHARTS & VISUALIZATIONS ========================================== */
 .chart-bar-row { 
   display: flex; 
@@ -808,7 +888,72 @@ tbody td strong {
   opacity: 1; 
 }
 
-/* ========================================== MULTI-SELECT DROPDOWN ========================================== */
+/* -------- Dashboard risk visualizations -------- */
+.dash-donut-block {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 12px 8px 8px;
+  min-height: 160px;
+}
+
+.dash-donut-ring {
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 3px var(--border), inset 0 0 0 18px var(--bg2);
+}
+
+.dash-donut-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 160px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.dash-donut-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--text2);
+}
+
+.dash-donut-legend span.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.matrix.matrix--dash {
+  grid-template-columns: 72px repeat(5, 1fr);
+  gap: 3px;
+  font-size: 9px;
+  margin-bottom: 0;
+}
+
+.matrix.matrix--dash .mx-cell {
+  padding: 6px 3px;
+  min-height: 28px;
+}
+
+.matrix.matrix--dash .mx-hdr {
+  font-size: 8px;
+  letter-spacing: 0.5px;
+}
+
+.matrix.matrix--dash .mx-count {
+  font-size: 9px;
+  padding: 1px 5px;
+  margin-top: 2px;
+}
+
 .multi-select-wrapper { 
   position: relative; 
   width: 100%; 
@@ -1689,3 +1834,629 @@ body[data-role="user"] .status-dot {
   margin-right: 4px;
   font-weight: 600;
 }
+
+/* ==========================================================
+   AUTH SCREEN — Wave / Glass / Lime aesthetic
+   Overrides the original .auth-screen so the sign-in surface
+   mirrors the ImpactLens landing experience.
+   ========================================================== */
+
+#auth-screen.auth-screen {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  padding: 24px;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(200, 255, 0, 0.06), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 50% 100%, rgba(0, 212, 255, 0.04), transparent 60%),
+    #0b1120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Rajdhani', var(--sans);
+  color: #ddecc5;
+  z-index: 50;
+}
+
+#auth-screen .auth-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#auth-screen .auth-noise {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 22px 22px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+#auth-screen .auth-page {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.6rem;
+  width: 100%;
+  max-width: 760px;
+  padding: 1.5rem 1rem;
+  transition: opacity 0.45s ease, transform 0.45s ease;
+}
+#auth-screen .auth-page.out {
+  opacity: 0;
+  transform: scale(1.04);
+  pointer-events: none;
+}
+
+/* ---- Brand ---- */
+#auth-screen .auth-brand-new {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  animation: ilFadeDown 0.7s ease both;
+}
+#auth-screen .auth-brand-new svg {
+  width: 44px;
+  height: 44px;
+  filter: drop-shadow(0 0 12px rgba(200, 255, 0, 0.4));
+}
+#auth-screen .auth-brand-name {
+  font-family: 'Bebas Neue', var(--display);
+  font-size: clamp(2.4rem, 6vw, 4.2rem);
+  letter-spacing: 0.14em;
+  color: var(--accent);
+  text-shadow: 0 0 40px rgba(200, 255, 0, 0.5), 0 0 80px rgba(200, 255, 0, 0.18);
+  line-height: 1;
+  animation: ilPulseGlow 3s ease-in-out infinite;
+}
+#auth-screen .auth-brand-sub {
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(221, 236, 197, 0.55);
+  margin-top: -0.6rem;
+  margin-bottom: 0.6rem;
+  animation: ilFadeDown 0.9s ease both;
+}
+
+/* ---- Role selector card ---- */
+#auth-screen .auth-role-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 20px;
+  padding: 2.2rem 2.6rem;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow:
+    0 0 0 1px rgba(200, 255, 0, 0.06),
+    0 30px 70px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  display: flex;
+  gap: 1.6rem;
+  animation: ilFadeUp 0.75s 0.2s ease both;
+}
+
+#auth-screen .auth-role-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  cursor: pointer;
+  padding: 0.5rem;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: transparent;
+  transition: border-color 0.3s, background 0.3s, transform 0.25s;
+  position: relative;
+  width: 160px;
+}
+#auth-screen .auth-role-btn:hover {
+  border-color: rgba(200, 255, 0, 0.22);
+  background: rgba(200, 255, 0, 0.05);
+  transform: translateY(-4px);
+}
+#auth-screen .auth-role-btn:focus-visible {
+  outline: none;
+  border-color: rgba(200, 255, 0, 0.5);
+  background: rgba(200, 255, 0, 0.08);
+}
+
+#auth-screen .auth-icon-box {
+  width: 108px;
+  height: 108px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.07);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: box-shadow 0.3s, border-color 0.3s, background 0.3s;
+  position: relative;
+  overflow: hidden;
+}
+#auth-screen .auth-icon-box::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(200, 255, 0, 0.12), transparent 60%);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+#auth-screen .auth-role-btn:hover .auth-icon-box {
+  box-shadow: 0 0 30px rgba(200, 255, 0, 0.22), 0 0 60px rgba(200, 255, 0, 0.06);
+  border-color: rgba(200, 255, 0, 0.28);
+  background: rgba(255, 255, 255, 0.10);
+}
+#auth-screen .auth-role-btn:hover .auth-icon-box::before { opacity: 1; }
+#auth-screen .auth-icon-box svg { width: 60px; height: 60px; position: relative; z-index: 1; }
+
+#auth-screen .auth-role-label {
+  font-family: 'Rajdhani', var(--sans);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-align: center;
+  color: #ddecc5;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+#auth-screen .auth-role-btn:hover .auth-role-label { color: var(--accent); }
+
+#auth-screen .auth-role-divider {
+  width: 1px;
+  background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.10), transparent);
+  align-self: stretch;
+  flex-shrink: 0;
+  margin: 0.5rem 0;
+}
+
+/* Tooltip below each role */
+#auth-screen .auth-role-btn::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: -1.8rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: rgba(200, 255, 0, 0.7);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+#auth-screen .auth-role-btn:hover::after { opacity: 1; }
+
+/* Click ripple inside role cards */
+#auth-screen .ripple {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(200, 255, 0, 0.22);
+  transform: scale(0);
+  animation: ilRipple 0.5s linear;
+  pointer-events: none;
+}
+
+/* ---- Login / Register form card ---- */
+#auth-screen .auth-form-card {
+  width: 100%;
+  max-width: 440px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 18px;
+  padding: 2rem 2.2rem;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow:
+    0 0 0 1px rgba(200, 255, 0, 0.06),
+    0 30px 70px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  animation: ilFadeUp 0.5s ease both;
+  position: relative;
+}
+
+#auth-screen .auth-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: rgba(221, 236, 197, 0.6);
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 4px 8px;
+  margin: -8px 0 14px -8px;
+  border-radius: 6px;
+  transition: color 0.2s, background 0.2s;
+}
+#auth-screen .auth-back-link:hover {
+  color: var(--accent);
+  background: rgba(200, 255, 0, 0.06);
+}
+
+#auth-screen .auth-role-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(221, 236, 197, 0.75);
+  padding: 6px 12px;
+  background: rgba(200, 255, 0, 0.06);
+  border: 1px solid rgba(200, 255, 0, 0.25);
+  border-radius: 999px;
+  margin-bottom: 18px;
+}
+#auth-screen .auth-role-pill strong {
+  color: var(--accent);
+  font-weight: 600;
+  margin-left: 2px;
+}
+#auth-screen .auth-role-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(200, 255, 0, 0.7);
+}
+
+#auth-screen .auth-tabs-new {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+  padding: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+}
+#auth-screen .auth-tab-new {
+  flex: 1;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: rgba(221, 236, 197, 0.55);
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  border-radius: 7px;
+  transition: color 0.2s, background 0.2s, border-color 0.2s;
+}
+#auth-screen .auth-tab-new:hover { color: var(--accent); }
+#auth-screen .auth-tab-new.active {
+  color: var(--accent);
+  background: rgba(200, 255, 0, 0.08);
+  border-color: rgba(200, 255, 0, 0.32);
+  box-shadow: inset 0 -2px 0 rgba(200, 255, 0, 0.5);
+}
+
+#auth-screen .auth-field { margin-bottom: 14px; }
+#auth-screen .auth-field label {
+  display: block;
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(221, 236, 197, 0.6);
+  margin-bottom: 6px;
+}
+#auth-screen .auth-field input,
+#auth-screen .auth-pw-wrap input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #ecf6d8;
+  font-family: 'Rajdhani', var(--sans);
+  font-weight: 500;
+  font-size: 14.5px;
+  letter-spacing: 0.02em;
+  padding: 11px 14px;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+#auth-screen .auth-field input::placeholder,
+#auth-screen .auth-pw-wrap input::placeholder {
+  color: rgba(221, 236, 197, 0.35);
+  letter-spacing: 0.02em;
+}
+#auth-screen .auth-field input:focus,
+#auth-screen .auth-pw-wrap input:focus {
+  border-color: rgba(200, 255, 0, 0.55);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 0 0 2px rgba(200, 255, 0, 0.15);
+}
+
+/* Auth-screen autofill: keep the glassy lime palette instead of the browser's
+   pale-yellow autofill paint that would wash out the text. */
+#auth-screen .auth-field input:-webkit-autofill,
+#auth-screen .auth-field input:-webkit-autofill:hover,
+#auth-screen .auth-field input:-webkit-autofill:focus,
+#auth-screen .auth-pw-wrap input:-webkit-autofill,
+#auth-screen .auth-pw-wrap input:-webkit-autofill:hover,
+#auth-screen .auth-pw-wrap input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #ecf6d8 !important;
+  -webkit-box-shadow: 0 0 0 1000px #1a2336 inset !important;
+  box-shadow: 0 0 0 1000px #1a2336 inset !important;
+  caret-color: var(--accent);
+  transition: background-color 9999s ease-out 0s;
+}
+#auth-screen .auth-field input:autofill,
+#auth-screen .auth-pw-wrap input:autofill {
+  background-color: #1a2336 !important;
+  color: #ecf6d8 !important;
+}
+
+#auth-screen .auth-pw-wrap { position: relative; }
+#auth-screen .auth-pw-wrap input { padding-right: 64px; }
+#auth-screen .auth-pw-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(200, 255, 0, 0.08);
+  border: 1px solid rgba(200, 255, 0, 0.22);
+  color: var(--accent);
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+#auth-screen .auth-pw-toggle:hover {
+  background: rgba(200, 255, 0, 0.18);
+  border-color: rgba(200, 255, 0, 0.45);
+}
+
+#auth-screen .auth-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 13px 20px;
+  background: linear-gradient(135deg, var(--accent) 0%, #94e63b 100%);
+  border: 1px solid rgba(200, 255, 0, 0.7);
+  color: #0b1120;
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: transform 0.15s, box-shadow 0.2s, filter 0.2s;
+  box-shadow: 0 8px 24px rgba(200, 255, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+#auth-screen .auth-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 32px rgba(200, 255, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  filter: brightness(1.05);
+}
+#auth-screen .auth-btn-primary:active { transform: translateY(0); filter: brightness(0.96); }
+#auth-screen .auth-btn-primary:disabled {
+  filter: grayscale(0.4) brightness(0.8);
+  cursor: progress;
+  transform: none;
+}
+
+#auth-screen .auth-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #ddecc5;
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-radius: 7px;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+}
+#auth-screen .auth-btn-ghost:hover {
+  border-color: rgba(200, 255, 0, 0.5);
+  color: var(--accent);
+  background: rgba(200, 255, 0, 0.06);
+}
+
+#auth-screen .auth-hint-new {
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: rgba(221, 236, 197, 0.55);
+  margin: 6px 0 14px;
+}
+
+/* Prominent inline error banner (kept visible until next submit) */
+#auth-screen .auth-error-new {
+  display: block;
+  margin: 4px 0 14px;
+  padding: 10px 14px 10px 38px;
+  background: rgba(255, 68, 68, 0.10);
+  border: 1px solid rgba(255, 68, 68, 0.42);
+  border-left: 3px solid var(--danger);
+  color: #ffd7d7;
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  letter-spacing: 0.02em;
+  border-radius: 6px;
+  position: relative;
+  animation: ilShake 0.45s cubic-bezier(.36,.07,.19,.97) both;
+}
+#auth-screen .auth-error-new::before {
+  content: '!';
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #0b1120;
+  font-weight: 800;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Rajdhani', var(--sans);
+}
+#auth-screen .auth-error-new[hidden] { display: none !important; }
+
+/* Verify-email / pending blocks */
+#auth-screen .auth-info-card,
+#auth-screen .auth-pending-card {
+  text-align: center;
+  padding: 14px 8px 4px;
+}
+#auth-screen .auth-info-icon,
+#auth-screen .auth-pending-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  margin: 0 auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  background: rgba(200, 255, 0, 0.08);
+  border: 1px solid rgba(200, 255, 0, 0.3);
+  color: var(--accent);
+}
+#auth-screen .auth-pending-icon {
+  background: rgba(255, 153, 0, 0.10);
+  border-color: rgba(255, 153, 0, 0.35);
+  color: var(--warn);
+}
+#auth-screen .auth-info-card h3,
+#auth-screen .auth-pending-card h3 {
+  font-family: 'Bebas Neue', var(--display);
+  font-size: 24px;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+  color: var(--accent);
+}
+#auth-screen .auth-pending-card h3 { color: var(--warn); }
+#auth-screen .auth-info-card p,
+#auth-screen .auth-pending-card p {
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  color: rgba(221, 236, 197, 0.75);
+  margin: 6px 4px;
+}
+#auth-screen .auth-info-sub { color: rgba(221, 236, 197, 0.55) !important; font-size: 11px !important; }
+#auth-screen .auth-info-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+/* Footer hint */
+#auth-screen .auth-footer-hint {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-family: 'IBM Plex Mono', var(--mono);
+  font-size: 10px;
+  line-height: 1.7;
+  color: rgba(221, 236, 197, 0.45);
+  text-align: center;
+}
+#auth-screen .auth-footer-hint code {
+  color: var(--accent);
+  background: rgba(200, 255, 0, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10.5px;
+}
+#auth-screen .auth-footer-sep { margin: 0 6px; color: rgba(221, 236, 197, 0.3); }
+#auth-screen .auth-link-btn {
+  background: none;
+  border: none;
+  color: var(--accent2);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+#auth-screen .auth-link-btn:hover { color: var(--accent); }
+
+/* ---- Keyframes ---- */
+@keyframes ilFadeDown {
+  from { opacity: 0; transform: translateY(-24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes ilFadeUp {
+  from { opacity: 0; transform: translateY(28px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes ilPulseGlow {
+  0%, 100% { text-shadow: 0 0 40px rgba(200,255,0,0.5), 0 0 80px rgba(200,255,0,0.18); }
+  50%      { text-shadow: 0 0 60px rgba(200,255,0,0.7), 0 0 100px rgba(200,255,0,0.28); }
+}
+@keyframes ilRipple {
+  to { transform: scale(3); opacity: 0; }
+}
+@keyframes ilShake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+}
+
+/* Hide the global scanline overlay on the auth screen so the wave shows through cleanly */
+body:has(#auth-screen:not(.hidden))::before { display: none; }
+
+/* Responsive */
+@media (max-width: 560px) {
+  #auth-screen .auth-role-card {
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.6rem 1.4rem;
+  }
+  #auth-screen .auth-role-divider {
+    width: auto;
+    height: 1px;
+    background: linear-gradient(to right, transparent, rgba(255,255,255,0.10), transparent);
+  }
+  #auth-screen .auth-role-btn { width: 100%; flex-direction: row; justify-content: flex-start; padding: 8px 12px; }
+  #auth-screen .auth-role-btn::after { display: none; }
+  #auth-screen .auth-icon-box { width: 72px; height: 72px; border-radius: 16px; }
+  #auth-screen .auth-icon-box svg { width: 40px; height: 40px; }
+  #auth-screen .auth-role-label { text-align: left; max-width: none; }
+  #auth-screen .auth-form-card { padding: 1.6rem 1.4rem; }
+}
+

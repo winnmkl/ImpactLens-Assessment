@@ -6,92 +6,184 @@
   <title>ImpactLens — Risk Assessment</title>
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&family=Bebas+Neue&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
   
   <!-- Vendor libs served locally so Edge Tracking Prevention doesn't block storage access. -->
   <script src="./assets/vendor/exceljs.min.js?v=20260517b"></script>
   <script src="./assets/vendor/supabase.min.js?v=20260517b"></script>
   
-  <link rel="stylesheet" href="./assets/styles/main.css?v=20260517n">
+  <link rel="stylesheet" href="./assets/styles/main.css?v=20260517-dash1">
 </head>
 <body>
 
 <div id="auth-screen" class="auth-screen">
-  <div class="auth-panel auth-panel-wide">
-    <div class="auth-brand">
-      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="filter: drop-shadow(0 0 8px rgba(200,255,0,0.5));">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+
+  <canvas id="auth-wave-canvas" class="auth-wave"></canvas>
+  <div class="auth-noise"></div>
+
+  <div class="auth-page" id="auth-page">
+
+    <!-- Brand -->
+    <div class="auth-brand-new">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 2L4 6V12C4 16.418 7.582 20.418 12 22C16.418 20.418 20 16.418 20 12V6L12 2Z"
+              stroke="#c8ff00" stroke-width="2" stroke-linejoin="round" fill="rgba(200,255,0,0.12)"/>
+        <path d="M9 12l2 2 4-4" stroke="#c8ff00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      <div>
-        <div class="auth-title">IMPACTLENS</div>
-        <div class="auth-subtitle">Enterprise Risk Assessment — PLM ISMS</div>
+      <span class="auth-brand-name">IMPACTLENS</span>
+    </div>
+    <div class="auth-brand-sub">Enterprise Risk Assessment — PLM ISMS</div>
+
+    <!-- Stage 1: Role selector -->
+    <div class="auth-role-card" id="auth-stage-roles">
+      <div class="auth-role-btn" data-role="user" data-tip="STANDARD ASSET INTAKE"
+           onclick="selectAuthRole(this, 'user', event)">
+        <div class="auth-icon-box">
+          <svg viewBox="0 0 64 64" fill="none">
+            <circle cx="32" cy="18" r="9" fill="rgba(255,255,255,0.55)" stroke="rgba(255,255,255,0.25)" stroke-width="1"/>
+            <path d="M12 52c0-11.046 8.954-18 20-18s20 6.954 20 18" fill="rgba(255,255,255,0.55)" stroke="rgba(255,255,255,0.25)" stroke-width="1"/>
+            <rect x="20" y="38" width="24" height="16" rx="2" fill="rgba(200,255,0,0.6)" stroke="rgba(200,255,0,0.85)" stroke-width="1"/>
+          </svg>
+        </div>
+        <div class="auth-role-label">Standard User<br>Portal</div>
+      </div>
+
+      <div class="auth-role-divider"></div>
+
+      <div class="auth-role-btn" data-role="infosec" data-tip="RISK PROFILING CONSOLE"
+           onclick="selectAuthRole(this, 'infosec', event)">
+        <div class="auth-icon-box">
+          <svg viewBox="0 0 64 64" fill="none">
+            <path d="M32 4L8 14V32C8 46 18 56 32 60C46 56 56 46 56 32V14L32 4Z"
+                  fill="rgba(200,255,0,0.10)" stroke="rgba(200,255,0,0.55)" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M22 32l7 7 13-13" stroke="rgba(200,255,0,0.95)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <circle cx="32" cy="32" r="20" stroke="rgba(255,255,255,0.18)" stroke-width="1" stroke-dasharray="2 4" fill="none"/>
+          </svg>
+        </div>
+        <div class="auth-role-label">Info Sec<br>Console</div>
+      </div>
+
+      <div class="auth-role-divider"></div>
+
+      <div class="auth-role-btn" data-role="admin" data-tip="CISO COMMAND CENTER"
+           onclick="selectAuthRole(this, 'admin', event)">
+        <div class="auth-icon-box">
+          <svg viewBox="0 0 64 64" fill="none">
+            <path d="M32 6L10 16V32C10 43.5 20 53.5 32 58C44 53.5 54 43.5 54 32V16L32 6Z"
+                  fill="rgba(200,255,0,0.15)" stroke="rgba(200,255,0,0.6)" stroke-width="2" stroke-linejoin="round"/>
+            <circle cx="32" cy="26" r="7" fill="rgba(255,255,255,0.6)" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+            <path d="M18 46c0-7.732 6.268-13 14-13s14 5.268 14 13" fill="rgba(255,255,255,0.55)" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+            <path d="M44 14l3 3 6-6" stroke="rgba(200,255,0,0.9)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+        </div>
+        <div class="auth-role-label">Admin (CISO)<br>System</div>
       </div>
     </div>
-    <div class="auth-tabs">
-      <button type="button" class="auth-tab active" id="tab-login" onclick="showAuthTab('login')">Sign In</button>
-      <button type="button" class="auth-tab" id="tab-register" onclick="showAuthTab('register')">Register</button>
-    </div>
-    <div id="auth-step-credentials">
-      <form id="login-form" onsubmit="handleLogin(event)">
-        <div class="field"><label>Role</label>
-          <select id="login-role" required>
-            <option value="user">Standard User</option>
-            <option value="infosec">Info Sec</option>
-            <option value="admin">Admin (CISO)</option>
-          </select>
-        </div>
-        <div class="field"><label>Email</label><input type="email" id="login-email" required placeholder="name@plm.edu.ph" autocomplete="username"></div>
-        <div class="field"><label>Password</label>
-          <div class="pw-wrap">
-            <input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password">
-            <button type="button" class="pw-toggle" data-target="login-password" aria-label="Show password" onclick="togglePassword(this)">Show</button>
+
+    <!-- Stage 2: Login / Register form for the chosen role -->
+    <div class="auth-form-card hidden" id="auth-stage-form">
+
+      <button type="button" class="auth-back-link" onclick="backToRoleSelect()" aria-label="Change role">
+        <span aria-hidden="true">←</span> Change role
+      </button>
+
+      <div class="auth-role-pill">
+        <span class="auth-role-pill-dot" id="auth-role-pill-dot"></span>
+        Signing in as <strong id="auth-role-pill-label">Standard User</strong>
+      </div>
+
+      <div class="auth-tabs-new">
+        <button type="button" class="auth-tab-new active" id="tab-login" onclick="showAuthTab('login')">SIGN IN</button>
+        <button type="button" class="auth-tab-new" id="tab-register" onclick="showAuthTab('register')">REGISTER</button>
+      </div>
+
+      <div id="auth-step-credentials">
+        <form id="login-form" onsubmit="handleLogin(event)" novalidate>
+          <input type="hidden" id="login-role" value="user">
+
+          <div class="auth-field">
+            <label for="login-email">Email Address</label>
+            <input type="email" id="login-email" required placeholder="name@plm.edu.ph" autocomplete="username">
           </div>
-        </div>
-        <button type="submit" class="btn btn-primary auth-submit" id="login-btn">Sign In →</button>
-      </form>
-      <form id="register-form" class="hidden" onsubmit="handleRegister(event)">
-        <div class="field"><label>Requested Role</label>
-          <select id="register-role" required>
-            <option value="user">Standard User</option>
-            <option value="infosec">Info Sec</option>
-            <option value="admin">Admin (CISO)</option>
-          </select>
-        </div>
-        <div class="field"><label>Email</label><input type="email" id="register-email" required placeholder="name@plm.edu.ph"></div>
-        <div class="field"><label>Password</label>
-          <div class="pw-wrap">
-            <input type="password" id="register-password" required minlength="8" placeholder="Min. 8 characters" autocomplete="new-password">
-            <button type="button" class="pw-toggle" data-target="register-password" aria-label="Show password" onclick="togglePassword(this)">Show</button>
+
+          <div class="auth-field">
+            <label for="login-password">Password</label>
+            <div class="auth-pw-wrap">
+              <input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password">
+              <button type="button" class="auth-pw-toggle" data-target="login-password" aria-label="Show password" onclick="togglePassword(this)">Show</button>
+            </div>
           </div>
-        </div>
-        <div class="field"><label>Confirm Password</label>
-          <div class="pw-wrap">
-            <input type="password" id="register-password2" required placeholder="Repeat password" autocomplete="new-password">
-            <button type="button" class="pw-toggle" data-target="register-password2" aria-label="Show password" onclick="togglePassword(this)">Show</button>
+
+          <p id="login-error" class="auth-error-new" hidden role="alert"></p>
+
+          <button type="submit" class="auth-btn-primary" id="login-btn">
+            Authenticate <span aria-hidden="true">→</span>
+          </button>
+        </form>
+
+        <form id="register-form" class="hidden" onsubmit="handleRegister(event)" novalidate>
+          <input type="hidden" id="register-role" value="user">
+
+          <div class="auth-field">
+            <label for="register-email">Email Address</label>
+            <input type="email" id="register-email" required placeholder="name@plm.edu.ph" autocomplete="email">
           </div>
+
+          <div class="auth-field">
+            <label for="register-password">Password</label>
+            <div class="auth-pw-wrap">
+              <input type="password" id="register-password" required minlength="8" placeholder="Min. 8 characters" autocomplete="new-password">
+              <button type="button" class="auth-pw-toggle" data-target="register-password" aria-label="Show password" onclick="togglePassword(this)">Show</button>
+            </div>
+          </div>
+
+          <div class="auth-field">
+            <label for="register-password2">Confirm Password</label>
+            <div class="auth-pw-wrap">
+              <input type="password" id="register-password2" required placeholder="Repeat password" autocomplete="new-password">
+              <button type="button" class="auth-pw-toggle" data-target="register-password2" aria-label="Show password" onclick="togglePassword(this)">Show</button>
+            </div>
+          </div>
+
+          <p class="auth-hint-new">
+            Supabase will email a verification link. Confirm it before signing in.
+            Standard Users need Info Sec / Admin approval; Info Sec needs Admin approval.
+          </p>
+
+          <p id="register-error" class="auth-error-new" hidden role="alert"></p>
+
+          <button type="submit" class="auth-btn-primary" id="register-btn">
+            Create Account <span aria-hidden="true">→</span>
+          </button>
+        </form>
+      </div>
+
+      <div id="auth-step-verify" class="hidden auth-info-card">
+        <div class="auth-info-icon" aria-hidden="true">✉</div>
+        <h3>Check Your Inbox</h3>
+        <p>We sent a verification link to <strong id="verify-email-target">your inbox</strong>.</p>
+        <p class="auth-info-sub">Click the link to confirm your email, then return here to sign in. Your account will enter the approval queue automatically.</p>
+        <div class="auth-info-actions">
+          <button type="button" class="auth-btn-ghost" onclick="resendVerificationEmail()">Resend Email</button>
+          <button type="button" class="auth-btn-ghost" onclick="resetAuthSteps()">← Back to Sign In</button>
         </div>
-        <p class="auth-hint auth-hint-inline">Supabase will email a verification link. Confirm it before signing in. Standard Users need Info Sec / Admin approval; Info Sec needs Admin approval.</p>
-        <button type="submit" class="btn btn-primary auth-submit" id="register-btn">Create Account →</button>
-      </form>
+      </div>
+
+      <div id="auth-step-pending" class="hidden auth-pending-card">
+        <div class="auth-pending-icon" aria-hidden="true">◷</div>
+        <h3>Pending Approval</h3>
+        <p id="pending-approval-msg">Your account is awaiting approval.</p>
+        <div class="auth-info-actions">
+          <button type="button" class="auth-btn-ghost" onclick="handleLogout()">Sign Out</button>
+        </div>
+      </div>
+
+      <div class="auth-footer-hint">
+        Master admin <code>admin@plm.edu.ph</code> is auto-promoted on email verification.
+        <span class="auth-footer-sep">•</span>
+        Stuck on a stale session? <button type="button" class="auth-link-btn" onclick="forceResetSession()">Reset session</button>
+      </div>
     </div>
-    <div id="auth-step-verify" class="hidden auth-info-box">
-      <h3>Check Your Email</h3>
-      <p>We sent a verification link to <strong id="verify-email-target">your inbox</strong>.</p>
-      <p>Click the link to confirm your email. Your account will then enter the approval queue automatically.</p>
-      <button type="button" class="btn btn-sm" onclick="resendVerificationEmail()">Resend verification email</button>
-      <button type="button" class="btn btn-sm auth-back" onclick="resetAuthSteps()">← Back to sign in</button>
-    </div>
-    <div id="auth-step-pending" class="hidden auth-pending-box">
-      <h3>Account Pending Approval</h3>
-      <p id="pending-approval-msg">Your account is awaiting approval.</p>
-      <button type="button" class="btn" onclick="handleLogout()">Sign Out</button>
-    </div>
-    <p class="auth-hint">Master admin <code>admin@plm.edu.ph</code> is auto-promoted on email verification (see <code>supabase/master_setup.sql</code>).</p>
-    <p id="login-error" class="auth-error" hidden></p>
-    <p class="auth-hint" style="margin-top:14px;">
-      Stuck on a stale session?
-      <button type="button" class="btn btn-sm" onclick="forceResetSession()">Reset session</button>
-    </p>
   </div>
 </div>
 
@@ -155,11 +247,37 @@
       <div class="page-header">
         <div>
           <div class="page-title">DASH<span>BOARD</span></div>
-          <div class="page-desc">// Real-time aggregations from relational database</div>
+          <div class="page-desc">// Risk posture, treatment progress &amp; register health — approved register</div>
         </div>
-        <button class="btn btn-primary" onclick="showSection('add')">+ Insert New Record</button>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <button type="button" class="btn" onclick="showSection('risk')">Risk register</button>
+          <button type="button" class="btn btn-primary" onclick="showSection('add')">+ New record</button>
+        </div>
       </div>
 
+      <p class="dash-section-title">Risk posture</p>
+      <div class="metrics-grid metrics-grid--risk">
+        <div class="metric-card danger">
+          <div class="metric-num" id="dm-risk-threshold-pct">0%</div>
+          <div class="metric-label">Share ≥ Moderate residual <span class="metric-hint">(elevated)</span></div>
+        </div>
+        <div class="metric-card warn">
+          <div class="metric-num" id="dm-risk-threshold-n">0</div>
+          <div class="metric-sub" id="dm-risk-avg-inherit">Avg inherent score: —</div>
+          <div class="metric-label">Assets at elevated residual</div>
+        </div>
+        <div class="metric-card accent">
+          <div class="metric-num" id="dm-risk-analysis-pct">0%</div>
+          <div class="metric-label">Risk register completeness <span class="metric-hint">(threat + P×S)</span></div>
+        </div>
+        <div class="metric-card info">
+          <div class="metric-num" id="dm-risk-response-pct">0%</div>
+          <div class="metric-sub" id="dm-risk-response-detail">Treatment tracking (elevated)</div>
+          <div class="metric-label">Response progress</div>
+        </div>
+      </div>
+
+      <p class="dash-section-title">Register overview</p>
       <div class="metrics-grid">
         <div class="metric-card accent"><div class="metric-num" id="dm-total">0</div><div class="metric-label">Total DB Assets</div></div>
         <div class="metric-card danger"><div class="metric-num" id="dm-high">0</div><div class="metric-label">High Residual Risk</div></div>
@@ -167,13 +285,32 @@
         <div class="metric-card info"><div class="metric-num" id="dm-pii">0</div><div class="metric-label">Assets with PII</div></div>
       </div>
 
+      <div class="grid-3 dash-risk-viz" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-header">Residual risk breakdown</div>
+          <div class="dash-donut-block" id="dash-risk-donut"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">Inherent risk matrix <span style="font-size:9px;color:var(--text3);margin-left:6px;">Probability × Severity · approved assets</span></div>
+          <div id="dash-heatmap"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">Action plan status <span style="font-size:9px;color:var(--text3);margin-left:6px;">Elevated residuals (High / Moderate)</span></div>
+          <div class="dash-donut-block" id="dash-action-donut"></div>
+        </div>
+      </div>
+
       <div class="grid-2" style="margin-bottom:16px">
-        <div class="card"><div class="card-header">Asset Type Breakdown</div><div id="dash-types"></div></div>
-        <div class="card"><div class="card-header">Residual Risk Distribution</div><div id="dash-residual"></div></div>
+        <div class="card"><div class="card-header">Asset type breakdown</div><div id="dash-types"></div></div>
+        <div class="card"><div class="card-header">Residual distribution (bars)</div><div id="dash-residual"></div></div>
+      </div>
+      <div class="grid-2" style="margin-bottom:16px">
+        <div class="card"><div class="card-header">Information classification</div><div id="dash-class"></div></div>
+        <div class="card"><div class="card-header">Top risk assets <span style="font-size:9px;color:var(--text3);margin-left:6px;">by residual</span></div><div id="dash-top-risk"></div></div>
       </div>
       <div class="grid-2">
-        <div class="card"><div class="card-header">Information Classification</div><div id="dash-class"></div></div>
-        <div class="card"><div class="card-header">Top Risk Assets</div><div id="dash-top-risk"></div></div>
+        <div class="card"><div class="card-header">Highest inherent exposure <span style="font-size:9px;color:var(--text3);margin-left:6px;">P × S score</span></div><div id="dash-top-inherent"></div></div>
+        <div class="card"><div class="card-header">Treatment by strategy <span style="font-size:9px;color:var(--text3);margin-left:6px;">elevated risks</span></div><div id="dash-strategy-bars"></div></div>
       </div>
     </div>
 
@@ -594,7 +731,7 @@
 
 <div id="notification" class="notification"></div>
 
-<script src="./assets/scripts/app.js?v=20260517o"></script>
+<script src="./assets/scripts/app.js?v=20260517-dash1"></script>
 
 </body>
 </html>
