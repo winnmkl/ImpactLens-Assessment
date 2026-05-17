@@ -55,7 +55,9 @@ CREATE TABLE IF NOT EXISTS public."Assets" (
   "actionDate" text,
   created_by text,
   updated_by text,
-  reviewed_at timestamptz
+  reviewed_at timestamptz,
+  mbss_json text,
+  firewall_json text
 );
 
 CREATE TABLE IF NOT EXISTS public."AssetControls" (
@@ -354,6 +356,21 @@ INSERT INTO public."Assets" (
 ('PhA-014', 'Approved', 'PhA', 'PLM Intramuros Generator Sets', 'Facilities', 'GEN-INTRAM', 'Power House', 'Facilities Manager', 'Emergency generators for main campus.', 'N/A', 'Internal', 'Facilities Management', 'N', 'N', 'N', 1, 1, 2, 4, 'Internal Use', 'phys_destruct', 'Emergency generators for main campus.', 2, 5, 'Moderate', 'Moderate', 'Mitigate', 'In Progress', 'PLM ISMS mitigation in progress.', 'Asset Owner', '2026-12-31'),
 ('SV-009', 'Approved', 'SV', 'ICTO Service Desk Ticketing (osTicket)', 'ICTO', 'SD-TICKET', 'Helpdesk Server', 'Service Desk Lead', 'IT support ticket tracking.', '10.99.5.10', 'Internal', 'ICTO', 'N', 'N', 'Y', 2, 2, 3, 7, 'Confidential', 'cyber_int_vuln', 'IT support ticket tracking.', 3, 2, 'Moderate', 'Low', 'Mitigate', 'In Progress', 'PLM ISMS mitigation in progress.', 'Asset Owner', '2026-12-31'),
 ('IA-016', 'Approved', 'IA', 'Procurement Bid Document Repository', 'Procurement', 'PROC-BIDS', 'Procurement Share', 'BAC Secretariat', 'Sensitive bid proposals and awards.', '10.40.6.10', 'Internal', 'Procurement', 'Y', 'Y', 'Y', 3, 3, 3, 9, 'Restricted', 'hr_insider', 'Sensitive bid proposals and awards.', 2, 4, 'Moderate', 'High', 'Mitigate', 'In Progress', 'PLM ISMS mitigation in progress.', 'Asset Owner', '2026-12-31');
+
+-- MBSS + firewall JSON: populate seed rows (INSERT above omits these columns).
+-- PhA / PA payloads MUST match assets/scripts/app.js (LOCKED_MBSS_JSON_BY_TYPE / LOCKED_FIREWALL_JSON_BY_TYPE).
+UPDATE public."Assets" SET mbss_json = CASE type
+  WHEN 'PhA' THEN '{"edr_epp":"N","patch_current":"N","disk_encryption":"N","host_firewall":"N","admin_priv_review":"Y","last_review_date":"","notes":"Physical asset — host MBSS baseline not applicable (system fixed)."}'
+  WHEN 'PA' THEN '{"edr_epp":"N","patch_current":"N","disk_encryption":"N","host_firewall":"N","admin_priv_review":"Y","last_review_date":"","notes":"Personnel asset — endpoint baseline not applicable (system fixed)."}'
+  ELSE '{"edr_epp":"Y","patch_current":"Y","disk_encryption":"Y","host_firewall":"Y","admin_priv_review":"Y","last_review_date":"2026-05-01","notes":"PLM ISMS seed baseline from master_setup; validate per asset."}'
+END::text;
+
+UPDATE public."Assets" SET firewall_json = CASE
+  WHEN type = 'PhA' THEN '{"scope":"None documented","default_deny":"N","change_control":"Y","logging_soc":"N","rule_review_cadence":"Annual","overly_permissive":"N","notes":"Physical asset — perimeter at facility or campus layer only (system fixed)."}'
+  WHEN type = 'PA' THEN '{"scope":"None documented","default_deny":"N","change_control":"Y","logging_soc":"N","rule_review_cadence":"Annual","overly_permissive":"N","notes":"Personnel asset — network perimeter not applicable (system fixed)."}'
+  WHEN environment = 'Internet Facing' AND type IN ('SV', 'SA', 'IA', 'FA') THEN '{"scope":"WAF","default_deny":"Y","change_control":"Y","logging_soc":"Y","rule_review_cadence":"Quarterly","overly_permissive":"N","notes":"Internet-facing; edge WAF or equivalent in scope."}'
+  ELSE '{"scope":"Network firewall","default_deny":"Y","change_control":"Y","logging_soc":"Y","rule_review_cadence":"Quarterly","overly_permissive":"N","notes":"Internal or hybrid; campus firewall baseline."}'
+END::text;
 
 INSERT INTO public."AssetControls" (asset_id, ctrl_id) VALUES
   ('IA-001', 1),

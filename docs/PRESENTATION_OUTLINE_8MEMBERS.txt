@@ -1,0 +1,335 @@
+================================================================================
+IMPACTLENS - 10-15 MINUTE PPT PRESENTATION OUTLINE (8 MEMBERS)
+================================================================================
+Target duration: 12 minutes (+ 3 minutes buffer for Q&A handoff)
+Recommended slides: 14-16 total (including title and thank-you)
+Format: Each member speaks once (~1.5 minutes average)
+
+Tip: Rehearse with a timer. Demo slides can be screenshots if live demo is risky.
+
+================================================================================
+TIMING OVERVIEW
+================================================================================
+
+  Member   Topic                              Time      Slides
+  ------   --------------------------------   -------   ------
+  1        Opening + Problem                  1:30      1-2
+  2        Solution Overview                  1:30      3
+  3        Architecture & Tech Stack          1:30      4
+  4        Roles & Account Workflow           1:45      5-6
+  5        Asset Approval Workflow            1:45      7
+  6        Risk Engine & Calculations         2:00      8-9
+  7        Standards & Compliance Mapping     1:45      10
+  8        Demo, Dashboard, Closing           2:00      11-14
+  ------   --------------------------------   -------   ------
+  TOTAL                                       ~12:00    14 slides
+
+================================================================================
+SLIDE-BY-SLIDE OUTLINE
+================================================================================
+
+------------------------------------------------------------------------------
+SLIDE 1 - TITLE (Member 1) | ~30 seconds
+------------------------------------------------------------------------------
+Title:   ImpactLens: Multi-Role Information Security Risk Assessment Platform
+Subtitle: Pamantasan ng Lungsod ng Maynila (PLM) ISMS
+         BSCS 2-4 Group 3 | [Semester/Year]
+
+On slide:
+  - Project name + PLM logo (if allowed)
+  - All 8 member names (one line or two columns)
+  - Course / adviser name
+
+Speaker 1 says:
+  - Good [morning/afternoon], we are Group 3...
+  - Brief one-liner: "ImpactLens digitizes PLM's Information Asset Register
+    and risk assessment workflow using industry security standards."
+
+------------------------------------------------------------------------------
+SLIDE 2 - THE PROBLEM (Member 1) | ~1 minute
+------------------------------------------------------------------------------
+Title: Why We Built ImpactLens
+
+Bullet points:
+  - PLM ISMS needs a structured Information Asset Register (IAR)
+  - Manual/spreadsheet risk assessments are hard to audit and inconsistent
+  - Multiple stakeholders: asset owners, Info Sec, CISO - need clear workflow
+  - Compliance requires traceable mapping to NIST, ISO, CIS, PCI-DSS, RA 10173
+
+Speaker 1 says:
+  - Describe pain points at PLM (paper forms, no role separation, no audit trail)
+  - State goal: one web tool that is standards-aligned and approval-driven
+
+------------------------------------------------------------------------------
+SLIDE 3 - SOLUTION OVERVIEW (Member 2) | ~1.5 minutes
+------------------------------------------------------------------------------
+Title: What Is ImpactLens?
+
+Bullet points:
+  - Web-based IAR and risk assessment platform (v2.0)
+  - Three roles: Standard User, Info Sec, Admin (CISO)
+  - Three-tier asset workflow: Draft -> Pending Approval -> Approved
+  - Live risk math: inherent + residual + mandatory control floors
+  - 13 security controls mapped to major frameworks
+  - Excel audit export (7-10 sheets) + system logs + notifications
+
+Optional visual: Simple 3-box diagram (User | Info Sec | CISO)
+
+Speaker 2 says:
+  - Walk through the bullet list as "what the system does end-to-end"
+  - Emphasize: not just a form - it enforces standards and auditability
+
+------------------------------------------------------------------------------
+SLIDE 4 - ARCHITECTURE (Member 3) | ~1.5 minutes
+------------------------------------------------------------------------------
+Title: System Architecture
+
+Bullet points:
+  - Frontend: HTML, CSS, Vanilla JavaScript (no React - lightweight)
+  - Backend: Supabase (PostgreSQL + Auth + Row Level Security)
+  - Tables: Assets, AssetControls, user_profiles, SystemLogs, ReportData
+  - Security: JWT login, RLS at database, role-based UI hiding
+  - Hosted locally: npm start -> http://localhost:8000
+
+Visual: Simple diagram
+  [Browser] --HTTPS/JWT--> [Supabase Cloud: Auth + Database]
+
+Speaker 3 says:
+  - Explain why Supabase (auth, real-time sync, RLS without custom server)
+  - One sentence: "UI checks role, database also enforces role - defense in depth"
+
+------------------------------------------------------------------------------
+SLIDE 5 - ROLES & PERMISSIONS (Member 4) | ~1 minute
+------------------------------------------------------------------------------
+Title: Role-Based Access Control (RBAC)
+
+Table on slide:
+
+  Role          Can do                           Cannot do
+  ------------  -------------------------------  ---------------------------
+  Standard User Submit Draft assets              Approve, dashboard, profiling
+  Info Sec      Profile Draft, submit Pending    Final asset approval
+  Admin (CISO)  Approve/reject assets, reports  (full authority)
+
+Speaker 4 says:
+  - Each role has a clear responsibility in the ISMS chain
+  - Separation of duties: users declare assets, Info Sec assesses, CISO approves
+
+------------------------------------------------------------------------------
+SLIDE 6 - ACCOUNT APPROVAL (Member 4) | ~45 seconds
+------------------------------------------------------------------------------
+Title: User Account Workflow
+
+Bullet points:
+  - New users register with email verification (Supabase Auth)
+  - Account starts as Pending until approved
+  - Info Sec approves Standard User requests
+  - Admin approves Info Sec requests
+  - Rejected accounts see reason and cannot enter the app
+
+Visual: Register -> Pending -> Active (or Rejected)
+
+Speaker 4 says:
+  - Quick flow only - do not overlap with asset workflow (next speaker)
+
+------------------------------------------------------------------------------
+SLIDE 7 - ASSET WORKFLOW (Member 5) | ~1.5 minutes
+------------------------------------------------------------------------------
+Title: Asset Approval Workflow (3-Tier)
+
+Visual (required on slide):
+
+  Standard User     Info Sec              Admin (CISO)
+       |                |                      |
+       v                v                      v
+    [ DRAFT ] -----> [ enrich risk ] ----> [ PENDING ]
+       |                |                      |
+       |                |                 approve / reject
+       |                v                      v
+       |           back to Draft          [ APPROVED ]
+       |           (with reason)               |
+       +----------> [ DELETED ]                |
+                    (reject draft)      (in official register)
+
+Bullet points:
+  - Every action logged in SystemLogs
+  - Reject requires reason (framework-aware presets)
+  - Approved assets appear on Dashboard and Excel export
+
+Speaker 5 says:
+  - Walk the diagram left to right with one PLM example (e.g. tuition payment DB)
+  - Mention audit trail: "who did what, when, and why"
+
+------------------------------------------------------------------------------
+SLIDE 8 - RISK CALCULATION PART 1 (Member 6) | ~1 minute
+------------------------------------------------------------------------------
+Title: How Risk Is Calculated (Inherent)
+
+Bullet points:
+  - CIA scoring: Confidentiality + Integrity + Availability (3-9)
+  - Classification: Public, Internal, Confidential, Restricted
+  - User sets Probability (1-5) and Severity (1-5)
+  - Inherent escalations (NIST SP 800-30 style):
+      * Internet-facing + external cyber threat -> higher P
+      * PII/SPI + data leak -> S = 5
+      * Restricted data + cyber/insider -> S >= 4
+      * Financial asset (FA) + cyber -> S = 5
+  - 5x5 matrix -> Inherent rating (Very Low to High)
+
+Visual: Small 5x5 heatmap or color legend (red/amber/cyan/green)
+
+Speaker 6 says:
+  - Focus on "before controls" - what could go wrong at worst case
+
+------------------------------------------------------------------------------
+SLIDE 9 - RISK CALCULATION PART 2 (Member 6) | ~1 minute
+------------------------------------------------------------------------------
+Title: Residual Risk, Controls & Floors
+
+Bullet points:
+  - 13 controls (MFA, RBAC, Encryption, Backup, EDR, Firewall, etc.)
+  - Only threat-relevant controls reduce P/S (weighted + synergy bonuses)
+  - Diminishing returns: cannot game the system with too many checkboxes
+  - Mandatory floors: missing baseline controls -> residual cannot go below floor
+      * Restricted data -> floor Moderate
+      * Financial asset (PCI) -> floor High
+      * PII/SPI -> floor Moderate (RA 10173)
+  - Cannot "Accept" High residual risk (ISO 27001 risk appetite)
+
+Speaker 6 says:
+  - One sentence example: "Without MFA on restricted data, residual stays Moderate
+    even if other controls are checked"
+
+------------------------------------------------------------------------------
+SLIDE 10 - STANDARDS ALIGNMENT (Member 7) | ~1.5 minutes
+------------------------------------------------------------------------------
+Title: Standards and Frameworks
+
+Bullet points (grouped):
+
+  Risk methodology:
+    - NIST SP 800-30 Rev. 1, ISO/IEC 27005:2022, PLM IAR template
+
+  Control mapping (13 controls each linked to):
+    - NIST CSF 2.0
+    - ISO/IEC 27001:2022 Annex A
+    - CIS Controls v8
+    - SOC 2 Trust Services Criteria
+    - PCI-DSS v4.0 (Financial Assets only)
+
+  Privacy:
+    - RA 10173 (Philippine Data Privacy Act)
+    - ISO 27701, GDPR Art. 32
+
+Optional: Mini table showing Control 4 (MFA) mapped to PR.AA-03, A.8.5, CIS 6.3
+
+Speaker 7 says:
+  - Stress: "Not just labels - real clause IDs in export and gap analysis panel"
+  - PLM context: university systems, student PII, payment gateways
+
+------------------------------------------------------------------------------
+SLIDE 11 - LIVE DEMO / SCREENSHOTS (Member 8) | ~1 minute
+------------------------------------------------------------------------------
+Title: Application Walkthrough
+
+Show 4 screenshots (or live demo in order):
+
+  1. Login / Register screen
+  2. Add Asset form (Draft) - asset identification
+  3. Risk section - inherent vs residual, control checkboxes, gap panel
+  4. Pending queue (Admin) or Approved asset in register
+
+Speaker 8 says:
+  - Fast walkthrough - 15-20 seconds per screenshot
+  - If live demo: use pre-loaded admin account; have backup screenshots
+
+------------------------------------------------------------------------------
+SLIDE 12 - DASHBOARD KPIs (Member 8) | ~45 seconds
+------------------------------------------------------------------------------
+Title: Dashboard - Risk Posture at a Glance
+
+Bullet points (explain the 4 KPI cards):
+
+  1. Share >= Moderate residual (% of approved register still elevated)
+  2. Assets at elevated residual (count + avg inherent tier)
+  3. Register completeness (threat description + P x S filled in)
+  4. Response progress (% of elevated risks with action In Progress or Done)
+
+Speaker 8 says:
+  - Use your actual numbers from the running app (e.g. 74.1%, 43 assets, 100%, 97.7%)
+  - One line: "Gives CISO a snapshot without opening every record"
+
+------------------------------------------------------------------------------
+SLIDE 13 - DELIVERABLES (Member 8) | ~30 seconds
+------------------------------------------------------------------------------
+Title: Key Deliverables
+
+Bullet points:
+  - Multi-sheet Excel IAR export (audit-ready)
+  - System Logs + notification inbox
+  - Mandatory Control Gaps panel with framework citations
+  - Reject/Delete reason capture for compliance audits
+  - Supabase-backed multi-user deployment
+
+------------------------------------------------------------------------------
+SLIDE 14 - THANK YOU / Q&A (Member 8 or whole team) | ~30 seconds
+------------------------------------------------------------------------------
+Title: Thank You | Questions?
+
+On slide:
+  - Project repo or demo URL (if applicable)
+  - Contact / group email
+  - "ImpactLens - Built for PLM Information Security Office"
+
+All members:
+  - Stand for Q&A
+  - Assign who answers: tech (M3), risk math (M6), standards (M7), workflow (M5)
+
+================================================================================
+SPEAKER ASSIGNMENT SUMMARY (QUICK REFERENCE)
+================================================================================
+
+  Member 1:  Slides 1-2   Opening, problem statement
+  Member 2:  Slide 3      Solution overview
+  Member 3:  Slide 4      Architecture
+  Member 4:  Slides 5-6   RBAC + account approval
+  Member 5:  Slide 7      Asset workflow
+  Member 6:  Slides 8-9   Risk calculations (longest technical section)
+  Member 7:  Slide 10     Standards and frameworks
+  Member 8:  Slides 11-14 Demo, dashboard, deliverables, close
+
+================================================================================
+DESIGN TIPS FOR THE PPT
+================================================================================
+
+  - Use PLM / ISMS colors if available; keep dark theme optional (match app)
+  - Max 5-6 bullets per slide; large font (24pt+ body)
+  - Use screenshots from the real app, not stock images
+  - One diagram per workflow slide (asset flow, architecture)
+  - Risk heatmap: use red / amber / cyan / green consistently
+  - Put member name in slide footer: "Speaker: [Name]"
+
+================================================================================
+REHEARSAL CHECKLIST
+================================================================================
+
+  [ ] Total run-through under 13 minutes
+  [ ] Demo account works (admin@ / infosec@ / user@ or your test users)
+  [ ] Screenshots saved if Wi-Fi or Supabase might fail live
+  [ ] Member 6 can explain one numeric example (P=3, S=4, + MFA -> residual)
+  [ ] Member 7 has one control mapping example ready (MFA)
+  [ ] Q&A: who answers security, database, legal/RA 10173 questions
+
+================================================================================
+OPTIONAL BACKUP SLIDES (NOT PRESENTED - FOR Q&A ONLY)
+================================================================================
+
+  A. Full list of 13 controls
+  B. Excel export sheet list (7 vs 10 sheets)
+  C. Threat categories table
+  D. Technology limitations (vanilla JS, no mobile app)
+  E. Future improvements (automated scanning integration, SSO, etc.)
+
+================================================================================
+END OF OUTLINE
+================================================================================

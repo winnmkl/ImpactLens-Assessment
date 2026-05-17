@@ -567,6 +567,115 @@ function runEnforcementEngine(skipAutoTemplate = false) {
     calculateRiskMath();
 }
 
+/** MBSS + perimeter form fields for evidence linkage (operational alignment with C1–C13). */
+function readMbssFirewallEvidenceFromForm() {
+    const yn = id => {
+        const el = document.getElementById(id);
+        if (!el) return 'N';
+        return (el.value || '').trim() === 'Y' ? 'Y' : 'N';
+    };
+    return {
+        edr_epp: yn('f-mbss-edr'),
+        patch_current: yn('f-mbss-patch'),
+        disk_encryption: yn('f-mbss-disk'),
+        host_firewall: yn('f-mbss-hostfw'),
+        admin_priv_review: yn('f-mbss-admin'),
+        fw_scope: (document.getElementById('f-fw-scope')?.value || '').trim(),
+        fw_default_deny: yn('f-fw-defaultdeny'),
+        fw_change: yn('f-fw-change'),
+        fw_logging: yn('f-fw-logging'),
+        fw_permissive: yn('f-fw-permissive'),
+    };
+}
+
+/**
+ * Evidence multiplier for *checked* controls only — strengthens P/S reduction when MBSS / perimeter
+ * answers support the same control family (no extra reduction for evidence alone).
+ */
+function mbssFwEvidenceMultiplierForControl(ctrlId, ev) {
+    const y = x => x === 'Y';
+    let m = 1;
+    switch (ctrlId) {
+        case 9:
+            if (y(ev.edr_epp)) m = 1.18;
+            break;
+        case 11:
+            if (y(ev.patch_current)) m = 1.15;
+            break;
+        case 7:
+            if (y(ev.disk_encryption)) m = 1.12;
+            break;
+        case 10: {
+            let bonus = 0;
+            if (y(ev.host_firewall)) bonus += 0.07;
+            if (y(ev.fw_default_deny) && y(ev.fw_logging) && !y(ev.fw_permissive)) bonus += 0.12;
+            else if (y(ev.fw_default_deny) || y(ev.fw_logging)) bonus += 0.05;
+            if (ev.fw_scope && ev.fw_scope !== 'None documented') bonus += 0.04;
+            m = 1 + Math.min(bonus, 0.2);
+            if (y(ev.fw_permissive)) m *= 0.9;
+            break;
+        }
+        case 3:
+            if (y(ev.admin_priv_review)) m = 1.1;
+            break;
+        default:
+            break;
+    }
+    return m;
+}
+
+/** Surface mismatches between operational evidence and implemented-control checkboxes. */
+function collectMbssFwAlignmentMessages(active, ev) {
+    const activeSet = new Set(active);
+    const y = x => x === 'Y';
+    const out = [];
+    if (y(ev.edr_epp) && !activeSet.has(9)) out.push('MBSS: EDR/EPP = Y but Control 9 (EDR) is not selected — tick C9 or correct MBSS.');
+    if (activeSet.has(9) && !y(ev.edr_epp)) out.push('Control 9 (EDR) is selected but MBSS EDR/EPP = N — align evidence or clear C9.');
+
+    if (y(ev.patch_current) && !activeSet.has(11)) out.push('MBSS: Patch current = Y but Control 11 (Vulnerability management) is not selected — align or correct MBSS.');
+    if (activeSet.has(11) && !y(ev.patch_current)) out.push('Control 11 is selected but MBSS Patch current = N — align evidence or clear C11.');
+
+    if (y(ev.disk_encryption) && !activeSet.has(7)) out.push('MBSS: Disk encryption = Y but Control 7 (Encryption) is not selected — align or correct MBSS.');
+    if (activeSet.has(7) && !y(ev.disk_encryption)) out.push('Control 7 is selected but MBSS Disk encryption = N — align evidence or clear C7.');
+
+    if (y(ev.host_firewall) && !activeSet.has(10)) out.push('MBSS: Host firewall = Y but Control 10 (Firewall/WAF) is not selected — align or correct MBSS.');
+    const fwPerimeterSignal = y(ev.fw_default_deny) || y(ev.fw_logging) || !!(ev.fw_scope && ev.fw_scope !== 'None documented');
+    if (activeSet.has(10) && !y(ev.host_firewall) && !fwPerimeterSignal) {
+        out.push('Control 10 is on but MBSS host firewall = N and perimeter review lacks default deny, logging, or documented scope — complete evidence or adjust C10.');
+    }
+
+    if (y(ev.admin_priv_review) && !activeSet.has(3)) out.push('MBSS: Admin privilege review = Y but Control 3 (RBAC) is not selected — align or correct MBSS.');
+    if (activeSet.has(3) && !y(ev.admin_priv_review)) out.push('Control 3 (RBAC) is selected but MBSS Admin review = N — align evidence or clear C3.');
+
+    if (y(ev.fw_permissive) && activeSet.has(10)) {
+        out.push('Perimeter review: Overly permissive rules = Y while Control 10 is on — evidence multiplier is reduced; remediate rule hygiene.');
+    }
+    return out;
+}
+
+function renderMbssFirewallAlignmentPanel(messages) {
+    let panel = document.getElementById('mbss-fw-align-panel');
+    if (!panel) {
+        const compEl = document.getElementById('compliance-mapping-panel');
+        if (!compEl || !compEl.parentNode) return;
+        panel = document.createElement('div');
+        panel.id = 'mbss-fw-align-panel';
+        panel.className = 'compliance-panel mbss-fw-align-panel hidden';
+        compEl.parentNode.insertBefore(panel, compEl);
+    }
+    const showRole = currentRole === 'infosec' || currentRole === 'admin';
+    if (!showRole || !messages || !messages.length) {
+        panel.classList.add('hidden');
+        panel.innerHTML = '';
+        return;
+    }
+    panel.innerHTML = `
+      <label style="margin-top:12px;display:block;color:var(--accent2);">MBSS / firewall ↔ implemented controls</label>
+      <div class="gap-summary">Evidence <strong>amplifies</strong> P/S reduction only for controls you already selected when MBSS and perimeter fields support them. Use the list below to keep the narrative and the math consistent.</div>
+      <ul class="gap-list">${messages.map(m => `<li>${escapeHtmlSafe(m)}</li>`).join('')}</ul>`;
+    panel.classList.remove('hidden');
+}
+
 function calculateRiskMath() {
     let p = parseInt(g('f-prob')) || 3;
     let s = parseInt(g('f-sev')) || 3;
@@ -616,13 +725,16 @@ function calculateRiskMath() {
         if (cb && cb.checked && !cb.disabled) active.push(i);
     }
     const activeRelevant = active.filter(id => relevantSet.has(id));
+    const mbssFwEv = readMbssFirewallEvidenceFromForm();
 
-    // Sum weighted reductions for relevant controls only.
-    let pRedRaw = 0, sRedRaw = 0;
+    // Sum weighted reductions for relevant controls only (MBSS / perimeter evidence may amplify checked controls).
+    let pRedRaw = 0, sRedRaw = 0, evidenceBoostedCtrlCount = 0;
     activeRelevant.forEach(id => {
         const w = CONTROL_WEIGHTS[id] || { p: 0, s: 0 };
-        pRedRaw += w.p;
-        sRedRaw += w.s;
+        const evMult = mbssFwEvidenceMultiplierForControl(id, mbssFwEv);
+        if (evMult > 1.001) evidenceBoostedCtrlCount++;
+        pRedRaw += w.p * evMult;
+        sRedRaw += w.s * evMult;
     });
     // Apply synergy bonuses where ALL ids of a synergy are active and relevant.
     const appliedSynergies = [];
@@ -682,7 +794,8 @@ function calculateRiskMath() {
     const fbEl = document.getElementById('control-feedback');
     if (fbEl) {
         const synTxt = appliedSynergies.length ? ` · synergy: ${appliedSynergies.join(', ')}` : '';
-        fbEl.textContent = `(${activeRelevant.length} of ${relevantSet.size} relevant mitigating controls applied${synTxt})`;
+        const evTxt = evidenceBoostedCtrlCount ? ` · MBSS/perimeter evidence reinforces ${evidenceBoostedCtrlCount} applied control(s)` : '';
+        fbEl.textContent = `(${activeRelevant.length} of ${relevantSet.size} relevant mitigating controls applied${synTxt})${evTxt}`;
     }
 
     // -----------------------------------------------------------
@@ -720,6 +833,9 @@ function calculateRiskMath() {
 
     renderComplianceMapping();
     renderControlGapAnalysis(gaps);
+    renderMbssFirewallAlignmentPanel(collectMbssFwAlignmentMessages(active, mbssFwEv));
+    syncMbssFirewallScoreMirrors();
+    syncMbssFirewallSectionState();
 }
 
 function applyRiskTemplate(skipEngineUpdate = false) {
@@ -918,6 +1034,7 @@ function roleLabel(role) {
 }
 
 function showAuthScreen() {
+    document.body.dataset.role = '';
     document.getElementById('auth-screen')?.classList.remove('hidden');
     document.getElementById('app-shell')?.classList.add('hidden');
     const trig = document.getElementById('notif-trigger');
@@ -1157,6 +1274,7 @@ function clearAuthRejectionBanner() {
 }
 
 function showAuthCredentialsView({ email = '', role = null } = {}) {
+    document.body.dataset.role = '';
     document.getElementById('auth-screen')?.classList.remove('hidden');
     document.getElementById('app-shell')?.classList.add('hidden');
     const trig = document.getElementById('notif-trigger');
@@ -1179,6 +1297,7 @@ function showRejectedAccount(profile) {
     const role = profile?.requested_role || 'user';
 
     suppressAuthReset = true;
+    document.body.dataset.role = '';
     if (supabaseClient) supabaseClient.auth.signOut().catch(() => {});
     currentUser = null;
     currentRole = null;
@@ -1201,6 +1320,7 @@ function showRejectedAccount(profile) {
 
 function showPendingApproval(profile) {
     clearAuthRejectionBanner();
+    document.body.dataset.role = '';
     document.getElementById('auth-screen')?.classList.remove('hidden');
     document.getElementById('app-shell')?.classList.add('hidden');
     document.getElementById('auth-stage-roles')?.classList.add('hidden');
@@ -1217,6 +1337,14 @@ async function loadUserProfile(userId) {
     const { data, error } = await supabaseClient.from('user_profiles').select('*').eq('id', userId).maybeSingle();
     if (error) throw error;
     return data;
+}
+
+/** Normalise DB role so CSV toolbar + RLS-aligned UI match ('infosec' not 'Infosec', etc.). */
+function normalizeApprovedRole(role) {
+    if (role == null || role === '') return 'user';
+    const s = String(role).trim().toLowerCase();
+    if (['user', 'infosec', 'admin'].includes(s)) return s;
+    return 'user';
 }
 
 function showAppShell() {
@@ -1354,6 +1482,7 @@ async function handleLogin(event) {
 function handleLogout() {
     // Reset client state and flip the UI FIRST so the user is never trapped
     // waiting on the Supabase round-trip (which can hang on slow networks).
+    document.body.dataset.role = '';
     currentUser = null;
     currentRole = null;
     currentProfile = null;
@@ -1480,14 +1609,14 @@ async function _enterAuthenticatedAppCore(session, requestedRole = null) {
         setTimeout(() => { suppressAuthReset = false; }, 800);
         return;
     }
-    currentRole = currentProfile.approved_role;
+    currentRole = normalizeApprovedRole(currentProfile.approved_role);
     showAppShell();
     const roleEl = document.getElementById('hdr-role');
     const userEl = document.getElementById('hdr-user');
     if (roleEl) roleEl.textContent = roleLabel(currentRole);
     if (userEl) userEl.textContent = currentUser.email || '—';
     applyRoleUI();
-    const landing = { user: 'add', infosec: 'draft-queue', admin: 'dashboard' }[currentRole] || 'add';
+    const landing = { user: 'dashboard', infosec: 'draft-queue', admin: 'dashboard' }[currentRole] || 'add';
     showSection(landing);
     try {
         await syncFromCloud(true);
@@ -1675,7 +1804,7 @@ function renderSectionContent(name) {
 
 function showSection(name) {
   const allowed = {
-    user: ['add', 'my-submissions', 'guidelines'],
+    user: ['dashboard', 'add', 'my-submissions', 'register', 'guidelines'],
     infosec: ['dashboard', 'add', 'my-submissions', 'draft-queue', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'logs', 'users', 'guidelines'],
     admin: ['dashboard', 'add', 'draft-queue', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'report', 'users', 'logs', 'guidelines']
   };
@@ -2293,6 +2422,195 @@ function calculateDeadlines() {
 // ==========================================
 // 6. SUPABASE CRUD OPERATIONS
 // ==========================================
+function parseJsonSafe(str, fallback = {}) {
+  if (str == null || str === '') return { ...fallback };
+  if (typeof str === 'object') return str;
+  try { return JSON.parse(String(str)); } catch (_) { return { ...fallback }; }
+}
+
+/** Types where MBSS + firewall JSON are fixed (non-host / non-network perimeter). */
+const MBSS_FW_LOCKED_TYPES = new Set(['PhA', 'PA']);
+function isMbssFirewallTypeLocked(type) {
+  return MBSS_FW_LOCKED_TYPES.has(type);
+}
+const LOCKED_MBSS_JSON_BY_TYPE = {
+  PhA: { edr_epp: 'N', patch_current: 'N', disk_encryption: 'N', host_firewall: 'N', admin_priv_review: 'Y', last_review_date: '', notes: 'Physical asset — host MBSS baseline not applicable (system fixed).' },
+  PA: { edr_epp: 'N', patch_current: 'N', disk_encryption: 'N', host_firewall: 'N', admin_priv_review: 'Y', last_review_date: '', notes: 'Personnel asset — endpoint baseline not applicable (system fixed).' },
+};
+const LOCKED_FIREWALL_JSON_BY_TYPE = {
+  PhA: { scope: 'None documented', default_deny: 'N', change_control: 'Y', logging_soc: 'N', rule_review_cadence: 'Annual', overly_permissive: 'N', notes: 'Physical asset — perimeter at facility or campus layer only (system fixed).' },
+  PA: { scope: 'None documented', default_deny: 'N', change_control: 'Y', logging_soc: 'N', rule_review_cadence: 'Annual', overly_permissive: 'N', notes: 'Personnel asset — network perimeter not applicable (system fixed).' },
+};
+function getLockedMbssObject(type) {
+  return { ...(LOCKED_MBSS_JSON_BY_TYPE[type] || LOCKED_MBSS_JSON_BY_TYPE.PhA) };
+}
+function getLockedFirewallObject(type) {
+  return { ...(LOCKED_FIREWALL_JSON_BY_TYPE[type] || LOCKED_FIREWALL_JSON_BY_TYPE.PhA) };
+}
+
+let mbssFwUiSyncKey = '';
+
+function collectMbssFromForm() {
+  const v = id => {
+    const el = document.getElementById(id);
+    return el && el.value === 'Y' ? 'Y' : 'N';
+  };
+  return {
+    edr_epp: v('f-mbss-edr'),
+    patch_current: v('f-mbss-patch'),
+    disk_encryption: v('f-mbss-disk'),
+    host_firewall: v('f-mbss-hostfw'),
+    admin_priv_review: v('f-mbss-admin'),
+    last_review_date: (document.getElementById('f-mbss-date')?.value || '').trim(),
+    notes: (document.getElementById('f-mbss-notes')?.value || '').trim()
+  };
+}
+
+function collectFirewallFromForm() {
+  const v = id => {
+    const el = document.getElementById(id);
+    return el && el.value === 'Y' ? 'Y' : 'N';
+  };
+  return {
+    scope: (document.getElementById('f-fw-scope')?.value || '').trim(),
+    default_deny: v('f-fw-defaultdeny'),
+    change_control: v('f-fw-change'),
+    logging_soc: v('f-fw-logging'),
+    rule_review_cadence: (document.getElementById('f-fw-cadence')?.value || '').trim(),
+    overly_permissive: v('f-fw-permissive'),
+    notes: (document.getElementById('f-fw-notes')?.value || '').trim()
+  };
+}
+
+function loadMbssFirewallToForm(a) {
+  const m = parseJsonSafe(a.mbss_json, {});
+  const setYn = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.value = val === 'Y' ? 'Y' : 'N';
+  };
+  setYn('f-mbss-edr', m.edr_epp);
+  setYn('f-mbss-patch', m.patch_current);
+  setYn('f-mbss-disk', m.disk_encryption);
+  setYn('f-mbss-hostfw', m.host_firewall);
+  setYn('f-mbss-admin', m.admin_priv_review);
+  if (document.getElementById('f-mbss-date')) document.getElementById('f-mbss-date').value = m.last_review_date || '';
+  if (document.getElementById('f-mbss-notes')) document.getElementById('f-mbss-notes').value = m.notes || '';
+
+  const f = parseJsonSafe(a.firewall_json, {});
+  if (document.getElementById('f-fw-scope')) document.getElementById('f-fw-scope').value = f.scope || '';
+  setYn('f-fw-defaultdeny', f.default_deny);
+  setYn('f-fw-change', f.change_control);
+  setYn('f-fw-logging', f.logging_soc);
+  setYn('f-fw-permissive', f.overly_permissive);
+  const cadEl = document.getElementById('f-fw-cadence');
+  if (cadEl) {
+    const v = (f.rule_review_cadence || '').trim();
+    cadEl.querySelectorAll('option[data-legacy]').forEach(o => o.remove());
+    const known = new Set(FW_REVIEW_CADENCE_CHOICES);
+    if (v && !known.has(v)) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = v + ' (imported)';
+      o.setAttribute('data-legacy', '1');
+      cadEl.appendChild(o);
+    }
+    cadEl.value = v || '';
+  }
+  if (document.getElementById('f-fw-notes')) document.getElementById('f-fw-notes').value = f.notes || '';
+}
+
+function pushLockedMbssFirewallToForm(type) {
+  loadMbssFirewallToForm({
+    mbss_json: JSON.stringify(getLockedMbssObject(type)),
+    firewall_json: JSON.stringify(getLockedFirewallObject(type)),
+  });
+}
+
+function resetMbssFirewallFormToNewAssetDefaults() {
+  ['f-mbss-edr', 'f-mbss-patch', 'f-mbss-disk', 'f-mbss-hostfw', 'f-mbss-admin'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = 'N';
+  });
+  if (document.getElementById('f-mbss-date')) document.getElementById('f-mbss-date').value = '';
+  if (document.getElementById('f-mbss-notes')) document.getElementById('f-mbss-notes').value = '';
+  if (document.getElementById('f-fw-scope')) document.getElementById('f-fw-scope').value = '';
+  ['f-fw-defaultdeny', 'f-fw-change', 'f-fw-logging', 'f-fw-permissive'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = 'N';
+  });
+  const ce = document.getElementById('f-fw-cadence');
+  if (ce) {
+    ce.querySelectorAll('option[data-legacy]').forEach(o => o.remove());
+    ce.value = '';
+  }
+  if (document.getElementById('f-fw-notes')) document.getElementById('f-fw-notes').value = '';
+}
+
+/** Mirror inherent/residual ratings and P×S under MBSS/firewall so assessors see impact while editing evidence. */
+function syncMbssFirewallScoreMirrors() {
+  const strip = document.getElementById('mbss-risk-score-strip');
+  if (!strip) return;
+  const badgeCls = r => ({ 'Very Low': 'badge-vl', Low: 'badge-lo', Moderate: 'badge-mo', High: 'badge-hi' }[r] || 'badge-lo');
+  const inhEl = document.getElementById('r-inherit');
+  const resEl = document.getElementById('r-residual');
+  const inhTxt = (inhEl?.textContent || '—').trim() || '—';
+  const resTxt = (resEl?.textContent || '—').trim() || '—';
+  const mInh = document.getElementById('mbss-mirror-r-inherit');
+  const mRes = document.getElementById('mbss-mirror-r-residual');
+  const mInhPs = document.getElementById('mbss-mirror-inh-ps');
+  const mResPs = document.getElementById('mbss-mirror-res-ps');
+  const probD = (document.getElementById('f-prob-display')?.value || '').trim();
+  const sevD = (document.getElementById('f-sev-display')?.value || '').trim();
+  const rProb = (document.getElementById('f-res-prob-display')?.value || '').trim();
+  const rSev = (document.getElementById('f-res-sev-display')?.value || '').trim();
+  if (mInh) {
+    mInh.textContent = inhTxt;
+    mInh.className = `badge ${badgeCls(inhTxt)}`;
+    mInh.style.fontSize = '12px';
+    mInh.style.padding = '4px 10px';
+  }
+  if (mRes) {
+    mRes.textContent = resTxt;
+    mRes.className = `badge ${badgeCls(resTxt)}`;
+    mRes.style.fontSize = '12px';
+    mRes.style.padding = '4px 10px';
+  }
+  if (mInhPs) mInhPs.textContent = (probD && sevD) ? `${probD}×${sevD}` : '—';
+  if (mResPs) mResPs.textContent = (rProb && rSev) ? `${rProb}×${rSev}` : '—';
+}
+
+function syncMbssFirewallSectionState() {
+  const type = (document.getElementById('f-type')?.value || '').trim();
+  const section = document.getElementById('sec-mbss-firewall');
+  const banner = document.getElementById('mbss-firewall-type-lock-banner');
+  if (!section) return;
+  if (isMbssFirewallTypeLocked(type)) {
+    pushLockedMbssFirewallToForm(type);
+    section.querySelectorAll('input, select, textarea').forEach(el => { el.disabled = true; });
+    if (banner) {
+      banner.hidden = false;
+      banner.textContent = type === 'PA'
+        ? 'Personnel (PA): MBSS and firewall values are system-defined and cannot be edited.'
+        : 'Physical asset (PhA): MBSS and firewall values are system-defined and cannot be edited.';
+    }
+    mbssFwUiSyncKey = `L:${type}`;
+    return;
+  }
+  section.querySelectorAll('input, select, textarea').forEach(el => { el.disabled = false; });
+  if (banner) banner.hidden = true;
+  const key = `U:${type}:${editingId || 'new'}`;
+  if (mbssFwUiSyncKey !== key) {
+    mbssFwUiSyncKey = key;
+    if (editingId) {
+      const a = globalAssets.find(x => x.id === editingId);
+      if (a && a.type === type) loadMbssFirewallToForm(a);
+      else resetMbssFirewallFormToNewAssetDefaults();
+    } else {
+      resetMbssFirewallFormToNewAssetDefaults();
+    }
+  }
+}
+
 function buildAssetPayloadFromForm() {
   const type = g('f-type');
   const name = g('f-name').trim();
@@ -2319,7 +2637,13 @@ function buildAssetPayloadFromForm() {
     prob: p, sev: s, inherit, residual,
     actionType: g('f-action-type'), actionStatus: g('f-action-status'),
     actionPlan: g('f-action-plan'), actionOwner: g('f-action-owner'), actionDate: g('f-action-date'),
-    updated_by: currentUser?.email || null
+    updated_by: currentUser?.email || null,
+    mbss_json: isMbssFirewallTypeLocked(type)
+      ? JSON.stringify(getLockedMbssObject(type))
+      : JSON.stringify(collectMbssFromForm()),
+    firewall_json: isMbssFirewallTypeLocked(type)
+      ? JSON.stringify(getLockedFirewallObject(type))
+      : JSON.stringify(collectFirewallFromForm())
   };
 }
 
@@ -2609,6 +2933,7 @@ async function rejectDraftAsset(id) {
 
 function editAsset(id) {
   try {
+      mbssFwUiSyncKey = '';
       const a = globalAssets.find(x => x.id === id);
       if (!a) return notify("Error finding asset.", true);
       if (currentRole === 'user') return notify('Standard users cannot edit existing assets.', true);
@@ -2727,6 +3052,7 @@ async function deleteAsset(id) {
 }
 
 function clearForm() {
+  mbssFwUiSyncKey = '';
   const fields = ['f-name','f-group','f-hostname','f-server','f-custodian','f-desc', 'f-ip', 'f-department', 'f-risk-desc','f-action-plan','f-action-owner','f-action-date','f-risk-category'];
   fields.forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   
@@ -2746,6 +3072,22 @@ function clearForm() {
   if(document.getElementById('f-action-status')) document.getElementById('f-action-status').value = 'Pending';
   
   for(let i=1; i<=13; i++) { const cb = document.getElementById('ctrl'+i); if(cb) cb.checked = false; }
+
+  ['f-mbss-edr','f-mbss-patch','f-mbss-disk','f-mbss-hostfw','f-mbss-admin'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = 'N';
+  });
+  if (document.getElementById('f-mbss-date')) document.getElementById('f-mbss-date').value = '';
+  if (document.getElementById('f-mbss-notes')) document.getElementById('f-mbss-notes').value = '';
+  if (document.getElementById('f-fw-scope')) document.getElementById('f-fw-scope').value = '';
+  ['f-fw-defaultdeny','f-fw-change','f-fw-logging','f-fw-permissive'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = 'N';
+  });
+  if (document.getElementById('f-fw-cadence')) {
+    const ce = document.getElementById('f-fw-cadence');
+    ce.querySelectorAll('option[data-legacy]').forEach(o => o.remove());
+    ce.value = '';
+  }
+  if (document.getElementById('f-fw-notes')) document.getElementById('f-fw-notes').value = '';
   
   editingId = null;
   const titleEl = document.getElementById('form-title');
@@ -3147,26 +3489,916 @@ function renderSystemLogs() {
   `).join('');
 }
 
+// -------- CSV / IAR import — export (Excel column parity, MBSS + Firewall sheets) --------
+const ASSET_CSV_COLUMNS = [
+  'type', 'name', 'group_name', 'hostname', 'server', 'custodian', 'description',
+  'ip_address', 'environment', 'department'
+];
+
+const CSV_SHEET1_HEADERS = ['Asset ID', 'Name of Asset', 'Description', 'Group', 'Hostname', 'Server', 'Custodian', 'IP Address', 'Environment', 'Department', 'Type'];
+const CSV_SHEET2_HEADERS = ['Asset ID', 'Name of Asset', 'PII', 'SPI', 'Corp Info', 'C', 'I', 'A', 'Valuation', 'Class', 'Type'];
+const CSV_SHEET3_HEADERS = ['Asset ID', 'Name of Asset', 'Risk / Threat Description', 'Probability', 'Severity', 'Inherent', 'Residual'];
+const CSV_SHEET4_HEADERS = ['Asset ID', 'Name of Asset', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12', 'C13', 'Residual', 'Strategy'];
+const CSV_SHEET5_HEADERS = ['Asset ID', 'Name of Asset', 'Residual', 'Strategy', 'Status', 'Action Plan', 'Action Owner', 'Target Date'];
+const CSV_SHEET6_HEADERS = ['Asset ID', 'Name of Asset', 'NIST CSF', 'ISO 27001 / 27002', 'CIS Controls', 'SOC 2', 'PCI-DSS'];
+
+/**
+ * MBSS-style host baseline — JSON keys in mbss_json (hardcoded contract).
+ * Maps to CIS Controls v8 + NIST CSF 2.0 for ISMS evidence (organizational interpretation, not a substitute for full control implementation).
+ */
+const MBSS_FIELD_SPEC = [
+  { key: 'edr_epp', header: 'EDR / EPP', yn: true, ref: 'CIS v8 10-malware defenses · NIST CSF PR.PT-5, DE.CM' },
+  { key: 'patch_current', header: 'Patch current', yn: true, ref: 'CIS v8 7-maintenance · NIST PR.IP-3' },
+  { key: 'disk_encryption', header: 'Disk encryption', yn: true, ref: 'CIS v8 3-data protection · NIST PR.DS-1' },
+  { key: 'host_firewall', header: 'Host firewall', yn: true, ref: 'CIS v8 13-network monitoring & hardening · NIST PR.PT-4' },
+  { key: 'admin_priv_review', header: 'Admin review', yn: true, ref: 'CIS v8 4–5-account & credential mgmt · NIST PR.AC-4, PR.PT-3' },
+  { key: 'last_review_date', header: 'Last review date', yn: false, ref: 'ISO 27001 A.8.8-type evidence date' },
+  { key: 'notes', header: 'MBSS notes', yn: false, ref: 'Narrative — tools, exceptions, compensating controls' },
+];
+const CSV_SHEET11_HEADERS = ['Asset ID', 'Name of Asset', ...MBSS_FIELD_SPEC.map(f => f.header)];
+
+/**
+ * Perimeter / firewall review — JSON keys in firewall_json (hardcoded contract).
+ * Aligns with boundary-defense themes in CIS v8 §12 + NIST SP 800-53 / CSF SC, PR families.
+ */
+const FIREWALL_FIELD_SPEC = [
+  { key: 'scope', header: 'Scope', yn: false, ref: 'CIS v8 12-boundaries · NIST SC-7, PR.AC-5' },
+  { key: 'default_deny', header: 'Default deny', yn: true, ref: 'CIS 12.2 least-privilege paths · NIST SC-7(5)' },
+  { key: 'change_control', header: 'Change control', yn: true, ref: 'CIS 4.x change mgmt · NIST CM-3, SA-10' },
+  { key: 'logging_soc', header: 'Central logging', yn: true, ref: 'CIS 8-security logging · NIST AU-2, SI-4' },
+  { key: 'rule_review_cadence', header: 'Rule review cadence', yn: false, ref: 'CIS 12.x lifecycle · NIST CA-2, PM-5' },
+  { key: 'overly_permissive', header: 'Overly permissive rules', yn: true, ref: 'CIS 12.6 rule hygiene · NIST SC-7 continuous review' },
+  { key: 'notes', header: 'Firewall notes', yn: false, ref: 'Narrative — rule IDs, risky allows, remediation' },
+];
+const CSV_SHEET12_HEADERS = ['Asset ID', 'Name of Asset', ...FIREWALL_FIELD_SPEC.map(f => f.header)];
+
+/** Excel data-validation list sources (comma-separated; no commas inside one option). */
+const XLSX_LIST_ASSET_TYPE = 'IA,PhA,PA,SA,SV,FA';
+const XLSX_LIST_ENVIRONMENT = 'Internal,Internet Facing,Hybrid';
+const XLSX_LIST_YN = 'Y,N';
+const XLSX_LIST_CIA_1_3 = '1,2,3';
+const XLSX_LIST_PROB_SEV = '1,2,3,4,5';
+const XLSX_LIST_RISK_RATING = 'Very Low,Low,Moderate,High';
+const XLSX_LIST_STRATEGY = 'Mitigate,Transfer,Avoid,Accept';
+const XLSX_LIST_ACTION_STATUS = 'Pending,In Progress,Done';
+const XLSX_LIST_CIA_CLASS = 'Public,Internal Use,Confidential,Restricted';
+const XLSX_LIST_FW_SCOPE = 'Network firewall,WAF,Cloud NSG / SG,Host + perimeter,None documented';
+/** Canonical rule-review rhythm (form + Excel validation + import expects exact spellings). */
+const FW_REVIEW_CADENCE_CHOICES = ['Monthly', 'Quarterly', 'Semi-annual', 'Annual', 'Ad hoc'];
+const XLSX_LIST_FW_CADENCE = FW_REVIEW_CADENCE_CHOICES.join(',');
+
+const IAR_TEMPLATE_DATA_FIRST_ROW = 5;
+const IAR_TEMPLATE_DATA_LAST_ROW = 400;
+
+/** 1-based column index to Excel letters (1=A, 27=AA). */
+function excelColLetter(n) {
+  let result = '';
+  let num = n;
+  while (num > 0) {
+    num--;
+    result = String.fromCharCode(65 + (num % 26)) + result;
+    num = Math.floor(num / 26);
+  }
+  return result;
+}
+
+function iarTemplateAddList(ws, col1Based, listCsv, dataFirstRow = IAR_TEMPLATE_DATA_FIRST_ROW) {
+  const L = excelColLetter(col1Based);
+  const a = `${L}${dataFirstRow}`;
+  const b = `${L}${IAR_TEMPLATE_DATA_LAST_ROW}`;
+  ws.dataValidations.add(`${a}:${b}`, {
+    type: 'list',
+    allowBlank: true,
+    showInputMessage: true,
+    promptTitle: 'Allowed values',
+    prompt: 'Choose from the dropdown.',
+    showErrorMessage: true,
+    errorStyle: 'warning',
+    errorTitle: 'Invalid entry',
+    error: 'Pick a value from the list (ImpactLens import expects these exact tokens).',
+    formulae: [`"${listCsv}"`]
+  });
+}
+
+function getAssetsForIarExport() {
+  return globalAssets.filter(a =>
+    a.status === ASSET_STATUS.APPROVED || a.status === ASSET_STATUS.PENDING
+  );
+}
+
+function escapeCsvCell(val) {
+  const s = val == null ? '' : String(val);
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function downloadTextFile(filename, text, mime = 'text/csv;charset=utf-8') {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function parseCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQ = !inQ; continue; }
+    if (ch === ',' && !inQ) { out.push(cur.trim()); cur = ''; continue; }
+    cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+}
+
+/** Map CSV header to internal key (aligned with Excel export labels). */
+function normalizeCsvHeader(raw) {
+  const t = (raw || '').trim().toLowerCase();
+  const exact = {
+    'asset id': 'id',
+    'name of asset': 'name',
+    description: 'description',
+    group: 'group_name',
+    hostname: 'hostname',
+    server: 'server',
+    custodian: 'custodian',
+    'ip address': 'ip_address',
+    environment: 'environment',
+    department: 'department',
+    type: 'type',
+    pii: 'pii',
+    spi: 'spi',
+    'corp info': 'corp',
+    c: 'ciaC',
+    i: 'ciaI',
+    a: 'ciaA',
+    valuation: 'ciaScore',
+    class: 'ciaClass',
+    'risk / threat description': 'riskDesc',
+    probability: 'prob',
+    severity: 'sev',
+    inherent: 'inherit',
+    residual: 'residual',
+    strategy: 'actionType',
+    status: 'actionStatus',
+    'action plan': 'actionPlan',
+    'action owner': 'actionOwner',
+    'target date': 'actionDate',
+    'nist csf': '_nist',
+    'iso 27001 / 27002': '_iso',
+    'cis controls': '_cis',
+    'soc 2': '_soc2',
+    'pci-dss': '_pci',
+    'edr / epp': 'mbss_edr_epp',
+    'patch current': 'mbss_patch',
+    'disk encryption': 'mbss_disk',
+    'host firewall': 'mbss_hostfw',
+    'admin review': 'mbss_admin',
+    'last review date': 'mbss_lastdate',
+    'mbss notes': 'mbss_notes',
+    'firewall notes': 'fw_notes',
+    scope: 'fw_scope',
+    'default deny': 'fw_defaultdeny',
+    'change control': 'fw_change',
+    'central logging': 'fw_logging',
+    'rule review cadence': 'fw_cadence',
+    'overly permissive rules': 'fw_permissive'
+  };
+  if (exact[t]) return exact[t];
+  const rawTrim = (raw || '').trim();
+  if (/^c\d+$/i.test(rawTrim)) return rawTrim.toUpperCase();
+  return t.replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+}
+
+function parseCsvToRows(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim());
+  if (!lines.length) return [];
+  const headersRaw = parseCsvLine(lines[0]);
+  const headersNorm = headersRaw.map(normalizeCsvHeader);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = parseCsvLine(lines[i]);
+    if (cells.every(c => !c)) continue;
+    const row = {};
+    headersNorm.forEach((h, idx) => {
+      if (!h || h.startsWith('_')) return;
+      row[h] = cells[idx] || '';
+    });
+    rows.push(row);
+  }
+  return rows;
+}
+
+function detectCsvImportKind(keys) {
+  const h = new Set(keys.filter(Boolean));
+  if (h.has('C1') || h.has('C10')) return 'controls';
+  if ((h.has('actionPlan') || h.has('actionType')) && (h.has('actionDate') || h.has('actionStatus'))) return 'treatment';
+  if (h.has('_nist') || h.has('_iso')) return 'compliance';
+  if (h.has('mbss_edr_epp') || h.has('mbss_patch')) return 'mbss';
+  if (h.has('fw_scope') || (h.has('fw_cadence') && h.has('fw_defaultdeny'))) return 'firewall';
+  if (h.has('inherit') || h.has('riskDesc')) return 'risk';
+  if (h.has('ciaScore') || (h.has('ciaC') && h.has('corp'))) return 'sensitivity';
+  if (h.has('description') && h.has('type')) return 'identification';
+  return 'legacy';
+}
+
+function ynCell(v) {
+  const s = (v || '').toString().trim().toUpperCase();
+  return s === 'Y' || s === 'YES' || s === 'TRUE' || s === '1' ? 'Y' : 'N';
+}
+
+function initAssetIdCounters() {
+  const counters = {};
+  globalAssets.forEach(row => {
+    const parts = (row.id || '').split('-');
+    if (parts.length !== 2) return;
+    const t = parts[0];
+    const num = parseInt(parts[1], 10);
+    if (!isNaN(num)) counters[t] = Math.max(counters[t] || 0, num);
+  });
+  return counters;
+}
+
+function nextCsvAssetId(type, counters) {
+  counters[type] = (counters[type] || 0) + 1;
+  return `${type}-${String(counters[type]).padStart(3, '0')}`;
+}
+
+function buildDraftPayloadFromCsvRow(row, counters) {
+  const type = (row.type || '').trim();
+  const name = (row.name || '').trim();
+  if (!type || !name) return { error: 'Row missing type or name' };
+  if (!ASSET_PROFILES[type]) return { error: `Invalid type "${type}" (use IA, PhA, PA, SA, SV, FA)` };
+  let id = (row.id || '').trim();
+  if (id && globalAssets.some(a => a.id === id)) return { error: `Duplicate id ${id}` };
+  if (!id) id = nextCsvAssetId(type, counters);
+  const defaults = draftDefaultsFromType(type);
+  return {
+    id,
+    type,
+    name,
+    status: ASSET_STATUS.DRAFT,
+    group_name: row.group_name || '',
+    hostname: row.hostname || '',
+    server: row.server || '',
+    custodian: row.custodian || '',
+    description: row.description || '',
+    ip_address: row.ip_address || '',
+    environment: row.environment || 'Internal',
+    department: row.department || '',
+    created_by: currentUser?.email || null,
+    updated_by: currentUser?.email || null,
+    mbss_json: '{}',
+    firewall_json: '{}',
+    ...defaults
+  };
+}
+
+async function patchAssetById(id, partial) {
+  await directFetch('Assets', {
+    method: 'PATCH',
+    params: { id: 'eq.' + encodeURIComponent(id) },
+    body: partial,
+    prefer: 'return=minimal',
+    timeoutMs: 15000
+  });
+}
+
+async function replaceAssetControls(assetId, ctrlIds) {
+  try {
+    await directFetch('AssetControls', {
+      method: 'DELETE',
+      params: { asset_id: 'eq.' + assetId },
+      prefer: 'return=minimal',
+      timeoutMs: 8000
+    });
+  } catch (e) { console.warn('Ctrl cleanup:', e); }
+  const controls = ctrlIds.map(cid => ({ asset_id: assetId, ctrl_id: cid }));
+  if (controls.length) {
+    await directFetch('AssetControls', {
+      method: 'POST',
+      body: controls,
+      prefer: 'return=minimal',
+      timeoutMs: 8000
+    });
+  }
+}
+
+function downloadAssetCsvTemplate() {
+  const example = ['IA-999', 'Example Student Records', 'Description', 'Registrar', 'REG-DB-01', 'PostgreSQL', 'University Registrar',
+    '10.0.0.1', 'Internal', 'Office of the Registrar', 'IA'].map(escapeCsvCell).join(',');
+  downloadTextFile('ImpactLens_01_Asset_Identification_template.csv',
+    CSV_SHEET1_HEADERS.map(escapeCsvCell).join(',') + '\n' + example + '\n');
+}
+
+function downloadAllIarCsvTemplates() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const sheets = [
+    [`ImpactLens_01_Asset_Identification_template_${stamp}.csv`, CSV_SHEET1_HEADERS.join(',') + '\n'],
+    [`ImpactLens_02_Sensitivity_template_${stamp}.csv`, CSV_SHEET2_HEADERS.join(',') + '\n'],
+    [`ImpactLens_03_Risk_template_${stamp}.csv`, CSV_SHEET3_HEADERS.join(',') + '\n'],
+    [`ImpactLens_04_Controls_template_${stamp}.csv`, CSV_SHEET4_HEADERS.join(',') + '\n'],
+    [`ImpactLens_05_Treatment_template_${stamp}.csv`, CSV_SHEET5_HEADERS.join(',') + '\n'],
+    [`ImpactLens_06_Compliance_template_${stamp}.csv`, CSV_SHEET6_HEADERS.join(',') + '\n'],
+    [`ImpactLens_08_MBSS_template_${stamp}.csv`, CSV_SHEET11_HEADERS.join(',') + '\n'],
+    [`ImpactLens_09_Firewall_template_${stamp}.csv`, CSV_SHEET12_HEADERS.join(',') + '\n']
+  ];
+  sheets.forEach(([name, body], i) => { setTimeout(() => downloadTextFile(name, body), i * 200); });
+  notify('Downloading CSV templates (one file per sheet). Check your downloads folder.');
+}
+
+/**
+ * Styled .xlsx workbook — same branding as audit export, column widths, and dropdowns.
+ * CSV cannot hold bold, widths, or validation; use this for user-friendly data entry, then Save As CSV to import.
+ */
+async function downloadIarExcelTemplateWorkbook() {
+  if (typeof ExcelJS === 'undefined') {
+    notify('ExcelJS library not loaded.', true);
+    return;
+  }
+  const COL_TITLE_BG = 'FF111118';
+  const COL_TITLE_NEON = 'FFC8FF00';
+  const COL_HDR_BG = 'FF1A1A22';
+  const COL_HDR_FG = 'FFC8FF00';
+  const COL_SUB_BG = 'FF2A2A35';
+  const COL_BORDER = 'FFC0C0CC';
+
+  const styleTitle = (ws, row, text, cols) => {
+    ws.mergeCells(row, 1, row, cols);
+    const c = ws.getCell(row, 1);
+    c.value = text;
+    c.font = { name: 'Calibri', size: 16, bold: true, color: { argb: COL_TITLE_NEON } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COL_TITLE_BG } };
+    c.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+    c.border = { bottom: { style: 'medium', color: { argb: COL_TITLE_NEON } } };
+    ws.getRow(row).height = 30;
+  };
+  const styleSubtitle = (ws, row, text, cols) => {
+    ws.mergeCells(row, 1, row, cols);
+    const c = ws.getCell(row, 1);
+    c.value = text;
+    c.font = { name: 'Calibri', size: 10, bold: true, italic: true, color: { argb: 'FFB5B5C5' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COL_SUB_BG } };
+    c.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+    ws.getRow(row).height = 18;
+  };
+  const styleHeaderRow = (ws, rowNum, colCount) => {
+    for (let col = 1; col <= colCount; col++) {
+      const c = ws.getCell(rowNum, col);
+      c.font = { bold: true, color: { argb: COL_HDR_FG }, size: 10 };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COL_HDR_BG } };
+      c.border = {
+        top: { style: 'medium', color: { argb: COL_HDR_FG } },
+        bottom: { style: 'medium', color: { argb: COL_HDR_FG } },
+        left: { style: 'thin', color: { argb: COL_BORDER } },
+        right: { style: 'thin', color: { argb: COL_BORDER } }
+      };
+      c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    }
+    ws.getRow(rowNum).height = 26;
+  };
+  const setWidths = (ws, widths) => {
+    widths.forEach((w, i) => {
+      ws.getColumn(i + 1).width = w;
+    });
+  };
+
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'ImpactLens';
+  wb.created = new Date();
+
+  const hint = 'Fill rows below, then File → Save As → CSV (UTF-8) for Import CSV. Dropdowns work in Excel and LibreOffice Calc.';
+
+  {
+    const ws = wb.addWorksheet('1 — Asset ID', { views: [{ state: 'frozen', ySplit: 4 }] });
+    styleTitle(ws, 1, 'IMPACTLENS  ·  PLM ISMS  —  Template: Asset Identification', 11);
+    styleSubtitle(ws, 2, hint + '  ·  Sheet 1 of 8', 11);
+    ws.addRow([]);
+    const hdr = ws.addRow(CSV_SHEET1_HEADERS);
+    styleHeaderRow(ws, hdr.number, 11);
+    const ex = ws.addRow(['IA-999', 'Example asset name', 'Short description', 'Unit / group', 'HOST-01', 'DB primary', 'Custodian name',
+      '10.0.0.1 or Cloud', 'Internal', 'Department name', 'IA']);
+    ex.font = { italic: true, color: { argb: 'FF6A6A78' } };
+    iarTemplateAddList(ws, 9, XLSX_LIST_ENVIRONMENT);
+    iarTemplateAddList(ws, 11, XLSX_LIST_ASSET_TYPE);
+    setWidths(ws, [12, 38, 46, 18, 18, 22, 22, 16, 16, 22, 10]);
+  }
+
+  {
+    const ws = wb.addWorksheet('2 — Sensitivity', { views: [{ state: 'frozen', ySplit: 4 }] });
+    styleTitle(ws, 1, 'IMPACTLENS  —  Sensitivity & Valuation', 11);
+    styleSubtitle(ws, 2, hint + '  ·  Match Asset ID from sheet 1', 11);
+    ws.addRow([]);
+    const hdr = ws.addRow(CSV_SHEET2_HEADERS);
+    styleHeaderRow(ws, hdr.number, 11);
+    ws.addRow(['IA-999', 'Example asset', 'Y', 'Y', 'Y', '3', '3', '3', '9', 'Restricted', 'IA']);
+    for (const c of [3, 4, 5]) iarTemplateAddList(ws, c, XLSX_LIST_YN);
+    for (const c of [6, 7, 8]) iarTemplateAddList(ws, c, XLSX_LIST_CIA_1_3);
+    iarTemplateAddList(ws, 10, XLSX_LIST_CIA_CLASS);
+    iarTemplateAddList(ws, 11, XLSX_LIST_ASSET_TYPE);
+    setWidths(ws, [12, 38, 6, 6, 9, 5, 5, 5, 10, 18, 8]);
+  }
+
+  {
+    const ws = wb.addWorksheet('3 — Risk', { views: [{ state: 'frozen', ySplit: 4 }] });
+    styleTitle(ws, 1, 'IMPACTLENS  —  Risk Assessment', 7);
+    styleSubtitle(ws, 2, hint, 7);
+    ws.addRow([]);
+    const hdr = ws.addRow(CSV_SHEET3_HEADERS);
+    styleHeaderRow(ws, hdr.number, 7);
+    ws.addRow(['IA-999', 'Example', 'Describe threat / scenario', '3', '4', 'Moderate', 'Low']);
+    iarTemplateAddList(ws, 4, XLSX_LIST_PROB_SEV);
+    iarTemplateAddList(ws, 5, XLSX_LIST_PROB_SEV);
+    iarTemplateAddList(ws, 6, XLSX_LIST_RISK_RATING);
+    iarTemplateAddList(ws, 7, XLSX_LIST_RISK_RATING);
+    setWidths(ws, [12, 38, 60, 12, 10, 14, 14]);
+  }
+
+  {
+    const ws = wb.addWorksheet('4 — Controls', { views: [{ state: 'frozen', ySplit: 5, xSplit: 2 }] });
+    styleTitle(ws, 1, 'IMPACTLENS  —  Controls C1–C13', 17);
+    styleSubtitle(ws, 2, hint + '  ·  C1–C13 = Y/N', 17);
+    ws.addRow([]);
+    const leg = ws.addRow(['Legend', 'C1 Procedures · C2 SoD · C3 RBAC · C4 MFA · C5 Physical · C6 Backup · C7 Encryption · C8 Disposal · C9 EDR · C10 WAF · C11 Vuln · C12 VLAN · C13 IRP']);
+    ws.mergeCells(leg.number, 2, leg.number, 17);
+    leg.getCell(1).font = { italic: true, color: { argb: 'FF6A6A78' } };
+    const hdr = ws.addRow(CSV_SHEET4_HEADERS);
+    styleHeaderRow(ws, hdr.number, 17);
+    const cells = ['IA-999', 'Example'];
+    for (let i = 0; i < 13; i++) cells.push('N');
+    cells.push('Moderate', 'Mitigate');
+    ws.addRow(cells);
+    for (let c = 3; c <= 15; c++) iarTemplateAddList(ws, c, XLSX_LIST_YN);
+    iarTemplateAddList(ws, 16, XLSX_LIST_RISK_RATING);
+    iarTemplateAddList(ws, 17, XLSX_LIST_STRATEGY);
+    const widths = [12, 32];
+    for (let i = 0; i < 13; i++) widths.push(5);
+    widths.push(14, 14);
+    setWidths(ws, widths);
+  }
+
+  {
+    const ws = wb.addWorksheet('5 — Treatment', { views: [{ state: 'frozen', ySplit: 4 }] });
+    styleTitle(ws, 1, 'IMPACTLENS  —  Residual & Treatment', 8);
+    styleSubtitle(ws, 2, hint, 8);
+    ws.addRow([]);
+    const hdr = ws.addRow(CSV_SHEET5_HEADERS);
+    styleHeaderRow(ws, hdr.number, 8);
+    ws.addRow(['IA-999', 'Example', 'Low', 'Mitigate', 'In Progress', 'Action text', 'Owner', '2026-12-31']);
+    iarTemplateAddList(ws, 3, XLSX_LIST_RISK_RATING);
+    iarTemplateAddList(ws, 4, XLSX_LIST_STRATEGY);
+    iarTemplateAddList(ws, 5, XLSX_LIST_ACTION_STATUS);
+    setWidths(ws, [12, 38, 14, 14, 14, 48, 20, 14]);
+  }
+
+  {
+    const ws = wb.addWorksheet('6 — Compliance note', { views: [{ state: 'frozen', ySplit: 4 }] });
+    styleTitle(ws, 1, 'Compliance mapping (export-only)', 7);
+    styleSubtitle(ws, 2, 'This sheet is filled automatically when you export from ImpactLens or run CSV pack Export 06. No import.', 7);
+    ws.addRow([]);
+    const hdr = ws.addRow(CSV_SHEET6_HEADERS);
+    styleHeaderRow(ws, hdr.number, 7);
+    setWidths(ws, [12, 38, 28, 32, 24, 22, 22]);
+  }
+
+  {
+    const COL_LEG = 'FF6A6A78';
+    const ws = wb.addWorksheet('8 — MBSS Endpoint Baseline', { views: [{ state: 'frozen', ySplit: 5 }] });
+    styleTitle(ws, 1, 'IMPACTLENS  —  MBSS-style endpoint baseline (CIS v8 + NIST CSF)', 9);
+    styleSubtitle(ws, 2, hint, 9);
+    const leg = ws.addRow([MBSS_FIELD_SPEC.map(f => `${f.header}: ${f.ref}`).join(' · ')]);
+    ws.mergeCells(leg.number, 1, leg.number, 9);
+    leg.getCell(1).font = { italic: true, size: 9, color: { argb: COL_LEG } };
+    leg.getCell(1).alignment = { wrapText: true, vertical: 'top' };
+    leg.height = 36;
+    const hdr = ws.addRow(CSV_SHEET11_HEADERS);
+    styleHeaderRow(ws, hdr.number, 9);
+    const DATA0 = 6;
+    ws.addRow(['IA-999', 'Example', 'Y', 'Y', 'Y', 'Y', 'Y', '2026-06-01', 'Notes here']);
+    for (const c of [3, 4, 5, 6, 7]) iarTemplateAddList(ws, c, XLSX_LIST_YN, DATA0);
+    setWidths(ws, [12, 36, 9, 9, 9, 9, 9, 14, 48]);
+  }
+
+  {
+    const COL_LEG = 'FF6A6A78';
+    const ws = wb.addWorksheet('9 — Firewall Perimeter Review', { views: [{ state: 'frozen', ySplit: 5 }] });
+    styleTitle(ws, 1, 'IMPACTLENS  —  Firewall perimeter review (CIS v8 §12 + NIST SC)', 9);
+    styleSubtitle(ws, 2, hint, 9);
+    const leg = ws.addRow([FIREWALL_FIELD_SPEC.map(f => `${f.header}: ${f.ref}`).join(' · ')]);
+    ws.mergeCells(leg.number, 1, leg.number, 9);
+    leg.getCell(1).font = { italic: true, size: 9, color: { argb: COL_LEG } };
+    leg.getCell(1).alignment = { wrapText: true, vertical: 'top' };
+    leg.height = 36;
+    const hdr = ws.addRow(CSV_SHEET12_HEADERS);
+    styleHeaderRow(ws, hdr.number, 9);
+    const DATA0 = 6;
+    ws.addRow(['IA-999', 'Example', 'WAF', 'Y', 'Y', 'Y', 'Quarterly', 'N', 'Rule review notes']);
+    iarTemplateAddList(ws, 3, XLSX_LIST_FW_SCOPE, DATA0);
+    for (const c of [4, 5, 6, 8]) iarTemplateAddList(ws, c, XLSX_LIST_YN, DATA0);
+    iarTemplateAddList(ws, 7, XLSX_LIST_FW_CADENCE, DATA0);
+    setWidths(ws, [12, 36, 24, 12, 12, 12, 16, 12, 48]);
+  }
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `ImpactLens_IAR_Entry_Templates_${stamp}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+  notify('Downloaded styled Excel templates with dropdowns. CSV files stay plain — use Excel for pick-lists, then export CSV to import.');
+}
+
+function csvLine(headers, values) {
+  return headers.map((_, i) => escapeCsvCell(values[i])).join(',');
+}
+
+function exportIarCsvPack() {
+  if (currentRole !== 'infosec' && currentRole !== 'admin') {
+    notify('CSV export requires Info Sec or Admin role.', true);
+    return;
+  }
+  const assets = getAssetsForIarExport();
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+  const s1 = [CSV_SHEET1_HEADERS.join(',')].concat(assets.map(a => csvLine(CSV_SHEET1_HEADERS, [
+    a.id, a.name, a.description, a.group_name, a.hostname, a.server, a.custodian, a.ip_address, a.environment, a.department, a.type
+  ]))).join('\n');
+
+  const s2 = [CSV_SHEET2_HEADERS.join(',')].concat(assets.map(a => csvLine(CSV_SHEET2_HEADERS, [
+    a.id, a.name, a.pii === 'Y' ? 'Y' : 'N', a.spi === 'Y' ? 'Y' : 'N', a.corp === 'Y' ? 'Y' : 'N',
+    a.ciaC, a.ciaI, a.ciaA, a.ciaScore, a.ciaClass, a.type
+  ]))).join('\n');
+
+  const s3 = [CSV_SHEET3_HEADERS.join(',')].concat(assets.map(a => csvLine(CSV_SHEET3_HEADERS, [
+    a.id, a.name, a.riskDesc || '', a.prob, a.sev, a.inherit, a.residual
+  ]))).join('\n');
+
+  const s4 = [CSV_SHEET4_HEADERS.join(',')].concat(assets.map(a => {
+    const ctrlIds = new Set(globalControls.filter(c => c.asset_id === a.id).map(c => c.ctrl_id));
+    const cells = [a.id, a.name];
+    for (let i = 1; i <= 13; i++) cells.push(ctrlIds.has(i) ? 'Y' : 'N');
+    cells.push(a.residual, a.actionType);
+    return csvLine(CSV_SHEET4_HEADERS, cells);
+  })).join('\n');
+
+  const s5 = [CSV_SHEET5_HEADERS.join(',')].concat(assets.map(a => csvLine(CSV_SHEET5_HEADERS, [
+    a.id, a.name, a.residual, a.actionType, a.actionStatus, a.actionPlan, a.actionOwner, a.actionDate
+  ]))).join('\n');
+
+  const s6 = [CSV_SHEET6_HEADERS.join(',')].concat(assets.map(a => {
+    const ctrlIds = globalControls.filter(c => c.asset_id === a.id).map(c => c.ctrl_id);
+    const fw = getFrameworksForControls(ctrlIds, a.type);
+    return csvLine(CSV_SHEET6_HEADERS, [a.id, a.name, fw.nist, fw.iso, fw.cis, fw.soc2, fw.pci]);
+  })).join('\n');
+
+  const s11 = [CSV_SHEET11_HEADERS.join(',')].concat(assets.map(a => {
+    const m = parseJsonSafe(a.mbss_json, {});
+    const cells = [a.id, a.name, ...MBSS_FIELD_SPEC.map(f => {
+      const v = m[f.key];
+      if (f.yn) return v === 'Y' ? 'Y' : 'N';
+      return (v != null && v !== '') ? String(v) : '';
+    })];
+    return csvLine(CSV_SHEET11_HEADERS, cells);
+  })).join('\n');
+
+  const s12 = [CSV_SHEET12_HEADERS.join(',')].concat(assets.map(a => {
+    const f = parseJsonSafe(a.firewall_json, {});
+    const cells = [a.id, a.name, ...FIREWALL_FIELD_SPEC.map(fl => {
+      const v = f[fl.key];
+      if (fl.yn) return v === 'Y' ? 'Y' : 'N';
+      return (v != null && v !== '') ? String(v) : '';
+    })];
+    return csvLine(CSV_SHEET12_HEADERS, cells);
+  })).join('\n');
+
+  const files = [
+    [`ImpactLens_${stamp}_01_Asset_Identification.csv`, s1],
+    [`ImpactLens_${stamp}_02_Sensitivity_Valuation.csv`, s2],
+    [`ImpactLens_${stamp}_03_Risk_Assessment.csv`, s3],
+    [`ImpactLens_${stamp}_04_Controls_C1-C13.csv`, s4],
+    [`ImpactLens_${stamp}_05_Residual_Treatment.csv`, s5],
+    [`ImpactLens_${stamp}_06_Compliance_Mapping.csv`, s6],
+    [`ImpactLens_${stamp}_08_MBSS_Baseline.csv`, s11],
+    [`ImpactLens_${stamp}_09_Firewall_Review.csv`, s12]
+  ];
+  (async () => {
+    for (const [fn, body] of files) {
+      downloadTextFile(fn, body);
+      await sleep(280);
+    }
+    notify(`Exported ${files.length} CSV files (all IAR sheets with data; ${assets.length} assets).`);
+  })();
+}
+
+function triggerAssetCsvImport() {
+  if (!currentUser) {
+    notify('Sign in to import a CSV.', true);
+    return;
+  }
+  if (!['user', 'infosec', 'admin'].includes(currentRole || '')) {
+    notify('Your role cannot import CSV files.', true);
+    return;
+  }
+  document.getElementById('asset-csv-input')?.click();
+}
+
+async function handleAssetCsvFileSelected(ev) {
+  const file = ev.target?.files?.[0];
+  ev.target.value = '';
+  if (!file) return;
+  if (!/\.csv$/i.test(file.name)) {
+    notify('Please select a .csv file.', true);
+    return;
+  }
+  try {
+    const text = await file.text();
+    await importAssetsFromCsvText(text);
+  } catch (err) {
+    notify('Could not read CSV: ' + (err.message || err), true);
+  }
+}
+
+async function importAssetsFromCsvText(text) {
+  if (!supabaseClient || !currentAccessToken) {
+    notify('Sign in again to import assets.', true);
+    return;
+  }
+  const rows = parseCsvToRows(text);
+  if (!rows.length) {
+    notify('CSV is empty or has no data rows.', true);
+    return;
+  }
+  const kind = detectCsvImportKind(Object.keys(rows[0]));
+  if (currentRole === 'user') {
+    if (kind !== 'identification' && kind !== 'legacy') {
+      notify('As a Standard User you can only import Sheet 1 — Asset Identification (or the legacy template). Info Sec completes other sheets.', true);
+      return;
+    }
+  } else if (currentRole !== 'infosec' && currentRole !== 'admin') {
+    notify('CSV import requires a signed-in role with import access.', true);
+    return;
+  }
+  try {
+    if (kind === 'legacy') return await importCsvIdentificationLegacy(rows);
+    if (kind === 'identification') return await importCsvIdentification(rows);
+    if (kind === 'sensitivity') return await importCsvSensitivity(rows);
+    if (kind === 'risk') return await importCsvRisk(rows);
+    if (kind === 'controls') return await importCsvControls(rows);
+    if (kind === 'treatment') return await importCsvTreatment(rows);
+    if (kind === 'mbss') return await importCsvMbss(rows);
+    if (kind === 'firewall') return await importCsvFirewall(rows);
+    if (kind === 'compliance') {
+      notify('Compliance sheet is export-only (derived from controls). Import sheets 1–5, 11, or 12.', true);
+      return;
+    }
+    return await importCsvIdentificationLegacy(rows);
+  } catch (err) {
+    notify('CSV import failed: ' + (err.message || err), true);
+  }
+}
+
+async function importCsvIdentificationLegacy(rows) {
+  const counters = initAssetIdCounters();
+  const payloads = [];
+  const errors = [];
+  rows.forEach((row, idx) => {
+    const built = buildDraftPayloadFromCsvRow(row, counters);
+    if (built.error) errors.push(`Row ${idx + 2}: ${built.error}`);
+    else payloads.push(built);
+  });
+  if (!payloads.length) {
+    notify(errors[0] || 'No valid rows.', true);
+    return;
+  }
+  await directFetch('Assets', { method: 'POST', body: payloads, prefer: 'resolution=merge-duplicates,return=minimal', timeoutMs: 25000 });
+  await logSystemEvent('ASSET_CSV_IMPORTED', `Imported ${payloads.length} Draft (legacy CSV) · ${currentUser?.email || ''}`);
+  await syncFromCloud(true);
+  notify(`Imported ${payloads.length} Draft asset(s).${errors.length ? ' (' + errors.length + ' skipped.)' : ''}`);
+  updateWorkflowBadges();
+}
+
+async function importCsvIdentification(rows) {
+  const counters = initAssetIdCounters();
+  const payloads = [];
+  const errors = [];
+  rows.forEach((row, idx) => {
+    const id = (row.id || '').trim();
+    const type = (row.type || '').trim();
+    const name = (row.name || '').trim();
+    if (!type || !name) { errors.push(`Row ${idx + 2}: missing type or name`); return; }
+    if (!ASSET_PROFILES[type]) { errors.push(`Row ${idx + 2}: invalid type`); return; }
+    let fid = id;
+    if (fid && globalAssets.some(a => a.id === fid)) { errors.push(`Row ${idx + 2}: duplicate ${fid}`); return; }
+    if (!fid) fid = nextCsvAssetId(type, counters);
+    const defaults = draftDefaultsFromType(type);
+    payloads.push({
+      id: fid, type, name, status: ASSET_STATUS.DRAFT,
+      group_name: row.group_name || '', hostname: row.hostname || '', server: row.server || '', custodian: row.custodian || '',
+      description: row.description || '', ip_address: row.ip_address || '', environment: row.environment || 'Internal',
+      department: row.department || '', created_by: currentUser?.email || null, updated_by: currentUser?.email || null,
+      mbss_json: '{}', firewall_json: '{}', ...defaults
+    });
+  });
+  if (!payloads.length) { notify(errors[0] || 'No valid rows.', true); return; }
+  await directFetch('Assets', { method: 'POST', body: payloads, prefer: 'resolution=merge-duplicates,return=minimal', timeoutMs: 25000 });
+  await logSystemEvent('ASSET_CSV_IMPORTED', `Imported ${payloads.length} Draft (Sheet 1 layout) · ${currentUser?.email || ''}`);
+  await syncFromCloud(true);
+  notify(`Imported ${payloads.length} Draft asset(s).`);
+  updateWorkflowBadges();
+}
+
+async function importCsvSensitivity(rows) {
+  let n = 0;
+  for (const row of rows) {
+    const id = (row.id || '').trim();
+    if (!id || !globalAssets.some(x => x.id === id)) continue;
+    const a = globalAssets.find(x => x.id === id);
+    const partial = {
+      pii: ynCell(row.pii),
+      spi: ynCell(row.spi),
+      corp: ynCell(row.corp),
+      ciaC: parseInt(row.ciaC, 10) || a.ciaC,
+      ciaI: parseInt(row.ciaI, 10) || a.ciaI,
+      ciaA: parseInt(row.ciaA, 10) || a.ciaA,
+      updated_by: currentUser?.email || null
+    };
+    partial.ciaScore = partial.ciaC + partial.ciaI + partial.ciaA;
+    partial.ciaClass = CIA_CLASS[partial.ciaScore] || a.ciaClass;
+    await patchAssetById(id, partial);
+    n++;
+  }
+  await logSystemEvent('ASSET_CSV_IMPORTED', `Sensitivity CSV merged · ${n} row(s) · ${currentUser?.email || ''}`);
+  await syncFromCloud(true);
+  notify(`Updated ${n} asset(s) from Sensitivity CSV.`);
+}
+
+async function importCsvRisk(rows) {
+  let n = 0;
+  for (const row of rows) {
+    const id = (row.id || '').trim();
+    if (!id || !globalAssets.some(x => x.id === id)) continue;
+    await patchAssetById(id, {
+      riskDesc: row.riskDesc || '',
+      prob: parseInt(row.prob, 10) || 3,
+      sev: parseInt(row.sev, 10) || 3,
+      inherit: row.inherit || 'Moderate',
+      residual: row.residual || 'Moderate',
+      updated_by: currentUser?.email || null
+    });
+    n++;
+  }
+  await logSystemEvent('ASSET_CSV_IMPORTED', `Risk CSV merged · ${n} row(s)`);
+  await syncFromCloud(true);
+  notify(`Updated ${n} asset(s) from Risk Assessment CSV.`);
+}
+
+async function importCsvControls(rows) {
+  let n = 0;
+  for (const row of rows) {
+    const id = (row.id || '').trim();
+    if (!id || !globalAssets.some(x => x.id === id)) continue;
+    const ctrlIds = [];
+    for (let c = 1; c <= 13; c++) {
+      const key = 'C' + c;
+      if (ynCell(row[key]) === 'Y') ctrlIds.push(c);
+    }
+    await replaceAssetControls(id, ctrlIds);
+    const patch = { updated_by: currentUser?.email || null };
+    if (row.residual) patch.residual = row.residual;
+    if (row.actionType) patch.actionType = row.actionType;
+    await patchAssetById(id, patch);
+    n++;
+  }
+  await logSystemEvent('ASSET_CSV_IMPORTED', `Controls CSV merged · ${n} asset(s)`);
+  await syncFromCloud(true);
+  notify(`Imported controls for ${n} asset(s).`);
+}
+
+async function importCsvTreatment(rows) {
+  let n = 0;
+  for (const row of rows) {
+    const id = (row.id || '').trim();
+    if (!id || !globalAssets.some(x => x.id === id)) continue;
+    await patchAssetById(id, {
+      residual: row.residual || undefined,
+      actionType: row.actionType || undefined,
+      actionStatus: row.actionStatus || undefined,
+      actionPlan: row.actionPlan || undefined,
+      actionOwner: row.actionOwner || undefined,
+      actionDate: row.actionDate || undefined,
+      updated_by: currentUser?.email || null
+    });
+    n++;
+  }
+  await logSystemEvent('ASSET_CSV_IMPORTED', `Treatment CSV merged · ${n} asset(s)`);
+  await syncFromCloud(true);
+  notify(`Updated treatment for ${n} asset(s).`);
+}
+
+async function importCsvMbss(rows) {
+  let n = 0;
+  for (const row of rows) {
+    const id = (row.id || '').trim();
+    if (!id || !globalAssets.some(x => x.id === id)) continue;
+    const m = {
+      edr_epp: ynCell(row.mbss_edr_epp),
+      patch_current: ynCell(row.mbss_patch),
+      disk_encryption: ynCell(row.mbss_disk),
+      host_firewall: ynCell(row.mbss_hostfw),
+      admin_priv_review: ynCell(row.mbss_admin),
+      last_review_date: (row.mbss_lastdate || '').trim(),
+      notes: (row.mbss_notes || '').trim()
+    };
+    await patchAssetById(id, { mbss_json: JSON.stringify(m), updated_by: currentUser?.email || null });
+    n++;
+  }
+  await syncFromCloud(true);
+  notify(`Updated MBSS baseline for ${n} asset(s). Run supabase/hotfix_mbss_firewall_columns.sql if PATCH fails.`);
+}
+
+async function importCsvFirewall(rows) {
+  let n = 0;
+  for (const row of rows) {
+    const id = (row.id || '').trim();
+    if (!id || !globalAssets.some(x => x.id === id)) continue;
+    const f = {
+      scope: (row.fw_scope || '').trim(),
+      default_deny: ynCell(row.fw_defaultdeny),
+      change_control: ynCell(row.fw_change),
+      logging_soc: ynCell(row.fw_logging),
+      rule_review_cadence: (row.fw_cadence || '').trim(),
+      overly_permissive: ynCell(row.fw_permissive),
+      notes: (row.fw_notes || '').trim()
+    };
+    await patchAssetById(id, { firewall_json: JSON.stringify(f), updated_by: currentUser?.email || null });
+    n++;
+  }
+  await syncFromCloud(true);
+  notify(`Updated firewall review for ${n} asset(s).`);
+}
+
+function exportAssetRegisterCsv() {
+  if (currentRole !== 'infosec' && currentRole !== 'admin') {
+    notify('CSV export requires Info Sec or Admin role.', true);
+    return;
+  }
+  const headers = ['id', 'status', 'type', 'name', ...ASSET_CSV_COLUMNS.filter(c => c !== 'type' && c !== 'name'),
+    'ciaScore', 'ciaClass', 'inherit', 'residual', 'riskCategory', 'mbss_json', 'firewall_json'];
+  const rows = globalAssets.map(a => [
+    a.id, a.status, a.type, a.name, a.group_name, a.hostname, a.server, a.custodian, a.description,
+    a.ip_address, a.environment, a.department, a.ciaScore, a.ciaClass, a.inherit, a.residual, a.riskCategory,
+    a.mbss_json || '', a.firewall_json || ''
+  ].map(escapeCsvCell));
+  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const stamp = new Date().toISOString().slice(0, 10);
+  downloadTextFile(`ImpactLens_Register_quick_${stamp}.csv`, csv);
+  notify(`Quick export: ${globalAssets.length} asset row(s).`);
+}
+
 function renderRegister() {
   const tbody = document.getElementById('reg-body');
-  if(!tbody) return;
+  if (!tbody) return;
+  const regDesc = document.getElementById('reg-page-desc');
+  if (regDesc) {
+    regDesc.textContent = currentRole === 'user'
+      ? '// Official approved register (read-only). CSV template + Import CSV create Drafts for Info Sec.'
+      : '// Approved register — CSV import creates Draft assets for profiling';
+  }
   const data = approvedAssetsOnly();
+  const isUser = currentRole === 'user';
+  const colSpan = 6;
 
-  if (!data.length) { tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;">No approved records.</td></tr>`; return; }
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="${colSpan}" style="text-align:center;">No approved records.</td></tr>`;
+    return;
+  }
 
-  tbody.innerHTML = data.map(a => `
+  tbody.innerHTML = data.map(a => {
+    const actionsCell = isUser
+      ? '<span style="color:var(--text3);font-size:11px;">View in register</span>'
+      : `${workflowActionBtn('edit-asset', a.id, 'Edit', 'btn btn-sm')}`
+        + `${workflowActionBtn('delete-asset', a.id, 'Del', 'btn btn-sm btn-danger', 'margin-left:4px')}`;
+    return `
     <tr>
       <td><span class="badge badge-id">${a.id}</span></td>
       <td><strong>${a.name}</strong></td>
       <td><span class="badge badge-type">${a.type}</span></td>
-      <td style="color:var(--text2)">${a.group_name||'—'}</td>
-      <td style="color:var(--text2)">${a.hostname||'—'}</td>
-      <td>
-        ${workflowActionBtn('edit-asset', a.id, 'Edit', 'btn btn-sm')}
-        ${workflowActionBtn('delete-asset', a.id, 'Del', 'btn btn-sm btn-danger', 'margin-left:4px')}
-      </td>
+      <td style="color:var(--text2)">${a.group_name || '—'}</td>
+      <td style="color:var(--text2)">${a.hostname || '—'}</td>
+      <td>${actionsCell}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function renderRiskRegister() {
@@ -3301,7 +4533,58 @@ function renderActions() {
     el.innerHTML = html;
 }
 
+function renderDashboardUser() {
+  const approved = approvedAssetsOnly();
+  const total = approved.length;
+  const email = (currentUser?.email || '').toLowerCase();
+  const mine = globalAssets.filter(a => (a.created_by || '').toLowerCase() === email);
+
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('dm-user-drafts', String(mine.filter(a => a.status === ASSET_STATUS.DRAFT).length));
+  setTxt('dm-user-pending', String(mine.filter(a => a.status === ASSET_STATUS.PENDING).length));
+  setTxt('dm-user-approved', String(mine.filter(a => a.status === ASSET_STATUS.APPROVED).length));
+  setTxt('dm-user-rejected', String(mine.filter(a => a.status === ASSET_STATUS.REJECTED).length));
+
+  setTxt('dm-total', String(total));
+  const lbl = document.getElementById('dm-total-label');
+  if (lbl) lbl.textContent = 'Approved in register';
+  setTxt('dm-pii', String(approved.filter(a => a.pii === 'Y' || a.spi === 'Y').length));
+
+  if (document.getElementById('hdr-total')) document.getElementById('hdr-total').textContent = total;
+  if (document.getElementById('nav-total')) document.getElementById('nav-total').textContent = total;
+
+  const barHtml = (label, val, t, color) => {
+    if (!val) return '';
+    const pct = Math.round((val / t) * 100);
+    return `<div class="chart-bar-row"><div class="chart-bar-label">${label}</div><div class="chart-bar-track"><div class="chart-bar-fill" style="width:${pct}%;background:${color};color:#000">${pct > 10 ? pct + '%' : ''}</div></div><div class="chart-bar-count" style="width:24px;text-align:right;">${val}</div></div>`;
+  };
+
+  const byType = {};
+  approved.forEach(a => { byType[a.type] = (byType[a.type] || 0) + 1; });
+  const typeColors = { IA: 'var(--accent)', PhA: 'var(--accent2)', PA: 'var(--success)', SA: 'var(--warn)', SV: 'var(--purple)', FA: 'var(--info)' };
+  const typeEl = document.getElementById('dash-types');
+  if (typeEl) {
+    if (!Object.keys(byType).length) typeEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No data</p>';
+    else typeEl.innerHTML = Object.keys(byType).map(t => barHtml(t, byType[t], total || 1, typeColors[t])).join('');
+  }
+
+  const byClass = {};
+  approved.forEach(a => { byClass[a.ciaClass] = (byClass[a.ciaClass] || 0) + 1; });
+  const cColors = { Public: 'var(--success)', 'Internal Use': 'var(--accent2)', Confidential: 'var(--warn)', Restricted: 'var(--danger)' };
+  const classEl = document.getElementById('dash-class-user');
+  if (classEl) {
+    if (!Object.keys(byClass).length) classEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No data</p>';
+    else classEl.innerHTML = Object.keys(byClass).map(c => barHtml(c, byClass[c], total || 1, cColors[c])).join('');
+  }
+}
+
 function renderDashboard() {
+  if (currentRole === 'user') {
+    renderDashboardUser();
+    return;
+  }
+  const lbl = document.getElementById('dm-total-label');
+  if (lbl) lbl.textContent = 'Approved in register';
   const approved = approvedAssetsOnly();
   const total = approved.length;
 
@@ -3943,6 +5226,69 @@ async function exportDataXLSX() {
     }
 
     // =====================================================
+    // Sheet 8–9 — MBSS baseline & firewall perimeter review (after rejected
+    // audit so tab order is 1…7, 8, 9; then Admin 10–12).
+    // =====================================================
+    {
+        const wsM = wb.addWorksheet('8 — MBSS Endpoint Baseline', { views: [{ state: 'frozen', ySplit: 5 }] });
+        addBranding(wsM, 9);
+        const mbssLegend = wsM.addRow([MBSS_FIELD_SPEC.map(f => `${f.header}: ${f.ref}`).join(' · ')]);
+        wsM.mergeCells(mbssLegend.number, 1, mbssLegend.number, 9);
+        mbssLegend.getCell(1).font = { italic: true, size: 9, color: { argb: COL_INK_MUTED } };
+        mbssLegend.getCell(1).alignment = { wrapText: true, vertical: 'top' };
+        mbssLegend.height = 40;
+        const mh = wsM.addRow(CSV_SHEET11_HEADERS);
+        styleHeaderRow(wsM, mh.number, CSV_SHEET11_HEADERS.length);
+        assets.forEach(a => {
+            const m = parseJsonSafe(a.mbss_json, {});
+            const cells = [a.id, a.name, ...MBSS_FIELD_SPEC.map(f => {
+                const v = m[f.key];
+                if (f.yn) return yn(v);
+                return (v != null && v !== '') ? String(v) : '';
+            })];
+            const r = wsM.addRow(cells);
+            r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            [3, 4, 5, 6, 7].forEach(i => {
+                const v = r.getCell(i).value;
+                r.getCell(i).fill = ynFill(v);
+                r.getCell(i).font = ynFont(v);
+                r.getCell(i).alignment = { horizontal: 'center' };
+            });
+            styleBodyCells(wsM, r.number, CSV_SHEET11_HEADERS.length);
+        });
+        setCols(wsM, [12, 36, 8, 8, 8, 8, 8, 14, 48]);
+    }
+    {
+        const wsF = wb.addWorksheet('9 — Firewall Perimeter Review', { views: [{ state: 'frozen', ySplit: 5 }] });
+        addBranding(wsF, 9);
+        const fwLegend = wsF.addRow([FIREWALL_FIELD_SPEC.map(f => `${f.header}: ${f.ref}`).join(' · ')]);
+        wsF.mergeCells(fwLegend.number, 1, fwLegend.number, 9);
+        fwLegend.getCell(1).font = { italic: true, size: 9, color: { argb: COL_INK_MUTED } };
+        fwLegend.getCell(1).alignment = { wrapText: true, vertical: 'top' };
+        fwLegend.height = 40;
+        const fh = wsF.addRow(CSV_SHEET12_HEADERS);
+        styleHeaderRow(wsF, fh.number, CSV_SHEET12_HEADERS.length);
+        assets.forEach(a => {
+            const f = parseJsonSafe(a.firewall_json, {});
+            const cells = [a.id, a.name, ...FIREWALL_FIELD_SPEC.map(fl => {
+                const v = f[fl.key];
+                if (fl.yn) return yn(v);
+                return (v != null && v !== '') ? String(v) : '';
+            })];
+            const r = wsF.addRow(cells);
+            r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
+            [4, 5, 6, 8].forEach(i => {
+                const v = r.getCell(i).value;
+                r.getCell(i).fill = ynFill(v);
+                r.getCell(i).font = ynFont(v);
+                r.getCell(i).alignment = { horizontal: 'center' };
+            });
+            styleBodyCells(wsF, r.number, CSV_SHEET12_HEADERS.length);
+        });
+        setCols(wsF, [12, 36, 22, 10, 10, 10, 14, 12, 48]);
+    }
+
+    // =====================================================
     // Admin-only sheets — auto-populate from logs + stats so they
     // are never blank, while still honoring manual ReportData entries.
     // =====================================================
@@ -3964,7 +5310,7 @@ async function exportDataXLSX() {
             const now = Date.now();
             return t >= now && t - now <= 14 * 24 * 3600 * 1000;
         }).length;
-        // Negative-action audit stats (drive sheet 8 + KPI block on Highlights)
+        // Negative-action audit stats (drive sheet 11 Highlights + sheet 10 history)
         const cntAssetRejected = (globalLogs || []).filter(l => l.action === 'ASSET_REJECTED').length;
         const cntDraftRejected = (globalLogs || []).filter(l => l.action === 'DRAFT_REJECTED').length;
         const cntAssetDeleted  = (globalLogs || []).filter(l => l.action === 'ASSET_DELETED').length;
@@ -3972,9 +5318,9 @@ async function exportDataXLSX() {
         const negativeTotal    = cntAssetRejected + cntDraftRejected + cntAssetDeleted + cntUserRejected;
 
         // -----------------------------------------------------------
-        // Sheet 8 — Document History (real audit trail from SystemLogs)
+        // Sheet 10 — Document History (real audit trail from SystemLogs)
         // -----------------------------------------------------------
-        const wsH = wb.addWorksheet('8 — Document History');
+        const wsH = wb.addWorksheet('10 — Document History');
         addBranding(wsH, 5);
         const histHdr = wsH.addRow(['Date', 'Version', 'Description', 'Author', 'Approval']);
         styleHeaderRow(wsH, histHdr.number, 5);
@@ -4045,9 +5391,9 @@ async function exportDataXLSX() {
         setCols(wsH, [22, 12, 60, 32, 30]);
 
         // -----------------------------------------------------------
-        // Sheet 9 — Highlights (revision narrative + aggregate stats)
+        // Sheet 11 — Highlights (revision narrative + aggregate stats)
         // -----------------------------------------------------------
-        const wsX = wb.addWorksheet('9 — Highlights');
+        const wsX = wb.addWorksheet('11 — Highlights');
         addBranding(wsX, 2);
         setCols(wsX, [32, 92]);
 
@@ -4108,7 +5454,7 @@ async function exportDataXLSX() {
             ['Assets Holding PII / SPI',      `${pii}`],
             ['Internet-Facing Assets',        `${internet}`],
             ['Action Plans Due ≤ 14 Days',    `${dueIn14}`],
-            ['Rejections & Deletions (audit)', `${negativeTotal} total — ${cntAssetRejected} returned, ${cntDraftRejected} draft-rejected, ${cntAssetDeleted} deleted, ${cntUserRejected} user-rejected (see sheet 7)`],
+            ['Rejections & Deletions (audit)', `${negativeTotal} total — ${cntAssetRejected} returned, ${cntDraftRejected} draft-rejected, ${cntAssetDeleted} deleted, ${cntUserRejected} user-rejected (see sheet 7 — Rejected & Deleted)`],
             ['Report Generated',              `${fmtDateTime(new Date())} by ${reviewerEmail}`]
         ];
         if (rep.initHigh && rep.initHigh.trim()) {
@@ -4127,9 +5473,9 @@ async function exportDataXLSX() {
         });
 
         // -----------------------------------------------------------
-        // Sheet 10 — Sign Off (always populated with realistic defaults)
+        // Sheet 12 — Sign Off (always populated with realistic defaults)
         // -----------------------------------------------------------
-        const wsS = wb.addWorksheet('10 — Sign Off');
+        const wsS = wb.addWorksheet('12 — Sign Off');
         addBranding(wsS, 4);
         const sHdr = wsS.addRow(['Role', 'Name', 'Title / Office', 'Date Signed']);
         styleHeaderRow(wsS, sHdr.number, 4);
@@ -4265,6 +5611,13 @@ window.resendVerificationEmail = resendVerificationEmail;
 window.resetAuthSteps = resetAuthSteps;
 
 // Inline-handler exports (defensive — also auto-bound by browsers, but explicit avoids edge cases)
+window.downloadAssetCsvTemplate = downloadAssetCsvTemplate;
+window.downloadAllIarCsvTemplates = downloadAllIarCsvTemplates;
+window.downloadIarExcelTemplateWorkbook = downloadIarExcelTemplateWorkbook;
+window.exportIarCsvPack = exportIarCsvPack;
+window.triggerAssetCsvImport    = triggerAssetCsvImport;
+window.handleAssetCsvFileSelected = handleAssetCsvFileSelected;
+window.exportAssetRegisterCsv     = exportAssetRegisterCsv;
 window.saveAssetToDB        = saveAssetToDB;
 window.editAsset            = editAsset;
 window.deleteAsset          = deleteAsset;

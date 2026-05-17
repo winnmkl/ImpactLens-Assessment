@@ -2,7 +2,7 @@
 
 A standards-aligned, multi-tenant Information Security Risk Assessment (IAR) platform built for the **Pamantasan ng Lungsod ng Maynila (PLM) ISMS**. Implements the full NIST SP 800-30 Rev. 1 risk-management lifecycle with ISO/IEC 27001:2022, CIS Controls v8, SOC 2 Trust Services Criteria, PCI-DSS v4.0 and RA 10173 (Philippine Data Privacy Act) compliance baked in.
 
-> **v2.0 — major rewrite (May 2026).** The v1 single-user prototype has been replaced by a 3-tier role-based application backed by Supabase Auth, PostgreSQL triggers, mandatory-control floors and a 7–10 sheet ExcelJS audit export. If you are looking for the localStorage prototype, check the v1 tag.
+> **v2.0 — major rewrite (May 2026).** The v1 single-user prototype has been replaced by a 3-tier role-based application backed by Supabase Auth, PostgreSQL triggers, mandatory-control floors and a **9-sheet (Info Sec) / 12-sheet (Admin)** ExcelJS audit export (includes MBSS & firewall review sheets). If you are looking for the localStorage prototype, check the v1 tag.
 
 ---
 
@@ -33,7 +33,7 @@ A standards-aligned, multi-tenant Information Security Risk Assessment (IAR) pla
 | **Storage** | localStorage + AlaSQL | Supabase Postgres (5 tables, RLS-enforced) |
 | **Risk math** | Probability × Severity matrix only | NIST SP 800-30 inherent escalations + weighted defense-in-depth + synergy bonuses + saturating diminishing returns + mandatory control floors |
 | **Compliance** | Implicit | 13 controls explicitly mapped to NIST CSF 2.0, ISO 27001:2022 Annex A, CIS v8, SOC 2 TSC and PCI-DSS v4.0 with concrete clause IDs |
-| **Excel export** | 4 sheets, SheetJS | 7–10 sheets (role-aware), ExcelJS, PDF-template aesthetic, dedicated Rejected & Deleted audit sheet |
+| **Excel export** | 4 sheets, SheetJS | 9–12 sheets (role-aware), ExcelJS, MBSS + firewall sheets, Rejected & Deleted audit |
 | **Notifications** | None | Bell-icon inbox, role-scoped, surfaces approve/reject/delete with reasons |
 | **Compliance gap UI** | None | Live "Mandatory Control Gaps" panel with framework citations |
 | **Reason capture** | `confirm()`/`prompt()` | Branded modal with curated framework-aware presets + free-text essay |
@@ -84,9 +84,10 @@ Open the Supabase SQL Editor for your project and run the scripts in order:
 
 | Step | File | Purpose | Idempotent? |
 |---|---|---|---|
-| 1 | `supabase/master_setup.sql` | Tables, RLS, triggers, seed of 57 PLM assets, risk-math realignment | yes |
+| 1 | `supabase/master_setup.sql` | Tables, RLS, triggers, seed of 57 PLM assets, risk-math realignment, `mbss_json` / `firewall_json` columns | yes |
 | 2 *(optional)* | `supabase/hotfix_demo_accounts.sql` | Pre-provision `infosec@plm.edu.ph` / `user@plm.edu.ph` (skip the email-verification step) | yes |
-| 3 *(optional)* | `supabase/hotfix_realign_risk_math.sql` | Re-derives risk math + adds `user_profiles.rejection_reason` for legacy databases | yes |
+| 3 *(optional)* | `supabase/hotfix_mbss_firewall_columns.sql` | Adds `mbss_json` / `firewall_json` if your DB predates May 2026 `master_setup.sql` | yes |
+| 4 *(optional)* | `supabase/hotfix_realign_risk_math.sql` | Re-derives risk math + adds `user_profiles.rejection_reason` for legacy databases | yes |
 
 In **Authentication → Providers** make sure Email is enabled and **Confirm email** is ON. The `master_setup.sql` trigger auto-promotes any verified `admin@plm.edu.ph`, `infosec@plm.edu.ph`, or `user@plm.edu.ph` to an active profile.
 
@@ -152,7 +153,7 @@ The server automatically falls back to a free port if 8000 is occupied. Hard-ref
 | View Dashboard | — | yes | yes |
 | View System Logs | — | yes | yes |
 | View Risk Register | — | yes | yes |
-| Export Excel | — | 7-sheet workbook | 10-sheet workbook |
+| Export Excel | — | 9-sheet workbook | 12-sheet workbook |
 | Reporting & Sign-offs page | — | — | yes |
 
 UI elements are filtered three ways:
@@ -276,9 +277,13 @@ Powered by ExcelJS with a dark-themed brand palette (Pantone-style neon green on
 | 5 | Residual & Treatment | yes | yes |
 | 6 | Compliance Mapping (NIST/ISO/CIS/SOC 2/PCI) | yes | yes |
 | 7 | **Rejected & Deleted (audit)** | yes | yes |
-| 8 | Document History (from SystemLogs) | — | yes |
-| 9 | Highlights (KPIs + reason-aware narrative) | — | yes |
-| 10 | Sign Off (Prepared / Reviewed / Approved + signature lines) | — | yes |
+| 8 | **MBSS endpoint baseline** (CIS v8 + NIST CSF checklist; `mbss_json`) | yes | yes |
+| 9 | **Firewall perimeter review** (CIS v8 §12 + NIST SC/PR; `firewall_json`) | yes | yes |
+| 10 | Document History (from SystemLogs) | — | yes |
+| 11 | Highlights (KPIs + reason-aware narrative) | — | yes |
+| 12 | Sign Off (Prepared / Reviewed / Approved + signature lines) | — | yes |
+
+Column definitions for sheets **8** and **9** are hardcoded in `assets/scripts/app.js` (`MBSS_FIELD_SPEC`, `FIREWALL_FIELD_SPEC`) with explicit CIS / NIST mapping strings on each export row’s legend line.
 
 Risk-rating cells use a fixed colour code (High = red, Moderate = amber, Low = cyan, Very Low = green) so the workbook reads the same way the dashboard does.
 
@@ -306,7 +311,14 @@ ImpactLens-Assessment/
 │   ├── hotfix_realign_risk_math.sql        # optional: re-derive seeded math + add column
 │   ├── hotfix_action_plans.sql             # optional: diversify seed action-plan dates
 │   └── hotfix_user_profiles_rls.sql        # legacy: RLS recursion fix (already in master)
-└── docs/                                   # (optional) supplementary guides
+└── docs/
+    ├── ARCHITECTURE.md                     # v2 system design (Supabase)
+    ├── USER_GUIDE.md                       # End-user guide
+    ├── MODULE_ISRA_DESCRIPTION.md          # ISRA module scope
+    ├── LIMITATIONS_AND_SCOPE.md            # Out-of-scope + defense talking points
+    ├── DOCUMENTATION_BACKGROUND.txt        # Full background (copy-paste)
+    ├── asset_import_template.csv           # CSV bulk import sample
+    └── PROJECT_SCORING_EVALUATION.txt      # Rubric self-assessment
 ```
 
 ---
@@ -324,6 +336,12 @@ If a browser blocks `localStorage` for the Supabase SDK (Edge "Tracking Preventi
 
 ### Resetting a stale session
 A **Reset session** button on the login screen clears `localStorage` and reloads. Useful if the SDK state got corrupted between deployments.
+
+---
+
+## CSV bulk import (Info Sec / Admin)
+
+On **Asset Table**, use **CSV Template** → fill in Excel → **Import CSV**. Rows become **Draft** assets (Info Sec completes risk profiling in Draft Queue). **Export CSV** downloads the full register. See `docs/USER_GUIDE.md`.
 
 ---
 

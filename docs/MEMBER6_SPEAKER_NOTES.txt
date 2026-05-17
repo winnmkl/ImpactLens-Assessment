@@ -1,0 +1,216 @@
+================================================================================
+MEMBER 6 - SPEAKER NOTES: RISK CALCULATION ENGINE
+================================================================================
+Your slot: Slides 8-9 | Target time: ~2 minutes (about 1 min each slide)
+You built calculateRiskMath() and runEnforcementEngine() - own this section.
+
+================================================================================
+SLIDE 8 - ON-SCREEN CONTENT (copy onto PPT)
+================================================================================
+
+TITLE:
+  How Risk Is Calculated - Part 1: Inherent Risk
+
+BULLETS (keep to 5):
+  1. Start with Probability (P) and Severity (S), each 1 to 5
+  2. CIA score (C+I+A) sets classification: Public to Restricted
+  3. Inherent escalations adjust P/S before any controls (NIST SP 800-30)
+  4. 5x5 matrix maps adjusted P and S to inherent rating
+  5. Ratings: Very Low, Low, Moderate, High
+
+OPTIONAL VISUAL:
+  Small table or heatmap showing P (rows 1-5) x S (columns 1-5) with colors.
+  Or one row: "Example: P=4, S=5 -> Inherent = High"
+
+FOOTER:
+  Speaker: [Your Name] | ImpactLens Risk Engine
+
+================================================================================
+SLIDE 9 - ON-SCREEN CONTENT (copy onto PPT)
+================================================================================
+
+TITLE:
+  How Risk Is Calculated - Part 2: Residual Risk and Floors
+
+BULLETS (keep to 5):
+  1. 13 controls - only threat-relevant ones reduce P or S (weighted)
+  2. Synergy bonuses when control pairs work together (e.g. RBAC + MFA)
+  3. Diminishing returns - cannot drop risk to minimum by checking everything
+  4. Mandatory floors - missing baseline controls cap how low residual can go
+  5. Accept blocked when residual is High (ISO 27001 risk appetite)
+
+OPTIONAL VISUAL:
+  Flow: Inherent -> minus controls -> residual -> floor check -> final rating
+
+FOOTER:
+  Speaker: [Your Name] | ImpactLens Risk Engine
+
+================================================================================
+FULL SPEAKER SCRIPT (~2 MINUTES) - READ OR MEMORIZE
+================================================================================
+
+--- SLIDE 8 (~1 minute) ---
+
+"Hi, I'm [Name]. I designed the risk calculation engine in ImpactLens.
+
+Every asset starts with two inputs from the assessor: Probability from 1 to 5,
+and Severity from 1 to 5. We also compute a CIA score by adding Confidentiality,
+Integrity, and Availability - each scored 1 to 3. That total drives the
+classification band: Public, Internal Use, Confidential, or Restricted.
+
+Before we apply any security controls, the system calculates INHERENT risk -
+the worst-case exposure. I implemented NIST SP 800-30 style escalations. For
+example: if the asset is Internet-facing and the threat is external cyber,
+probability is bumped up and cannot stay below 3. If the asset processes PII
+or SPI and the threat is a data leak or DPA breach, severity is forced to 5.
+Restricted data - CIA 8 or higher - with a cyber or insider threat pushes
+severity to at least 4. Financial assets under PCI scope force severity 5 for
+any cyber threat.
+
+After those rules run, we look up the rating on a 5-by-5 matrix - the same
+heat map you see in the Risk Register. That gives us Very Low, Low, Moderate,
+or High INHERENT risk. This is the risk picture if nothing mitigating existed."
+
+--- SLIDE 9 (~1 minute) ---
+
+"Part two is RESIDUAL risk - after controls.
+
+We have 13 organization-level controls, from documented procedures through MFA,
+encryption, firewall, and incident response. Not every control applies to every
+threat. I built a controlMap so only threat-relevant controls mathematically
+reduce probability or severity. Each control has weights - for example MFA has
+a strong probability weight, while backup mainly reduces severity because it
+limits impact after an incident.
+
+When certain pairs are both active, synergy bonuses apply - like RBAC plus MFA,
+or vulnerability management plus EDR plus IRP. But I also added diminishing
+returns using a saturation curve, so users cannot game the system by checking
+every box and dropping risk to the minimum.
+
+The last layer is mandatory floors. Depending on the asset - Restricted class,
+PII, Internet-facing, or Financial for PCI - specific controls must be in place.
+If any are missing, residual risk cannot fall below Moderate, or High for PCI.
+The UI shows exactly which controls are missing and cites ISO, NIST, CIS, or
+RA 10173.
+
+Finally, risk appetite enforcement: if residual is High, the treatment dropdown
+blocks Accept - aligned with ISO 27001. That is the logic I implemented - inherent
+risk shows exposure, residual shows what is left after controls and compliance,
+and floors make sure standards cannot be bypassed. Thank you."
+
+================================================================================
+WALKTHROUGH EXAMPLE (USE IF PANEL ASKS OR YOU HAVE 30 SEC EXTRA)
+================================================================================
+
+Scenario: PLM Online Tuition Payment Gateway (type FA, Internet Facing)
+Threat: cyber_ext_leak (data leak)
+User picks P=3, S=4 initially.
+
+STEP 1 - Escalations:
+  - Internet Facing + cyber_ext -> P = max(3, 3+1) = 4 (capped at 5)
+  - FA has PII/SPI from profile -> if leak threat, S = 5
+  - FA + cyber -> S = 5 (PCI)
+  Adjusted: P=4, S=5 -> Matrix 5-4 -> INHERENT = High
+
+STEP 2 - Controls (relevant for cyber_ext_leak: 1,3,4,7,9,10,12):
+  User checks: RBAC(3), MFA(4), Encryption(7), Firewall(10)
+  Weights sum on P and S, plus RBAC+MFA synergy (+0.5 on P)
+  Diminishing returns applied -> residual P and S drop
+  Example outcome might be Moderate or Low on paper
+
+STEP 3 - Mandatory floors (FA triggers PCI set: MFA, Encryption, Vuln, Segmentation):
+  If Vuln(11) or Segmentation(12) NOT checked -> floor = High
+  Residual cannot be below High even if math says Low
+
+STEP 4 - Treatment:
+  If residual stays High -> Accept is disabled
+
+Say in one line:
+  "Even with MFA and encryption, missing PCI-required segmentation keeps
+   residual at High until the gap is closed."
+
+================================================================================
+INHERENT ESCALATIONS - QUICK REFERENCE TABLE (FOR Q&A)
+================================================================================
+
+  Condition                              Effect on P/S
+  -------------------------------------  ----------------------------------
+  Internet Facing + cyber_ext threat     P = min(5, P+1); P >= 3
+  PII or SPI + leak or legal_dpa         S = 5
+  CIA >= 8 + cyber or hr_insider         S = max(S, 4)
+  Type FA + any cyber threat             S = 5
+
+================================================================================
+MANDATORY FLOORS - QUICK REFERENCE TABLE (FOR Q&A)
+================================================================================
+
+  Trigger              Required control IDs        Floor
+  -------------------  --------------------------  ---------
+  CIA >= 8 Restricted  3,4,6,7,13 (RBAC,MFA,...)   Moderate
+  CIA 6-7 Confidential 3,7,13                      Moderate
+  Type FA (PCI)        4,7,11,12                   High
+  PII or SPI           1,3,6,7                     Moderate
+  Internet Facing      10,11,13                    Moderate
+
+================================================================================
+SYNERGY PAIRS (IF ASKED)
+================================================================================
+
+  RBAC (3) + MFA (4)           -> +0.5 probability reduction
+  Backup (6) + IRP (13)         -> +0.5 severity reduction
+  EDR (9) + Firewall (10)      -> +0.4 probability
+  Encryption (7) + Segmentation (12) -> +0.4 severity
+  Vuln (11) + EDR (9) + IRP (13) -> +0.3 P and +0.3 S
+
+================================================================================
+WHY I BUILT IT THIS WAY (1-2 SENTENCES IF ASKED "WHY")
+================================================================================
+
+  - Threat-relevant only: NIST SP 800-30 says controls should match the threat
+    source - checking physical locks should not reduce ransomware probability.
+
+  - Mandatory separate from relevant: A DDoS threat might not need RBAC for
+    math, but Restricted-class data still REQUIRES RBAC by ISO - so both paths
+    enable the checkbox.
+
+  - Diminishing returns: Prevents unrealistic "check all 13 = Very Low" scores
+    that auditors would reject.
+
+================================================================================
+ANTICIPATED Q&A - SHORT ANSWERS
+================================================================================
+
+Q: Where is the formula?
+A: In assets/scripts/app.js - functions calculateRiskMath() and
+   getApplicableMandatorySets(). It runs live when the form changes.
+
+Q: Is the 5x5 matrix custom?
+A: It follows the PLM IAR template - INHERIT lookup table keyed by severity-
+   probability pairs, same as our Risk Guidelines screen.
+
+Q: Why block Accept on High?
+A: ISO 27001:2022 section 6.1.3 - accepting High residual is outside normal
+   risk appetite; treatment must be Mitigate, Transfer, or Avoid.
+
+Q: What if Info Sec disagrees with the number?
+A: They can adjust P, S, threat, environment, and controls - the engine
+   recalculates instantly. Reject reasons can cite "escalation unjustified."
+
+Q: Does the database recalculate too?
+A: The browser calculates on edit; master_setup.sql has il_inherit() helper
+   for seed alignment. Saved values are prob, sev, inherit, residual on Assets.
+
+================================================================================
+DELIVERY TIPS
+================================================================================
+
+  - Point at the heatmap on Slide 8 when you say "5 by 5 matrix"
+  - On Slide 9, use hand gesture: left hand = inherent, right = minus controls
+  - Speak slightly slower on "diminishing returns" and "mandatory floors"
+  - If nervous, keep the tuition gateway example in your pocket - one story beats lists
+  - Transition to Member 7: "Next, [Name] will show how each control maps to
+    ISO, NIST, CIS, and Philippine Data Privacy Act."
+
+================================================================================
+END - GOOD LUCK
+================================================================================

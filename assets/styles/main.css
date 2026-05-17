@@ -237,6 +237,37 @@ main {
   font-family: var(--mono); 
 }
 
+/* Asset Table — CSV import/export (Info Sec & Admin only); visibility follows body[data-role] so it cannot stay stuck on display:none from markup */
+.register-csv-toolbar {
+  display: none;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  flex: 1 1 100%;
+  justify-content: flex-start;
+  margin-top: 4px;
+}
+
+body[data-role="user"] .register-csv-toolbar,
+body[data-role="infosec"] .register-csv-toolbar,
+body[data-role="admin"] .register-csv-toolbar {
+  display: flex !important;
+}
+
+/* Standard User: hide risk-heavy dashboard / export UI; show asset-focused blocks via .dashboard-user-only */
+body[data-role="user"] .dashboard-elevated-only,
+body[data-role="user"] .csv-elevated-only {
+  display: none !important;
+}
+
+body:not([data-role="user"]) .dashboard-user-only {
+  display: none !important;
+}
+
+body[data-role="user"] .dash-user-asset-grid {
+  grid-template-columns: 1fr;
+}
+
 .section { 
   display: none; 
 }
@@ -1335,7 +1366,7 @@ tbody td strong {
 .notif-item.kind-success .notif-reason { background: rgba(0,204,119,0.07); border-color: rgba(0,204,119,0.28); border-left-color: var(--success); }
 .notif-item.kind-success .notif-reason-label { color: var(--success); }
 
-body[data-role="user"] .header-stat:not(.role-pill):not(.user-pill),
+body[data-role="user"] .header-stat:not(.role-pill):not(.user-pill):not(.hdr-user-keep),
 body[data-role="user"] .status-dot {
   display: none;
 }

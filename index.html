@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ImpactLens — Risk Assessment</title>
+  <link rel="icon" href="./assets/images/favicon.svg?v=1" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./assets/images/favicon.svg?v=1">
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&family=Bebas+Neue&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -12,7 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   
-  <link rel="stylesheet" href="./assets/styles/main.css?v=20260517-submissions1">
+  <link rel="stylesheet" href="./assets/styles/main.css?v=20260518-user-dash-csv">
 </head>
 <body>
 
@@ -204,13 +206,13 @@
   </div>
   <div class="header-right">
     <div class="status-dot"></div>
-    <div class="header-stat">Assets: <span id="hdr-total">0</span></div>
+    <div class="header-stat hdr-user-keep">Assets: <span id="hdr-total">0</span></div>
     
-    <div class="header-stat" style="background: rgba(255,68,68,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--danger);">
+    <div class="header-stat dashboard-elevated-only" style="background: rgba(255,68,68,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--danger);">
         High Risks: <span id="hdr-high" style="color:var(--danger); font-weight:bold;">0</span>
     </div>
     
-    <div class="header-stat" style="background: rgba(255,153,0,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--warn);">
+    <div class="header-stat dashboard-elevated-only" style="background: rgba(255,153,0,0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--warn);">
         Action Plans Due (14 days): <span id="hdr-deadlines" style="color:var(--warn); font-weight:bold;">0</span>
     </div>
     <div class="header-stat role-pill">Role: <span id="hdr-role">—</span></div>
@@ -235,11 +237,11 @@
 
 <div class="layout">
   <nav id="main-nav">
-    <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Overview</div><div class="nav-item" data-section="dashboard" onclick="showSection('dashboard')"><span class="nav-icon">[■]</span> Dashboard</div></div>
+    <div class="nav-section nav-user-only nav-admin-only nav-infosec-only"><div class="nav-label">Overview</div><div class="nav-item" data-section="dashboard" onclick="showSection('dashboard')"><span class="nav-icon">[■]</span> Dashboard</div></div>
     <div class="nav-section nav-user-only nav-infosec-only nav-admin-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="add" onclick="showSection('add')"><span class="nav-icon">[+]</span> Add Asset</div><div class="nav-item nav-user-only nav-infosec-only" data-section="my-submissions" onclick="showSection('my-submissions')"><span class="nav-icon">[≡]</span> My Submissions</div></div>
     <div class="nav-section nav-infosec-only"><div class="nav-label">Workflow</div><div class="nav-item" data-section="draft-queue" onclick="showSection('draft-queue')"><span class="nav-icon">[◷]</span> Draft Queue <span class="nav-badge" id="nav-drafts">0</span></div></div>
     <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Approval</div><div class="nav-item" data-section="pending-queue" onclick="showSection('pending-queue')"><span class="nav-icon">[◎]</span> Asset Approval <span class="nav-badge" id="nav-pending" style="color:var(--warn)">0</span></div><div class="nav-item nav-admin-users" data-section="users" onclick="showSection('users'); showUsersTab('pending');"><span class="nav-icon">[◉]</span> Account Approvals <span class="nav-badge" id="nav-pending-users" style="color:var(--warn)">0</span></div></div>
-    <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="register" onclick="showSection('register')"><span class="nav-icon">[≡]</span> Asset Table <span class="nav-badge" id="nav-total">0</span></div></div>
+    <div class="nav-section nav-user-only nav-admin-only nav-infosec-only"><div class="nav-label">Register</div><div class="nav-item" data-section="register" onclick="showSection('register')"><span class="nav-icon">[≡]</span> Asset Table <span class="nav-badge" id="nav-total">0</span></div></div>
     <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Analysis</div><div class="nav-item" data-section="risk" onclick="showSection('risk')"><span class="nav-icon">[△]</span> Risk Register</div><div class="nav-item" data-section="controls" onclick="showSection('controls')"><span class="nav-icon">[✓]</span> Control Metrics</div><div class="nav-item" data-section="actions" onclick="showSection('actions')"><span class="nav-icon">[!]</span> Action Plans <span class="nav-badge" id="nav-actions" style="color:var(--warn)">0</span></div></div>
     <div class="nav-section nav-infosec-only nav-admin-users"><div class="nav-label">Governance</div><div class="nav-item" data-section="logs" onclick="showSection('logs')"><span class="nav-icon">[⌗]</span> System Logs</div></div>
     <div class="nav-section"><div class="nav-label">Documentation</div><div class="nav-item nav-admin-only" data-section="report" onclick="showSection('report')"><span class="nav-icon">[✎]</span> Reporting & Sign-offs</div><div class="nav-item" data-section="guidelines" onclick="showSection('guidelines')"><span class="nav-icon">[?]</span> Risk Guidelines</div></div>
@@ -250,16 +252,26 @@
       <div class="page-header">
         <div>
           <div class="page-title">DASH<span>BOARD</span></div>
-          <div class="page-desc">// Risk posture, treatment progress &amp; register health — approved register</div>
+          <div class="page-desc dashboard-elevated-only">// Risk posture, treatment progress &amp; register health — approved register</div>
+          <div class="page-desc dashboard-user-only">// Approved asset register — counts &amp; your submissions (no risk analysis)</div>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-          <button type="button" class="btn" onclick="showSection('risk')">Risk register</button>
+          <button type="button" class="btn dashboard-elevated-only" onclick="showSection('risk')">Risk register</button>
+          <button type="button" class="btn btn-primary" onclick="showSection('register')">Asset table</button>
           <button type="button" class="btn btn-primary" onclick="showSection('add')">+ New record</button>
         </div>
       </div>
 
-      <p class="dash-section-title">Risk posture</p>
-      <div class="metrics-grid metrics-grid--risk">
+      <p class="dash-section-title dashboard-user-only">Your submissions</p>
+      <div class="metrics-grid dashboard-user-only">
+        <div class="metric-card warn"><div class="metric-num" id="dm-user-drafts">0</div><div class="metric-label">Your drafts (with Info Sec)</div></div>
+        <div class="metric-card accent"><div class="metric-num" id="dm-user-pending">0</div><div class="metric-label">Awaiting CISO approval</div></div>
+        <div class="metric-card info"><div class="metric-num" id="dm-user-approved">0</div><div class="metric-label">Your assets — approved</div></div>
+        <div class="metric-card danger"><div class="metric-num" id="dm-user-rejected">0</div><div class="metric-label">Rejected (resubmit via Add)</div></div>
+      </div>
+
+      <p class="dash-section-title dashboard-elevated-only">Risk posture</p>
+      <div class="metrics-grid metrics-grid--risk dashboard-elevated-only">
         <div class="metric-card danger">
           <div class="metric-num" id="dm-risk-threshold-pct">0%</div>
           <div class="metric-label">Share ≥ Moderate residual <span class="metric-hint">(elevated)</span></div>
@@ -282,13 +294,13 @@
 
       <p class="dash-section-title">Register overview</p>
       <div class="metrics-grid">
-        <div class="metric-card accent"><div class="metric-num" id="dm-total">0</div><div class="metric-label">Total DB Assets</div></div>
-        <div class="metric-card danger"><div class="metric-num" id="dm-high">0</div><div class="metric-label">High Residual Risk</div></div>
-        <div class="metric-card warn"><div class="metric-num" id="dm-mod">0</div><div class="metric-label">Moderate Residual Risk</div></div>
-        <div class="metric-card info"><div class="metric-num" id="dm-pii">0</div><div class="metric-label">Assets with PII</div></div>
+        <div class="metric-card accent"><div class="metric-num" id="dm-total">0</div><div class="metric-label" id="dm-total-label">Approved in register</div></div>
+        <div class="metric-card danger dashboard-elevated-only"><div class="metric-num" id="dm-high">0</div><div class="metric-label">High Residual Risk</div></div>
+        <div class="metric-card warn dashboard-elevated-only"><div class="metric-num" id="dm-mod">0</div><div class="metric-label">Moderate Residual Risk</div></div>
+        <div class="metric-card info"><div class="metric-num" id="dm-pii">0</div><div class="metric-label">Assets with PII/SPI tagged</div></div>
       </div>
 
-      <div class="grid-3 dash-risk-viz" style="margin-bottom:16px">
+      <div class="grid-3 dash-risk-viz dashboard-elevated-only" style="margin-bottom:16px">
         <div class="card">
           <div class="card-header">Residual risk breakdown</div>
           <div class="dash-donut-block" id="dash-risk-donut"></div>
@@ -303,15 +315,18 @@
         </div>
       </div>
 
-      <div class="grid-2" style="margin-bottom:16px">
-        <div class="card"><div class="card-header">Asset type breakdown</div><div id="dash-types"></div></div>
-        <div class="card"><div class="card-header">Residual distribution (bars)</div><div id="dash-residual"></div></div>
+      <div class="grid-2 dash-user-asset-grid" style="margin-bottom:16px">
+        <div class="card"><div class="card-header">Asset type breakdown <span style="font-size:9px;color:var(--text3);margin-left:6px;">approved register</span></div><div id="dash-types"></div></div>
+        <div class="card dashboard-elevated-only"><div class="card-header">Residual distribution (bars)</div><div id="dash-residual"></div></div>
       </div>
-      <div class="grid-2" style="margin-bottom:16px">
+      <div class="grid-2 dashboard-elevated-only" style="margin-bottom:16px">
         <div class="card"><div class="card-header">Information classification</div><div id="dash-class"></div></div>
         <div class="card"><div class="card-header">Top risk assets <span style="font-size:9px;color:var(--text3);margin-left:6px;">by residual</span></div><div id="dash-top-risk"></div></div>
       </div>
-      <div class="grid-2">
+      <div class="grid-2 dashboard-user-only dash-user-asset-grid" style="margin-bottom:16px">
+        <div class="card"><div class="card-header">Information classification <span style="font-size:9px;color:var(--text3);margin-left:6px;">approved register</span></div><div id="dash-class-user"></div></div>
+      </div>
+      <div class="grid-2 dashboard-elevated-only">
         <div class="card"><div class="card-header">Highest inherent exposure <span style="font-size:9px;color:var(--text3);margin-left:6px;">P × S score</span></div><div id="dash-top-inherent"></div></div>
         <div class="card"><div class="card-header">Treatment by strategy <span style="font-size:9px;color:var(--text3);margin-left:6px;">elevated risks</span></div><div id="dash-strategy-bars"></div></div>
       </div>
@@ -319,7 +334,29 @@
 
     <div id="sec-add" class="section">
       <div class="page-header"><div><div class="page-title" id="form-title">INSERT <span>RECORD</span></div><p class="page-desc">Workflow: <span id="form-workflow-status" class="badge badge-type">Draft</span></p></div></div>
-      
+
+      <div class="card dashboard-user-only">
+        <div class="card-header">Create assets from a CSV (Sheet 1 — identification)</div>
+        <p style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:14px;">
+          <strong>1.</strong> Download <strong>CSV template</strong> (one header row + example). <strong>2.</strong> Replace example rows with your data —
+          keep column names. Required: <code>type</code> (IA, PhA, PA, SA, SV, FA) and <code>name</code>. Leave <code>id</code> blank for new IDs. <strong>3.</strong> Click <strong>Import CSV</strong> here or on <strong>Asset Table</strong>.
+          New rows become <strong>Drafts</strong> for Info Sec. (Other sheets are for Info Sec / Admin only.)
+        </p>
+        <button type="button" class="btn btn-sm" onclick="downloadAssetCsvTemplate()">CSV template</button>
+        <button type="button" class="btn btn-sm btn-primary" onclick="triggerAssetCsvImport()">Import CSV…</button>
+      </div>
+
+      <div class="card dashboard-elevated-only">
+        <div class="card-header">Import from CSV (create or update assets)</div>
+        <p style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:14px;">
+          <strong>Sheet 1 — Asset Identification:</strong> new rows become <strong>Drafts</strong> (or use legacy template). <strong>Sheets 2–5, 8–9:</strong> merge into existing assets by <code>id</code>. File type must be <code>.csv</code>; use <strong>Excel templates</strong> for dropdowns, then save each sheet as CSV. Compliance sheet (6) is export-only — use <strong>Asset Table</strong> for bulk export/pack.
+        </p>
+        <button type="button" class="btn btn-sm" onclick="downloadAssetCsvTemplate()">CSV template</button>
+        <button type="button" class="btn btn-sm" onclick="downloadAllIarCsvTemplates()">All CSV templates</button>
+        <button type="button" class="btn btn-sm btn-primary" onclick="triggerAssetCsvImport()">Import CSV…</button>
+        <button type="button" class="btn btn-sm" onclick="downloadIarExcelTemplateWorkbook()">Excel templates (styled)</button>
+      </div>
+
       <div class="card">
         <div class="card-header">01 — Primary Details & Network Context</div>
         <div class="form-row grid-3">
@@ -510,6 +547,88 @@
         </div>
       </div>
 
+      <div class="card role-locked-section" id="sec-mbss-firewall">
+        <div class="card-header">05 — MBSS endpoint baseline &amp; firewall / perimeter review</div>
+        <p id="mbss-firewall-type-lock-banner" class="page-desc" style="font-size:11px;color:var(--warn);margin:-6px 0 14px;" hidden></p>
+        <div class="form-row grid-2">
+          <div class="field">
+            <label>EDR / anti-malware current</label>
+            <select id="f-mbss-edr"><option value="N">N</option><option value="Y">Y</option></select>
+          </div>
+          <div class="field">
+            <label>Patch &amp; vuln management current</label>
+            <select id="f-mbss-patch"><option value="N">N</option><option value="Y">Y</option></select>
+          </div>
+          <div class="field">
+            <label>Full-disk encryption (host)</label>
+            <select id="f-mbss-disk"><option value="N">N</option><option value="Y">Y</option></select>
+          </div>
+          <div class="field">
+            <label>Host firewall enabled</label>
+            <select id="f-mbss-hostfw"><option value="N">N</option><option value="Y">Y</option></select>
+          </div>
+          <div class="field">
+            <label>Admin / least-privilege review done</label>
+            <select id="f-mbss-admin"><option value="N">N</option><option value="Y">Y</option></select>
+          </div>
+          <div class="field">
+            <label>Last MBSS-style review date</label>
+            <input type="date" id="f-mbss-date">
+          </div>
+        </div>
+        <div class="form-row"><div class="field"><label>MBSS / endpoint notes</label><textarea id="f-mbss-notes" rows="2" placeholder="Exceptions, compensating controls, tool names…"></textarea></div></div>
+        <div class="form-row grid-2" style="margin-top:16px;">
+          <div class="field">
+            <label>Perimeter scope</label>
+            <select id="f-fw-scope">
+              <option value="">—</option>
+              <option value="Network firewall">Network firewall</option>
+              <option value="WAF">WAF</option>
+              <option value="Cloud NSG / SG">Cloud NSG / SG</option>
+              <option value="Host + perimeter">Host + perimeter</option>
+              <option value="None documented">None documented</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Default deny (implicit or explicit)</label>
+            <select id="f-fw-defaultdeny"><option value="N">N</option><option value="Y">Y</option></select>
+          </div>
+          <div class="field">
+            <label>Change control for rule changes</label>
+            <select id="f-fw-change"><option value="N">N</option><option value="Y">Y</option></select>
+          </div>
+          <div class="field">
+            <label>Logging / forwarding to SOC or SIEM</label>
+            <select id="f-fw-logging"><option value="N">N</option><option value="Y">Y</option></select>
+          </div>
+          <div class="field">
+            <label>Rule review cadence</label>
+            <select id="f-fw-cadence">
+              <option value="">—</option>
+              <option value="Monthly">Monthly</option>
+              <option value="Quarterly">Quarterly</option>
+              <option value="Semi-annual">Semi-annual</option>
+              <option value="Annual">Annual</option>
+              <option value="Ad hoc">Ad hoc</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Overly permissive rules observed</label>
+            <select id="f-fw-permissive"><option value="N">N</option><option value="Y">Y</option></select>
+          </div>
+        </div>
+        <div class="form-row"><div class="field"><label>Firewall / WAF rule review notes</label><textarea id="f-fw-notes" rows="2" placeholder="Rule IDs, risky allows, remediation…"></textarea></div></div>
+        <div id="mbss-risk-score-strip" class="mbss-risk-score-strip" style="margin-top:20px;padding:14px 16px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;">
+          <div style="font-family:var(--mono);font-size:9px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text3);margin-bottom:10px;">Risk scores (live — matches section 04)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:14px 20px;align-items:center;">
+            <div><span style="font-size:10px;color:var(--text3);margin-right:8px;">Inherent</span><span class="badge badge-mo" id="mbss-mirror-r-inherit" style="font-size:12px;padding:4px 10px;">—</span></div>
+            <div><span style="font-size:10px;color:var(--text3);margin-right:8px;">Residual</span><span class="badge badge-mo" id="mbss-mirror-r-residual" style="font-size:12px;padding:4px 10px;">—</span></div>
+            <div><span style="font-size:10px;color:var(--text3);margin-right:8px;">Inherent P×S</span><span id="mbss-mirror-inh-ps" style="font-family:var(--mono);font-size:13px;color:var(--text);">—</span></div>
+            <div><span style="font-size:10px;color:var(--text3);margin-right:8px;">Residual P×S</span><span id="mbss-mirror-res-ps" style="font-family:var(--mono);font-size:13px;color:var(--accent);">—</span></div>
+          </div>
+        </div>
+      </div>
+
       <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:20px;">
         <button type="button" class="btn" onclick="clearForm()">Clear form</button>
         <button type="button" class="btn btn-primary" id="btn-save-asset"
@@ -552,7 +671,17 @@
       <div class="table-wrap"><table><thead><tr><th>Time</th><th>User</th><th>Role</th><th>Action</th><th>Asset</th><th>Details</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
     <div id="sec-register" class="section">
-      <div class="page-header"><div><div class="page-title">ASSET <span>TABLE</span></div><div class="page-desc">// Comprehensive inventory of all registered information assets</div></div></div>
+      <div class="page-header"><div><div class="page-title">ASSET <span>TABLE</span></div><div class="page-desc" id="reg-page-desc">// Approved register — CSV import creates Draft assets for profiling</div></div>
+        <div class="page-header-actions register-csv-toolbar">
+          <button type="button" class="btn btn-sm" onclick="downloadAssetCsvTemplate()" title="Blank template: Sheet 1 — Asset Identification columns only">CSV template</button>
+          <button type="button" class="btn btn-sm csv-elevated-only" onclick="downloadAllIarCsvTemplates()" title="Blank header-only CSVs for all IAR sheets (1–6, 8–9)">All CSV templates</button>
+          <button type="button" class="btn btn-sm btn-primary" onclick="triggerAssetCsvImport()" title="Upload Sheet 1 CSV to create Drafts (Standard User) or any supported sheet (Info Sec / Admin)">Import CSV</button>
+          <button type="button" class="btn btn-sm btn-primary csv-elevated-only" onclick="exportIarCsvPack()" title="Download eight data CSVs (sheets 1–6, 8–9) for approved + pending assets">Export all CSVs</button>
+          <button type="button" class="btn btn-sm csv-elevated-only" onclick="exportAssetRegisterCsv()" title="Single wide table with all asset columns">Export register (CSV)</button>
+          <button type="button" class="btn btn-sm csv-elevated-only" onclick="downloadIarExcelTemplateWorkbook()" title="Styled .xlsx with dropdowns; save sheets as CSV to import">Excel templates (styled)</button>
+          <input type="file" id="asset-csv-input" accept=".csv,text/csv" class="hidden" aria-hidden="true" onchange="handleAssetCsvFileSelected(event)">
+        </div>
+      </div>
       <div class="table-wrap">
         <table><thead><tr><th>ID</th><th>Asset name</th><th>Type</th><th>Group</th><th>Hostname</th><th>Actions</th></tr></thead><tbody id="reg-body"></tbody></table>
       </div>
@@ -748,7 +877,7 @@
 
 <div id="notification" class="notification"></div>
 
-<script src="./assets/scripts/app.js?v=20260517-rejected-auth"></script>
+<script src="./assets/scripts/app.js?v=20260518-mbss-score-strip"></script>
 
 </body>
 </html>
