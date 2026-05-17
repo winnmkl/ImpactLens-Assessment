@@ -1,0 +1,297 @@
+================================================================================
+PAMANTASAN NG LUNGSOD NG MAYNILA
+College of Information Systems & Technology Management
+MAJOR PROJECT - SCORING SHEET (TOOL DEVELOPMENT TRACK)
+EVALUATION: ImpactLens v2.0 (Information Security Risk Assessment / IAR)
+================================================================================
+
+NOTE: This is an objective rubric-based evaluation you can use for self-assessment
+or discussion with your professor. Criteria 6 (teamwork) must be filled by your
+leader and professor. Adjust scores if your panel weighs "single module depth"
+vs "multiple assessment types" differently.
+
+================================================================================
+GROUP INFORMATION (FILL IN)
+================================================================================
+
+Group Name:          [BSCS 2-4 Group 3]
+Course / Section:    [Your section]
+Group Leader:        [Name]
+Date Submitted:      [Date]
+Tool Name / Language: ImpactLens | HTML, CSS, Vanilla JavaScript, Supabase (PostgreSQL)
+Modules Implemented: Information Security Risk Assessment (ISRA / IAR) - primary module
+                       [NOT implemented: MBSS, Firewall Rule Review as separate modules]
+
+================================================================================
+SCORING CRITERIA
+================================================================================
+
+------------------------------------------------------------------------------
+1. STANDARDS ALIGNMENT (ISO 27001, CIS, NIST CSF) [20%]                    MAX 20
+------------------------------------------------------------------------------
+
+1a. Assessment modules correctly reflect relevant controls     MAX 6.7  SCORE 6.5
+    Evidence FOR:
+    - 13 controls mapped to NIST CSF 2.0 subcategories, ISO 27001:2022 Annex A,
+      CIS v8 safeguards, SOC 2 TSC, PCI-DSS v4.0 (CONTROL_COMPLIANCE in app.js)
+    - Mandatory baselines cite ISO, NIST, CIS, RA 10173, GDPR with rationales
+    - Risk Guidelines screen + Excel sheet 6 (Compliance Mapping)
+    Minor gap:
+    - Only one assessment module (ISRA/IAR), not MBSS or standalone firewall review
+    - ARCHITECTURE.md still describes v1 frameworks (outdated doc)
+
+1b. Demonstrates understanding of why frameworks apply          MAX 6.7  SCORE 6.5
+    Evidence FOR:
+    - getApplicableMandatorySets() triggers floors by Restricted class, PII, FA,
+      Internet-facing with written rationale per baseline
+    - Control picker: relevant vs mandatory vs both vs disabled (Guardrail 3)
+    - Risk appetite locks (Accept blocked for High, FA, Restricted+Moderate)
+    Minor gap:
+    - SOC 2 mapping present but less emphasized in UI than NIST/ISO/CIS
+
+1c. Control mappings accurate, not arbitrary                     MAX 6.7  SCORE 6.3
+    Evidence FOR:
+    - Specific clause IDs (e.g. PR.AA-03, A.8.5, CIS 6.3, PCI 8.4) not generic labels
+    - threat-relevant controlMap aligned to NIST SP 800-30 threat-source thinking
+    Minor gap:
+    - Weights and synergy bonuses are engineering judgments (defensible but not
+      copied verbatim from a standard) - panel may ask you to justify tuning
+
+SUBTOTAL CRITERION 1: 19.3 / 20
+
+------------------------------------------------------------------------------
+2. SECURITY COVERAGE & ASSESSMENT ACCURACY [20%]                           MAX 20
+------------------------------------------------------------------------------
+
+2a. Covers key security domains for assessment type             MAX 5.0  SCORE 4.5
+    Evidence FOR (ISRA scope):
+    - Asset identification, CIA valuation, threat categories, P x S, inherent/
+      residual, 13 controls, treatment/action plan, workflow audit
+    Gap:
+    - No separate vulnerability scan import, firewall rule parser, or MBSS module
+    - Rubric examples include Firewall Review; your "firewall" is a control checkbox,
+      not rule-by-rule analysis
+
+2b. Risk rating logic correct and consistent                     MAX 5.0  SCORE 4.8
+    Evidence FOR:
+    - 5x5 INHERIT matrix, escalations (internet, PII, Restricted, FA/PCI)
+    - Weighted residual + synergies + diminishing returns + mandatory floors
+    - Same logic on form and in seed realignment (il_inherit / hotfix scripts)
+    Minor gap:
+    - Floor-to-P/S bump is simplified (display alignment) - explain if asked
+
+2c. Results and recommendations logical and actionable         MAX 5.0  SCORE 4.5
+    Evidence FOR:
+    - RISK_TEMPLATES per threat with default action plan text
+    - Action Plans section for High/Moderate residuals
+    - Reject presets framework-aware (ISO, NIST 800-60, PCI, RA 10173)
+    Gap:
+    - Recommendations are template-driven, not AI/custom per asset beyond templates
+
+2d. Identifies gaps and meaningful findings                      MAX 5.0  SCORE 4.8
+    Evidence FOR:
+    - Live "Mandatory Control Gaps" panel with missing control IDs + citations
+    - Dashboard KPIs (elevated share, completeness, response progress)
+    - Notifications from SystemLogs with parsed reject reasons
+    Minor gap:
+    - No export dedicated sheet for "findings only" separate from full IAR
+
+SUBTOTAL CRITERION 2: 18.6 / 20
+
+------------------------------------------------------------------------------
+3. TOOL FUNCTIONALITY & FEATURE COMPLETENESS [20%]                           MAX 20
+------------------------------------------------------------------------------
+
+3a. Core modules functional with correct outputs                 MAX 5.0  SCORE 4.5
+    Evidence FOR:
+    - Full ISRA lifecycle: Draft -> Pending -> Approved, role gates, Supabase sync
+    - calculateRiskMath() live; Excel export 7-10 sheets; account approvals
+    Gap:
+    - Rubric lists multiple module types; you deliver ONE deep module vs several
+    - Email verification depends on Supabase config (operational, not code bug)
+
+3b. File upload and data input                                   MAX 5.0  SCORE 4.0
+    Evidence FOR:
+    - Form-based data entry works; sequential asset IDs; validation/guardrails
+    - CSV Template / Import CSV / Export CSV on Asset Table (Info Sec, Admin)
+    - docs/asset_import_template.csv + USER_GUIDE section 5
+    Gap:
+    - No PDF, image, firewall rule file, or vulnerability scan XML import
+    Defense: "Structured CSV interchange for bulk IAR identification rows; full
+    risk profiling remains in-app per PLM template."
+
+3c. Dashboard accurate and meaningful                            MAX 5.0  SCORE 4.5
+    Evidence FOR:
+    - Risk posture KPIs from approvedAssetsOnly(); charts by type/residual/class
+    - Heatmap, control metrics bars, action plan queue
+    Minor gap:
+    - KPIs only reflect Approved assets (by design - state this clearly)
+
+3d. Navigation, workflows, no critical bugs                      MAX 5.0  SCORE 4.0
+    Evidence FOR:
+    - Multi-role nav, 3-tier workflow, bell notifications, reason modals
+    Known issues (mention as fixed or monitored):
+    - Auth race conditions were addressed in v2; depends on Supabase email setup
+    - Large monolithic app.js - harder to maintain but functional
+    - docs/ARCHITECTURE.md updated for v2 (May 2026)
+
+SUBTOTAL CRITERION 3: 17.0 / 20
+
+------------------------------------------------------------------------------
+4. APPLICATION DESIGN, UX & CODE QUALITY [15%]                             MAX 15
+------------------------------------------------------------------------------
+
+4a. UI clean, intuitive, appropriate                             MAX 3.8  SCORE 3.5
+    - Cohesive dark ISMS theme, risk color coding, role-based sections
+    - Risk Guidelines built-in; compliance ribbons on controls
+    Minor: dense form for new users; training/demo recommended
+
+4b. Code structured and readable                                 MAX 3.8  SCORE 3.2
+    - Clear sections, constants, comments citing NIST/ISO
+    - CSV import/export module added with shared helpers
+    Gap: single large app.js; limited unit tests
+
+4c. Outputs clear and professional                               MAX 3.8  SCORE 3.6
+    - ExcelJS branded workbook, role-aware sheets, audit/reject history
+    - risk badges, heatmap, sign-off sheet (Admin)
+
+4d. Consistency across modules                                   MAX 3.8  SCORE 3.5
+    - One primary module but consistent risk colors, status workflow, logging
+    Gap: only one assessment type to show consistency across
+
+SUBTOTAL CRITERION 4: 13.8 / 15
+
+------------------------------------------------------------------------------
+5. RISK ASSESSMENT IMPLEMENTATION [10%]                                      MAX 10
+------------------------------------------------------------------------------
+
+5a. Threat/vulnerability identification in logic                 MAX 2.5  SCORE 2.3
+    - 11 threat keys, templates, asset-type threat restrictions
+    - Vuln addressed as control #11, not imported findings
+
+5b. Likelihood x impact methodology                            MAX 2.5  SCORE 2.5
+    - P and S 1-5, matrix lookup, escalations - core strength of project
+
+5c. Gap analysis vs baseline                                     MAX 2.5  SCORE 2.4
+    - Mandatory gaps panel + floors - strong implementation
+
+5d. Risk treatment presented logically                             MAX 2.5  SCORE 2.4
+    - Mitigate/Transfer/Avoid/Accept + enforcement + action plan section
+
+SUBTOTAL CRITERION 5: 9.6 / 10
+
+------------------------------------------------------------------------------
+6. TEAMWORK & COLLABORATION [10%]                                            MAX 10
+------------------------------------------------------------------------------
+
+6a. Leader evaluates members; professor grades leader            MAX 10.0  SCORE ___
+    [To be completed by Group Leader and Professor]
+
+SUBTOTAL CRITERION 6: ___ / 10
+
+------------------------------------------------------------------------------
+7. DOCUMENTATION & PRESENTATION [5%]                                         MAX 5
+------------------------------------------------------------------------------
+
+7a. Technical documentation complete and professional            MAX 5.0  SCORE 4.5
+    Present:
+    - README.md (strong, v2 accurate, CSV section)
+    - docs/ARCHITECTURE.md (v2 Supabase - updated)
+    - docs/USER_GUIDE.md, MODULE_ISRA_DESCRIPTION.md, LIMITATIONS_AND_SCOPE.md
+    - docs/DOCUMENTATION_BACKGROUND.txt, MEMBER6_SPEAKER_NOTES, PRESENTATION_OUTLINE
+    Minor gap:
+    - No PDF user guide; package.json test script still placeholder
+
+SUBTOTAL CRITERION 7: 4.5 / 5
+
+------------------------------------------------------------------------------
+BONUS - Exceptional innovation / automation / UI beyond requirements         MAX 5
+------------------------------------------------------------------------------
+
+Suggested BONUS score: 3.5 / 5
+
+    + Multi-role Supabase Auth + RLS (beyond typical student static tool)
+    + Synergy bonuses + diminishing returns (sophisticated risk engine)
+    + 10-sheet Excel audit export with reject/deleted trail
+    + Account approval workflow + SystemLogs notifications
+    Not max bonus because: no scan/firewall-rule parsers, no extra assessment modules
+
+================================================================================
+TOTAL SCORE SUMMARY (EXCLUDING CRITERION 6)
+================================================================================
+
+Criterion                              Score      Max
+-------------------------------------  ---------  ----
+1. Standards Alignment                 19.3       20
+2. Security Coverage & Accuracy        18.6       20
+3. Tool Functionality                  17.0       20
+4. Design, UX & Code Quality           13.8       15
+5. Risk Assessment Implementation       9.6       10
+6. Teamwork                               ___       10
+7. Documentation                        4.5        5
+BONUS                                     3.5        5
+-------------------------------------  ---------  ----
+SUBTOTAL (criteria 1-5, 7 + bonus)       86.3      95
+SUBTOTAL (criteria 1-7 + bonus)          86.3 + teamwork + ___
+
+If teamwork = 9/10:
+  TOTAL = 86.3 + 9 = 95.3 / 100  (bonus included in 86.3)
+
+Recalculate without bonus:
+  Core (1-5, 7) = 82.8 / 90
+  With teamwork 9 = 91.8 / 100
+  With bonus 3.5 = 95.3 / 100 (if professor allows bonus on top of 100 cap - clarify)
+
+Percent on rubric max 100: approximately 92-96% range depending on teamwork and
+whether bonus stacks above 100 or is capped.
+
+IMPROVEMENTS APPLIED (May 2026):
+  - Rewrote docs/ARCHITECTURE.md for v2 Supabase
+  - Added USER_GUIDE.md, MODULE_ISRA_DESCRIPTION.md, LIMITATIONS_AND_SCOPE.md
+  - CSV import/export on Asset Table (Info Sec / Admin)
+  - README updated with documentation index and CSV section
+
+================================================================================
+SUGGESTED FINAL GRADE (IF 100-POINT SCALE, TEAMWORK = 9)
+================================================================================
+
+Numerical:  95 / 100  (with bonus + teamwork 9)
+Letter:     A  (typical PH scale: 90+ = A)
+
+If professor does NOT give bonus:  92 / 100  (still solid A)
+
+================================================================================
+OVERALL REVIEW - REMARKS / NOTES (FOR PROFESSOR OR DEFENSE)
+================================================================================
+
+STRENGTHS:
+- Exceptionally strong alignment with NIST SP 800-30, ISO 27001:2022, CIS v8,
+  PCI-DSS, and RA 10173 for a student ISRA tool - not superficial checkbox mapping.
+- Risk engine (inherent escalations, weighted residual, synergies, mandatory floors,
+  risk appetite enforcement) exceeds typical "multiply P times S" implementations.
+- Production-oriented features: Supabase multi-user auth, RLS, audit logs, role-based
+  workflow, branded Excel export, account approvals.
+- Clear PLM ISMS / IAR context with seeded university assets.
+
+WEAKNESSES TO ACKNOWLEDGE HONESTLY:
+- Single assessment module (ISRA/IAR only) - no MBSS or Firewall Rule Review module.
+- CSV import only (no scan XML, firewall config, or PDF upload) - see LIMITATIONS_AND_SCOPE.md.
+- Monolithic codebase - maintainability and automated tests limited.
+
+RECOMMENDED DEFENSE TALKING POINTS (MEMBER 6 / GROUP):
+1. Rubric examples are illustrative; project scope is ISRA per PLM IAR template.
+2. Firewall appears as Control 10 (WAF) within ISRA, not a separate rule analyzer.
+3. File upload omitted intentionally - structured data quality for ISO audit trail.
+4. Offer live demo: escalations, gap panel, floor blocking Accept, Excel export.
+
+QUICK WINS BEFORE SUBMISSION (optional remaining):
+[x] Update docs/ARCHITECTURE.md to match Supabase v2
+[x] Add docs/USER_GUIDE.md
+[x] Add MODULE_ISRA_DESCRIPTION.md + LIMITATIONS_AND_SCOPE.md
+[x] CSV import/export on Asset Table
+[ ] Screenshot appendix for dashboard + gap panel in documentation (recommended)
+[ ] Live demo rehearsal with CSV import sample row
+
+================================================================================
+END OF EVALUATION
+================================================================================
