@@ -1,0 +1,489 @@
+================================================================================
+IMPACTLENS - OVERALL BACKGROUND AND SYSTEM DOCUMENTATION
+================================================================================
+Version: 2.0 (May 2026)
+Institution: Pamantasan ng Lungsod ng Maynila (PLM) - Information Security Management System (ISMS)
+Purpose: Information Asset Register (IAR) and Information Security Risk Assessment platform
+
+This document uses plain ASCII text only so it can be copied into Word, Google Docs,
+or PDF without font or symbol issues.
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+ImpactLens is a web-based Information Security Risk Assessment (IAR) application
+built for PLM's ISMS. It supports multi-role collaboration (Standard User, Info Sec,
+Admin/CISO), a three-tier asset approval workflow, standards-aligned risk
+calculations, thirteen mapped security controls, mandatory compliance floors, and
+multi-sheet Excel audit exports.
+
+The system implements the NIST SP 800-30 Rev. 1 risk assessment lifecycle, maps
+controls to NIST CSF 2.0, ISO/IEC 27001:2022, CIS Controls v8, SOC 2 TSC, and
+PCI-DSS v4.0, and applies Philippine Data Privacy Act (RA 10173) baselines where
+PII or SPI is processed.
+
+Backend: Supabase (PostgreSQL, Auth, Row Level Security).
+Frontend: Vanilla JavaScript, HTML, CSS (no React, Angular, or Vue).
+
+================================================================================
+2. SYSTEM OVERVIEW AND ARCHITECTURE
+================================================================================
+
+2.1 High-level architecture
+
+  Browser (user)
+       |
+       |  HTTPS + JWT (Supabase Auth)
+       v
+  Supabase Cloud
+       - auth.users (email/password, email verification)
+       - public.user_profiles (roles, approval status)
+       - public.Assets (information assets and risk data)
+       - public.AssetControls (which of 13 controls apply per asset)
+       - public.SystemLogs (audit trail)
+       - public.ReportData (reporting metadata)
+       - Row Level Security (RLS) enforces role boundaries at database level
+
+2.2 Technology stack
+
+  Component          Technology
+  -----------------  ----------------------------------------------------------
+  User interface     index.html + assets/styles/main.css
+  Application logic  assets/scripts/app.js (single file, ~3200+ lines)
+  Database / Auth    Supabase (PostgreSQL + Supabase Auth)
+  Excel export       ExcelJS (assets/vendor/exceljs.min.js)
+  API client         Supabase JS (assets/vendor/supabase.min.js)
+  Dev server         Node.js scripts/serve.mjs (port 8000, static files)
+  Package manager    npm (package.json)
+
+2.3 Design principles
+
+  - Standards-first: Risk math and control mapping cite real framework IDs.
+  - Defense in depth: Residual risk reduced only by threat-relevant controls, with synergy bonuses.
+  - Non-bypassable floors: Missing mandatory controls raise residual risk floor.
+  - Auditability: Every approve, reject, delete, and submit writes to SystemLogs.
+  - Role separation: UI filtering plus database RLS (defense in depth).
+
+================================================================================
+3. WEBSITE STRUCTURE AND SCREENS
+================================================================================
+
+3.1 Authentication (pre-login)
+
+  - Login: Email and password via Supabase Auth.
+  - Register: New users request a role (Standard User or Info Sec); account stays
+    pending until approved by Info Sec or Admin.
+  - Email verification: Supabase sends confirmation link; user must verify before
+    full access (unless manually confirmed in Supabase Dashboard).
+  - Pending approval screen: Shown when account_status is pending.
+  - Rejected account screen: Shown when account was rejected; displays reason and
+    option to return to login/register.
+
+3.2 Main application sections (post-login, role-dependent)
+
+  Section              Who can access          Purpose
+  -------------------  ----------------------  ------------------------------------
+  Dashboard            Info Sec, Admin         Risk posture KPIs, register charts
+  Add Asset            All roles               Create new asset (starts as Draft)
+  My Submissions       User, Info Sec          User's own draft/pending items
+  Draft Queue          Info Sec                Review user-submitted drafts
+  Asset Approval       Admin                   Approve/reject Pending assets
+  Account Approvals    Info Sec, Admin         Approve/reject user registrations
+  Asset Table          Info Sec, Admin         Full register listing
+  Risk Register        Info Sec, Admin         Risk-focused view + 5x5 heatmap
+  Control Metrics      Info Sec, Admin         Bar chart of control adoption
+  Action Plans         Info Sec, Admin         Treatment plans for elevated risks
+  System Logs          Info Sec, Admin         Audit log with filters
+  Reporting & Sign-offs Admin only            Report metadata + Excel export
+  Risk Guidelines      All roles               Reference scales and methodology
+
+3.3 Asset form structure (Add / Edit Asset)
+
+  The asset form is divided into logical cards:
+
+  A. Asset identification
+     - Asset ID, name, type (IA, PhA, PA, SA, SV, FA), owner, host, environment, etc.
+
+  B. Sensitivity and valuation (Info Sec / Admin only for full profiling)
+     - PII, SPI, corporate confidential flags
+     - Confidentiality, Integrity, Availability (C, I, A) scores (1-3 each)
+     - CIA total and classification band (Public, Internal Use, Confidential, Restricted)
+
+  C. Risk assessment and controls (Info Sec / Admin)
+     - Threat category, risk description
+     - Probability (1-5) and Severity (1-5)
+     - Inherent and residual risk (computed live)
+     - Thirteen security controls (checkboxes with relevance/mandatory states)
+
+  D. Treatment and action plan
+     - Treatment type: Mitigate, Transfer, Avoid, Accept (with restrictions)
+     - Action plan text, status, owner, target date
+
+================================================================================
+4. ROLES, PERMISSIONS, AND ACCOUNT WORKFLOW
+================================================================================
+
+4.1 Roles
+
+  Role            Description
+  --------------  ------------------------------------------------------------
+  Standard User   Submits new assets (Draft); cannot approve or access dashboard
+  Info Sec        Profiles drafts, submits to CISO, manages users (Standard only)
+  Admin (CISO)    Final asset approval, full dashboard, 10-sheet Excel export
+
+4.2 Permission summary
+
+  Capability                    User    Info Sec    Admin
+  ----------------------------  ------  ----------  -----
+  Add asset (Draft)             Yes     Yes         Yes
+  Profile Draft (risk/controls) No      Yes         Yes
+  Submit Pending to CISO        No      Yes         Yes
+  Approve/Reject Pending asset  No      No          Yes
+  Reject Draft                  No      Yes         Yes
+  Delete asset (with reason)    No      Yes         Yes
+  Approve Standard User account No      Yes         No
+  Approve any user account      No      No          Yes
+  Dashboard / Risk Register     No      Yes         Yes
+  Excel export (7 sheets)       No      Yes         No
+  Excel export (10 sheets)      No      No          Yes
+
+4.3 Account approval workflow
+
+  1. User registers and selects requested role.
+  2. user_profiles row created (pending status).
+  3. Info Sec approves Standard User requests; Admin approves Info Sec requests.
+  4. On approval: account_status = active, approved_role set.
+  5. On rejection: account_status = rejected, rejection_reason stored.
+
+4.4 Enforcement layers
+
+  Layer 1: JavaScript showSection() and CSS data-role attributes hide UI.
+  Layer 2: Supabase Row Level Security blocks unauthorized database operations.
+
+================================================================================
+5. ASSET WORKFLOW (THREE-TIER)
+================================================================================
+
+  Standard User          Info Sec                 Admin (CISO)
+       |                      |                         |
+       v                      v                         v
+    [Draft]  ------------>  enrich risk,        [Pending Approval]
+    form fill               controls, submit           |
+       |                      |                    approve / reject
+       | reject               |                         v
+       v                      v                   [Approved]
+    [Deleted]            back to Draft
+                         (with reason)
+
+  Status values:
+  - Draft: User submitted basic asset data; awaiting Info Sec profiling.
+  - Pending Approval: Info Sec completed risk work; awaiting CISO decision.
+  - Approved: In the official register; appears on Dashboard and exports.
+  - Rejected: Removed from active workflow (with logged reason).
+
+  Every transition writes a SystemLogs entry used for notifications and Excel audit.
+
+================================================================================
+6. STANDARDS AND FRAMEWORKS
+================================================================================
+
+6.1 Primary risk methodology
+
+  Standard                    Role in ImpactLens
+  --------------------------  --------------------------------------------------
+  NIST SP 800-30 Rev. 1       Core risk assessment lifecycle; inherent escalations
+  ISO/IEC 27005:2022          Likelihood/impact and control treatment concepts
+  PLM IAR template            Asset types, CIA bands, P x S matrix, field layout
+
+6.2 Control and governance frameworks (13 controls mapped to each)
+
+  Framework                   Version / scope
+  --------------------------  --------------------------------------------------
+  NIST Cybersecurity Framework  2.0 (Feb 2024) - GV, ID, PR, DE, RS, RC
+  ISO/IEC 27001:2022          ISMS requirements + Annex A (93 controls)
+  ISO/IEC 27002:2022          Implementation guidance for Annex A
+  CIS Controls                v8 (May 2021) - 18 controls, 153 safeguards
+  SOC 2                       Trust Services Criteria 2017 (rev. 2022)
+  PCI-DSS                     v4.0 (Mar 2022) - Financial Asset (FA) type only
+
+6.3 Privacy and data protection
+
+  RA 10173                    Philippine Data Privacy Act - PII/SPI mandatory floors
+  ISO/IEC 27701               Privacy extension to ISO 27001
+  GDPR Art. 32                Security of processing (cited with PII/SPI baselines)
+
+6.4 Supplementary references
+
+  NIST SP 800-60             CIA/classification alignment (reject reason presets)
+  NIST SP 800-37             Risk Management Framework (risk acceptance authority)
+  ISO 27001 Section 6.1.3    Risk treatment - blocks Accept on High residual
+
+6.5 The thirteen ImpactLens controls
+
+  1.  Documented procedures
+  2.  Segregation of duties
+  3.  Role-Based Access Control (RBAC)
+  4.  Multi-Factor Authentication (MFA)
+  5.  Physical controls (CCTV, locks)
+  6.  Automated information backup
+  7.  Encryption (at rest / in transit)
+  8.  Asset disposal procedures
+  9.  Endpoint Detection and Response (EDR)
+  10. Network Firewall / WAF
+  11. Vulnerability scanning and patching
+  12. Network segmentation (VLANs)
+  13. Incident Response Plan (IRP)
+
+  Each control maps to specific NIST CSF 2.0 subcategories, ISO 27001:2022 Annex A
+  IDs, CIS v8 safeguards, SOC 2 criteria, and PCI-DSS requirements (where applicable).
+
+================================================================================
+7. RISK CALCULATION ENGINE
+================================================================================
+
+All live calculations run in calculateRiskMath() in assets/scripts/app.js when the
+user edits probability, severity, threat, environment, CIA scores, or controls.
+
+7.1 CIA classification
+
+  CIA score = C + I + A (each 1-3, total 3-9)
+
+  Score   Classification
+  ----    ----------------
+  3       Public
+  4-5     Internal Use
+  6-7     Confidential
+  8-9     Restricted
+
+7.2 Inherent risk (before controls)
+
+  Step 1: Start with user-selected Probability (P, 1-5) and Severity (S, 1-5).
+
+  Step 2: Apply inherent escalations (NIST SP 800-30 style):
+
+  Condition                                          Effect
+  -------------------------------------------------  -------------------------
+  Internet Facing + cyber-external threat            P = min(5, P+1); P >= 3
+  PII or SPI + data leak or DPA breach threat        S = 5
+  CIA score >= 8 + cyber or insider threat           S = max(S, 4)
+  Asset type FA (Financial) + cyber threat           S = 5
+  (PCI-DSS cardholder data breach = maximum impact)
+
+  Step 3: Look up inherent rating from 5x5 matrix INHERIT[S-P]:
+
+  Ratings: Very Low, Low, Moderate, High
+  (Matrix keys are severity-probability, e.g. "5-3" = High inherent)
+
+7.3 Residual risk (after controls)
+
+  Step 1: Determine threat-relevant controls from controlMap[threat].
+
+  Step 2: Sum CONTROL_WEIGHTS for each checked, enabled, relevant control.
+          Each control has weights {p, s} reducing probability and/or severity.
+
+  Step 3: Add synergy bonuses when control pairs are both active, for example:
+          - RBAC + MFA
+          - Backup + IRP
+          - EDR + Firewall
+          - Encryption + Segmentation
+          - Vulnerability mgmt + EDR + IRP
+
+  Step 4: Apply diminishing returns (saturating curve):
+          reduction = (score - 1) * (1 - exp(-rawSum / 2))
+          Prevents checking many controls from driving score to 1 unrealistically.
+
+  Step 5: residual P = max(1, round(P - pReduction))
+          residual S = max(1, round(S - sReduction))
+          Residual rating = INHERIT[residualS-residualP]
+
+7.4 Mandatory control floors
+
+  After computing residual, the engine checks mandatory baselines. If required
+  controls are missing, residual cannot fall below the floor:
+
+  Trigger              Required controls (IDs)           Floor
+  -------------------  --------------------------------  ---------
+  Restricted (CIA>=8)  RBAC, MFA, Backup, Encryption,  Moderate
+                       IRP
+  Confidential (6-7)   RBAC, Encryption, IRP             Moderate
+  FA (PCI scope)       MFA, Encryption, Vuln, Segment    High
+  PII or SPI           Procedures, RBAC, Backup, Enc     Moderate
+  Internet Facing      Firewall, Vuln, IRP               Moderate
+
+  Citations shown in UI: ISO 27001, NIST CSF, CIS v8, PCI-DSS, RA 10173, GDPR.
+
+7.5 Risk appetite enforcement (treatment type)
+
+  Accept is disabled when:
+  - Residual = High (ISO 27001 risk appetite)
+  - Asset type FA and residual not Low or Very Low (PCI-DSS)
+  - CIA >= 8 and residual = Moderate (Restricted - CISO sign-off required)
+
+7.6 Control picker states
+
+  Each control checkbox is classified as:
+  - Relevant: Lowers P/S for this threat
+  - Compliance baseline: Required by floor but may not lower P/S for this threat
+  - Both: Relevant and required
+  - Disabled: Neither relevant nor required (cannot be checked)
+
+================================================================================
+8. DASHBOARD METRICS (RISK POSTURE)
+================================================================================
+
+All dashboard KPIs use APPROVED assets only (status = Approved).
+
+8.1 Share >= Moderate residual (elevated)
+
+  Elevated = residual is Moderate OR High
+  Formula: (elevated count / total approved) * 100, rounded to 1 decimal
+
+8.2 Assets at elevated residual
+
+  Count = number of approved assets with Moderate or High residual.
+  Subtitle: Average inherent tier across ALL approved assets:
+    Very Low=1, Low=2, Moderate=3, High=4
+    Average = sum of tiers / count with valid inherent rating
+
+8.3 Risk register completeness (threat + P x S)
+
+  Assessed = asset has non-empty riskDesc AND prob AND sev set
+  Formula: (assessed / total approved) * 100
+
+8.4 Response progress
+
+  Scope: Elevated assets only (Moderate or High residual)
+  Advancing = actionStatus is "In Progress" OR "Done"
+  Formula: (advancing / elevated count) * 100
+  Detail: "X of Y with treatment in flight or closed"
+
+8.5 Register overview (additional dashboard cards)
+
+  - Total approved assets
+  - High residual count
+  - Moderate residual count
+  - Assets with PII or SPI
+
+================================================================================
+9. THREAT CATEGORIES
+================================================================================
+
+  Category group          Example threat keys
+  ----------------------  --------------------------------------------------
+  Physical                phy_theft, phy_destruction
+  Human resources         hr_insider, hr_accidental
+  Cyber - external        cyber_ext_ransom, cyber_ext_leak, cyber_ext_ddos,
+                          cyber_ext_supply
+  Cyber - internal        cyber_int_unauth, cyber_int_vuln
+  Legal / compliance      legal_dpa (Data Privacy Act breach)
+
+  Selecting a threat applies a risk template (description, default P and S) and
+  determines which controls are relevant.
+
+================================================================================
+10. ASSET TYPES
+================================================================================
+
+  Code   Meaning
+  ----   ------------------------------------------
+  IA     Information Asset
+  PhA    Physical Asset
+  PA     Personnel Asset
+  SA     Software Asset
+  SV     Service
+  FA     Financial Asset (PCI-DSS scope triggers apply)
+
+================================================================================
+11. DATA MODEL (SUPABASE TABLES)
+================================================================================
+
+  Table            Purpose
+  ---------------  ------------------------------------------------------------
+  user_profiles    Email, requested_role, approved_role, account_status,
+                   rejection_reason, linked to auth.users
+  Assets           Full asset and risk fields, workflow status
+  AssetControls    Rows linking asset_id to ctrl_id (1-13)
+  SystemLogs       user_email, user_role, action, details, asset_id, timestamp
+  ReportData       Reporting page fields for Admin export
+
+  Row Level Security policies restrict reads/writes by role (user, infosec, admin).
+
+================================================================================
+12. EXCEL EXPORT
+================================================================================
+
+  Powered by ExcelJS. Role-aware sheet count:
+
+  Sheet                         Info Sec    Admin
+  ----------------------------  ----------  -----
+  1. Asset Identification       Yes         Yes
+  2. Sensitivity and Valuation  Yes         Yes
+  3. Risk Assessment            Yes         Yes
+  4. Controls C1-C13            Yes         Yes
+  5. Residual and Treatment     Yes         Yes
+  6. Compliance Mapping         Yes         Yes
+  7. Rejected and Deleted       Yes         Yes
+  8. Document History           No          Yes
+  9. Highlights (KPIs)          No          Yes
+  10. Sign Off                  No          Yes
+
+  Risk colors: High=red, Moderate=amber, Low=cyan, Very Low=green.
+
+================================================================================
+13. AUDIT, NOTIFICATIONS, AND REASON CAPTURE
+================================================================================
+
+  - All approve, reject, delete, and submit actions log to SystemLogs.
+  - Bell-icon inbox shows role-scoped notifications parsed from log details.
+  - Reject and delete use a modal with framework-aware preset reasons plus
+    free-text explanation.
+  - Reason format: Reason: <text> - originator=<email> - prior_status=<status>
+
+================================================================================
+14. OPERATIONAL NOTES
+================================================================================
+
+  - Run: npm start (http://localhost:8000)
+  - Database setup: supabase/master_setup.sql in Supabase SQL Editor
+  - Email: Supabase built-in auth email (confirm email ON, redirect URLs configured)
+  - Cache busting: CSS/JS loaded with ?v=YYYYMMDD query string; hard refresh after updates
+  - Browsers: Chrome, Edge, Firefox, Safari (modern versions); no IE support
+
+================================================================================
+15. BIBLIOGRAPHY (SUGGESTED CITATIONS)
+================================================================================
+
+  1. NIST SP 800-30 Rev. 1 - Guide for Conducting Risk Assessments (2012)
+  2. NIST Cybersecurity Framework 2.0 (2024)
+  3. ISO/IEC 27001:2022 - Information security management systems
+  4. ISO/IEC 27002:2022 - Information security controls
+  5. ISO/IEC 27005:2022 - Information security risk management
+  6. CIS Controls v8 (2021)
+  7. AICPA SOC 2 Trust Services Criteria (2022 revision)
+  8. PCI Security Standards Council PCI-DSS v4.0 (2022)
+  9. Republic Act No. 10173 - Data Privacy Act of 2012 (Philippines)
+  10. GDPR Article 32 - Security of processing (EU)
+  11. Pamantasan ng Lungsod ng Maynila - ISMS IAR template (internal)
+
+================================================================================
+16. ONE-PARAGRAPH SUMMARY (FOR ABSTRACT OR INTRODUCTION)
+================================================================================
+
+ImpactLens is a multi-role web application for PLM's Information Security
+Management System that digitizes the Information Asset Register and risk
+assessment workflow. Built with vanilla JavaScript and Supabase, it enforces a
+three-tier approval process (Draft, Pending Approval, Approved), role-based access
+for Standard Users, Info Sec analysts, and the CISO, and a risk engine grounded
+in NIST SP 800-30 with ISO/IEC 27005 concepts. Thirteen security controls are
+cross-mapped to NIST CSF 2.0, ISO 27001:2022, CIS v8, SOC 2, and PCI-DSS v4.0,
+with mandatory floors under RA 10173, ISO 27701, and GDPR Article 32 for
+privacy-sensitive assets. Residual risk uses weighted defense-in-depth reduction,
+synergy bonuses, and diminishing returns, while treatment options respect ISO 27001
+risk appetite rules. The platform provides dashboard analytics, compliance gap
+analysis, system audit logs, and a seven-to-ten-sheet Excel export suitable for
+ISMS documentation and CISO sign-off.
+
+================================================================================
+END OF DOCUMENT
+================================================================================
