@@ -90,6 +90,37 @@ Open the Supabase SQL Editor for your project and run the scripts in order:
 
 In **Authentication → Providers** make sure Email is enabled and **Confirm email** is ON. The `master_setup.sql` trigger auto-promotes any verified `admin@plm.edu.ph`, `infosec@plm.edu.ph`, or `user@plm.edu.ph` to an active profile.
 
+#### Email verification (Supabase built-in — default)
+
+ImpactLens uses **Supabase Auth’s built-in email**. You do **not** need Resend unless built-in mail fails at scale or you need a custom From-address.
+
+**“Many domains” — what that means**
+
+| Goal | Supabase built-in |
+|---|---|
+| Users register with **many recipient domains** (`@gmail.com`, `@plm.edu.ph`, `@yahoo.com`, …) | **Yes** — one project sends confirmations to any valid address (within rate limits). |
+| **Many sender / From domains** (`noreply@schoolA.edu`, `noreply@schoolB.edu`, …) | **No** — built-in mail uses Supabase’s sender. Multiple From-domains need custom SMTP or separate projects. |
+
+**Setup (Supabase only)**
+
+1. [Authentication → SMTP](https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/smtp) — **Enable custom SMTP: OFF** (use built-in mail). If you turned on custom SMTP with bad credentials earlier, turning it **off** fixes many “Error sending confirmation email” cases.
+
+2. [Providers → Email](https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/providers) — Email **ON**, **Confirm email** **ON**.
+
+3. [URL Configuration](https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/url-configuration) — **Site URL** `http://localhost:8000`; **Redirect URLs** `http://localhost:8000/**` and `http://localhost:8000/index.html`.
+
+4. [Email templates](https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/templates) — **Confirm signup** must include `{{ .ConfirmationURL }}`.
+
+5. Test any recipient domain:
+   ```bash
+   npm run test:auth-email -- user@gmail.com
+   npm run test:auth-email -- user@plm.edu.ph
+   ```
+
+6. Register in the app → open the inbox link → sign in.
+
+If mail still fails: check Auth rate limits, spam folder, and that the project is not paused. Custom SMTP (Resend, etc.) is optional for production volume or branding.
+
 ### 3. Run the dev server
 ```bash
 npm start

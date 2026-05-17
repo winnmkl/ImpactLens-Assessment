@@ -7,7 +7,7 @@
 const supabaseUrl = 'https://haspklehikocqswmgmtk.supabase.co';
 const supabaseKey = 'sb_publishable_O1qHjWdSJ1hZYraL8mmxYQ_CPRr0Sv6';
 
-let supabase = null;
+let supabaseClient = null;
 function initSupabaseClient() {
     const lib = window.supabase;
     if (!lib?.createClient) {
@@ -23,7 +23,7 @@ function initSupabaseClient() {
 }
 
 try {
-    supabase = initSupabaseClient();
+    supabaseClient = initSupabaseClient();
 } catch (err) {
     console.error(err);
     document.addEventListener('DOMContentLoaded', () => {
@@ -1015,9 +1015,9 @@ function showVerificationStep(email) {
 }
 
 async function resendVerificationEmail() {
-    if (!supabase || !pendingVerifyEmail) return notify('Enter your email and register again.', true);
+    if (!supabaseClient || !pendingVerifyEmail) return notify('Enter your email and register again.', true);
     try {
-        const { error } = await supabase.auth.resend({ type: 'signup', email: pendingVerifyEmail });
+        const { error } = await supabaseClient.auth.resend({ type: 'signup', email: pendingVerifyEmail });
         if (error) throw error;
         notify('Verification email resent.');
     } catch (err) {
@@ -1049,7 +1049,7 @@ function showPendingApproval(profile) {
 }
 
 async function loadUserProfile(userId) {
-    const { data, error } = await supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle();
+    const { data, error } = await supabaseClient.from('user_profiles').select('*').eq('id', userId).maybeSingle();
     if (error) throw error;
     return data;
 }
@@ -1083,7 +1083,7 @@ function formatAuthError(err) {
 
 async function handleRegister(event) {
     event.preventDefault();
-    if (!supabase) return notify('Supabase is not initialized.', true);
+    if (!supabaseClient) return notify('Supabase is not initialized.', true);
     const email = document.getElementById('register-email')?.value?.trim();
     const password = document.getElementById('register-password')?.value;
     const password2 = document.getElementById('register-password2')?.value;
@@ -1105,7 +1105,7 @@ async function handleRegister(event) {
     const originalLabel = btn ? btn.innerHTML : '';
     if (btn) { btn.disabled = true; btn.innerHTML = 'Creating account…'; }
     try {
-        const { error } = await supabase.auth.signUp({
+        const { error } = await supabaseClient.auth.signUp({
             email,
             password,
             options: {
@@ -1127,7 +1127,7 @@ async function handleRegister(event) {
 
 async function handleLogin(event) {
     event.preventDefault();
-    if (!supabase) return notify('Supabase is not initialized. Refresh the page.', true);
+    if (!supabaseClient) return notify('Supabase is not initialized. Refresh the page.', true);
     const email = document.getElementById('login-email')?.value?.trim();
     const password = document.getElementById('login-password')?.value;
     const selectedRole = document.getElementById('login-role')?.value || 'user';
@@ -1140,7 +1140,7 @@ async function handleLogin(event) {
     }
     if (btn) { btn.disabled = true; btn.innerHTML = 'Authenticating…'; }
     try {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) {
             // Supabase returns "Email not confirmed" — surface the verify step
             if (/email not confirmed/i.test(error.message || '')) {
@@ -1180,9 +1180,9 @@ function handleLogout() {
     showAuthScreen();
     notify('Signed out.');
     // Best-effort revoke the cloud session in the background; ignore errors.
-    if (supabase) {
+    if (supabaseClient) {
         try {
-            supabase.auth.signOut().catch(err => console.warn('signOut warning:', err));
+            supabaseClient.auth.signOut().catch(err => console.warn('signOut warning:', err));
         } catch (err) {
             console.warn('signOut threw:', err);
         }
@@ -1194,7 +1194,7 @@ function handleLogout() {
 function forceResetSession() {
     try {
         // Best-effort SDK signOut — don't await it.
-        if (supabase) supabase.auth.signOut().catch(() => {});
+        if (supabaseClient) supabaseClient.auth.signOut().catch(() => {});
     } catch (_) { /* noop */ }
     try {
         // Remove any keys Supabase JS may have left behind.
@@ -1243,7 +1243,7 @@ async function enterAuthenticatedApp(session, requestedRole = null) {
         // Tell the auth-state listener to skip its reset, otherwise the
         // SIGNED_OUT event would wipe the error we are about to display.
         suppressAuthReset = true;
-        try { await supabase.auth.signOut(); } catch (_) { /* noop */ }
+        try { await supabaseClient.auth.signOut(); } catch (_) { /* noop */ }
         currentUser = null;
         currentRole = null;
         currentProfile = null;
@@ -1341,27 +1341,27 @@ async function logSystemEvent(action, details = '', assetId = null) {
         asset_id: assetId
     };
     try {
-        await supabase.from('SystemLogs').insert(row);
+        await supabaseClient.from('SystemLogs').insert(row);
     } catch (e) { console.warn('SystemLogs insert:', e); }
     globalLogs.unshift({ ...row, created_at: new Date().toISOString() });
     if (globalLogs.length > 200) globalLogs.length = 200;
 }
 
 async function syncFromCloud(silent = false) {
-    if (!supabase) return;
+    if (!supabaseClient) return;
     try {
-        const { data: aData, error: aErr } = await supabase.from('Assets').select('*');
+        const { data: aData, error: aErr } = await supabaseClient.from('Assets').select('*');
         if (aErr) throw aErr;
         globalAssets = (aData || []).map(a => ({ ...a, status: a.status || ASSET_STATUS.APPROVED }));
 
-        const { data: cData, error: cErr } = await supabase.from('AssetControls').select('*');
+        const { data: cData, error: cErr } = await supabaseClient.from('AssetControls').select('*');
         if (cErr) throw cErr;
         globalControls = cData || [];
 
-        const { data: rData } = await supabase.from('ReportData').select('*').eq('id', 1).single();
+        const { data: rData } = await supabaseClient.from('ReportData').select('*').eq('id', 1).single();
         globalReport = rData || {};
 
-        const { data: lData } = await supabase.from('SystemLogs').select('*').order('created_at', { ascending: false }).limit(200);
+        const { data: lData } = await supabaseClient.from('SystemLogs').select('*').order('created_at', { ascending: false }).limit(200);
         globalLogs = lData || globalLogs;
         renderNotificationBadge();
     } catch (err) {
@@ -1391,7 +1391,7 @@ function updateWorkflowBadges() {
 
 async function seedSupabaseIfEmpty() {
     try {
-        const { data, error } = await supabase.from('Assets').select('id').limit(1);
+        const { data, error } = await supabaseClient.from('Assets').select('id').limit(1);
         if (error) {
             console.error('Seed check failed:', error);
             if (/relation.*does not exist/i.test(error.message || '')) {
@@ -1908,7 +1908,7 @@ function setSaveStatus(state, html) {
 
 async function saveAssetToDB() {
   const saveBtn = document.getElementById('btn-save-asset');
-  console.info('[saveAssetToDB] clicked', { role: currentRole, supabase: !!supabase, editingId });
+  console.info('[saveAssetToDB] clicked', { role: currentRole, supabaseClient: !!supabaseClient, editingId });
   if (saveBtn) {
     if (saveBtn.dataset.busy === '1') return;
     saveBtn.dataset.busy = '1';
@@ -1917,14 +1917,14 @@ async function saveAssetToDB() {
   setSaveStatus('busy', '<span class="spinner"></span> Saving asset to Supabase…');
 
   try {
-    if (!supabase) {
+    if (!supabaseClient) {
       setSaveStatus('err', '<strong>✗ Cloud not connected.</strong> Please sign in again.');
       return;
     }
 
     // Validate session BEFORE the round-trip. We rely on our in-memory
     // `currentUser` (populated during enterAuthenticatedApp) instead of
-    // calling `supabase.auth.getSession()`, which can lock for 30s+ if the
+    // calling `supabaseClient.auth.getSession()`, which can lock for 30s+ if the
     // SDK is stuck on a hung token-refresh.
     console.info('[saveAssetToDB] step=session-check', { hasUser: !!currentUser, role: currentRole, email: currentUser?.email });
     if (!currentUser || !currentRole) {
@@ -2087,7 +2087,7 @@ async function approveAsset(id) {
   if (currentRole !== 'admin') return;
   const asset = globalAssets.find(a => a.id === id);
   const originator = asset?.created_by || asset?.updated_by || 'unknown';
-  const { error } = await supabase.from('Assets').update({
+  const { error } = await supabaseClient.from('Assets').update({
     status: ASSET_STATUS.APPROVED,
     reviewed_at: new Date().toISOString(),
     updated_by: currentUser?.email
@@ -2113,7 +2113,7 @@ async function rejectAsset(id) {
     tone: 'warn',
   });
   if (reason === null) return;
-  const { error } = await supabase.from('Assets').update({
+  const { error } = await supabaseClient.from('Assets').update({
     status: ASSET_STATUS.DRAFT,
     reviewed_at: new Date().toISOString(),
     updated_by: currentUser?.email
@@ -2147,7 +2147,7 @@ async function rejectDraftAsset(id) {
   });
   if (reason === null) return;
   try {
-    const { error } = await supabase.from('Assets').delete().eq('id', id);
+    const { error } = await supabaseClient.from('Assets').delete().eq('id', id);
     if (error) throw error;
     await logSystemEvent('DRAFT_REJECTED', `Reason: ${reason} · originator=${originator}`, id);
     await syncFromCloud(true);
@@ -2253,7 +2253,7 @@ async function deleteAsset(id) {
   });
   if (reason === null) return;
   try {
-    const { error } = await supabase.from('Assets').delete().eq('id', id);
+    const { error } = await supabaseClient.from('Assets').delete().eq('id', id);
     if (error) throw error;
     await logSystemEvent('ASSET_DELETED',
       `Reason: ${reason} · originator=${originator} · prior_status=${asset.status || 'Approved'}`, id);
@@ -2312,7 +2312,7 @@ async function saveReportData() {
         revHigh: g('rep-rev-high'), initHigh: g('rep-init-high'),
         prepName: g('rep-prep-name'), prepTitle: g('rep-prep-title'), revName: g('rep-rev-name'), revTitle: g('rep-rev-title'), appName: g('rep-app-name'), appTitle: g('rep-app-title')
     };
-    const { error } = await supabase.from('ReportData').upsert(payload);
+    const { error } = await supabaseClient.from('ReportData').upsert(payload);
     if(error) notify("Cloud save failed.", true);
     else notify("Report Details Saved to Database!");
 }
@@ -2421,9 +2421,9 @@ function renderPendingQueue() {
 
 async function renderUserManagement() {
   const tbody = document.getElementById('users-body');
-  if (!tbody || !supabase) return;
+  if (!tbody || !supabaseClient) return;
   tbody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
-  const { data, error } = await supabase.from('user_profiles').select('*').order('created_at', { ascending: false });
+  const { data, error } = await supabaseClient.from('user_profiles').select('*').order('created_at', { ascending: false });
   if (error) {
     tbody.innerHTML = `<tr><td colspan="4">Error: ${error.message}. Run supabase/master_setup.sql.</td></tr>`;
     return;
@@ -2452,12 +2452,12 @@ async function renderUserManagement() {
 
 async function approveUserAccount(userId) {
   if (!currentUser) return;
-  const { data: target } = await supabase.from('user_profiles').select('*').eq('id', userId).single();
+  const { data: target } = await supabaseClient.from('user_profiles').select('*').eq('id', userId).single();
   if (!target) return notify('User not found.', true);
   if (currentRole === 'infosec' && target.requested_role !== 'user') {
     return notify('Info Sec can only approve Standard User accounts.', true);
   }
-  const { error } = await supabase.from('user_profiles').update({
+  const { error } = await supabaseClient.from('user_profiles').update({
     account_status: 'active',
     approved_role: target.requested_role,
     approved_by: currentUser.id,
@@ -2472,7 +2472,7 @@ async function approveUserAccount(userId) {
 
 async function rejectUserAccount(userId) {
   if (currentRole !== 'admin' && currentRole !== 'infosec') return;
-  const { data: target } = await supabase.from('user_profiles').select('*').eq('id', userId).single();
+  const { data: target } = await supabaseClient.from('user_profiles').select('*').eq('id', userId).single();
   if (!target) return notify('User profile not found.', true);
   if (currentRole === 'infosec' && target.requested_role !== 'user') {
     return notify('Info Sec can only reject Standard User account requests.', true);
@@ -2486,7 +2486,7 @@ async function rejectUserAccount(userId) {
     tone: 'danger',
   });
   if (reason === null) return;
-  const { error } = await supabase.from('user_profiles').update({
+  const { error } = await supabaseClient.from('user_profiles').update({
     account_status: 'rejected',
     rejection_reason: reason,
     updated_at: new Date().toISOString()
@@ -2494,7 +2494,7 @@ async function rejectUserAccount(userId) {
   if (error) {
     // rejection_reason column may not exist on legacy installs — retry without it.
     if (/rejection_reason/i.test(error.message)) {
-      const retry = await supabase.from('user_profiles').update({
+      const retry = await supabaseClient.from('user_profiles').update({
         account_status: 'rejected',
         updated_at: new Date().toISOString()
       }).eq('id', userId);
@@ -3585,16 +3585,16 @@ async function exportDataXLSX() {
 // 8. INITIALIZATION
 // ==========================================
 (async function initApp() {
-    if (!supabase) {
+    if (!supabaseClient) {
         showAuthScreen();
         return;
     }
 
-    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { session } } = await supabaseClient.auth.getSession();
     if (session) await enterAuthenticatedApp(session);
     else showAuthScreen();
 
-    supabase.auth.onAuthStateChange(async (event, session) => {
+    supabaseClient.auth.onAuthStateChange(async (event, session) => {
         if (event === 'INITIAL_SESSION') return;
         if (event === 'SIGNED_IN' && session) {
             await enterAuthenticatedApp(session);
