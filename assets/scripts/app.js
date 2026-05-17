@@ -22,6 +22,58 @@ function initSupabaseClient() {
     });
 }
 
+/** Redirect URL after email verification — must be listed in Supabase Auth → URL Configuration. */
+function getAuthRedirectUrl() {
+    const { origin, pathname } = window.location;
+    const path = pathname && pathname !== '/' ? pathname : '/index.html';
+    return origin + path;
+}
+
+function stripAuthParamsFromUrl() {
+    try {
+        const url = new URL(window.location.href);
+        ['token_hash', 'type', 'access_token', 'refresh_token', 'expires_in', 'token_type'].forEach(k => {
+            url.searchParams.delete(k);
+        });
+        const hash = url.hash.replace(/^#/, '');
+        if (hash) {
+            const hp = new URLSearchParams(hash);
+            ['access_token', 'refresh_token', 'type', 'token_hash', 'expires_in', 'token_type'].forEach(k => hp.delete(k));
+            url.hash = hp.toString() ? '#' + hp.toString() : '';
+        }
+        window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+    } catch (_) { /* noop */ }
+}
+
+/** Completes PKCE email-confirmation links (?token_hash=…&type=signup). */
+async function handleAuthCallbackFromUrl() {
+    if (!supabaseClient) return false;
+    const params = new URLSearchParams(window.location.search);
+    const token_hash = params.get('token_hash');
+    const type = params.get('type');
+    if (!token_hash || !type) return false;
+
+    const allowed = new Set(['signup', 'email', 'recovery', 'invite', 'magiclink', 'email_change']);
+    const otpType = allowed.has(type) ? type : 'email';
+
+    const { data, error } = await supabaseClient.auth.verifyOtp({ token_hash, type: otpType });
+    stripAuthParamsFromUrl();
+    if (error) {
+        notify(formatAuthError(error), true);
+        showAuthScreen();
+        return false;
+    }
+    if (data?.session) {
+        notify('Email verified — welcome to ImpactLens.');
+        await enterAuthenticatedApp(data.session);
+        return true;
+    }
+    notify('Email verified. Sign in with your password.');
+    showAuthScreen();
+    showAuthTab('login');
+    return true;
+}
+
 try {
     supabaseClient = initSupabaseClient();
 } catch (err) {
@@ -40,6 +92,8 @@ let globalAssets = [];
 let globalControls = [];
 let globalReport = {};
 let globalLogs = [];
+let globalUserProfiles = [];
+let usersActiveTab = 'pending';
 let editingId = null;
 let currentUser = null;
 let currentRole = null; // 'user' | 'infosec' | 'admin'
@@ -813,10 +867,50 @@ function renderControlGapAnalysis(gaps) {
     panel.classList.remove('hidden');
 }
 
-// Lightweight HTML escaper used by panels above (separate from export-side
-// escapeHtml — that one is defined later in the file but only on export).
+// Lightweight HTML escaper for UI panels, modals, and dynamic tables.
 function escapeHtmlSafe(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+// Alias used by reason modal, save errors, and exports (must exist before promptReason).
+const escapeHtml = escapeHtmlSafe;
+
+function workflowActionBtn(action, assetId, label, className = 'btn btn-sm', extraStyle = '') {
+  const safeId = escapeHtmlSafe(assetId);
+  const safeAction = escapeHtmlSafe(action);
+  const safeLabel = escapeHtmlSafe(label);
+  const styleAttr = extraStyle ? ` style="${escapeHtmlSafe(extraStyle)}"` : '';
+  return `<button type="button" class="${className}" data-action="${safeAction}" data-asset-id="${safeId}"${styleAttr}>${safeLabel}</button>`;
+}
+
+function bindWorkflowActionClicks() {
+  if (document.body?.dataset?.workflowActionsBound === '1') return;
+  if (!document.body) return;
+  document.body.dataset.workflowActionsBound = '1';
+  document.body.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('button[data-action][data-asset-id]');
+    if (!btn) return;
+    const action = btn.getAttribute('data-action');
+    const id = btn.getAttribute('data-asset-id');
+    if (!action || !id) return;
+    try {
+      switch (action) {
+        case 'approve-asset': await approveAsset(id); break;
+        case 'reject-pending': await rejectAsset(id); break;
+        case 'reject-draft': await rejectDraftAsset(id); break;
+        case 'delete-asset': await deleteAsset(id); break;
+        case 'edit-asset': editAsset(id); break;
+        default: return;
+      }
+    } catch (err) {
+      console.error('[workflow]', action, id, err);
+      notify(err?.message || String(err), true);
+    }
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bindWorkflowActionClicks);
+} else {
+  bindWorkflowActionClicks();
 }
 
 function roleLabel(role) {
@@ -849,8 +943,8 @@ function resetAuthSteps() {
     document.getElementById('auth-step-pending')?.classList.add('hidden');
     showAuthTab('login');
 
-    // Clear any stale error message
     clearAuthError();
+    clearAuthRejectionBanner();
     // Forget any half-typed password from the previous attempt
     const pw  = document.getElementById('login-password');
     const pw1 = document.getElementById('register-password');
@@ -1004,7 +1098,7 @@ function initAuthWave() {
 
 function showVerificationStep(email) {
     pendingVerifyEmail = email;
-    // Make sure we are on Stage 2 (the form card hosts the verify sub-step)
+    setVerifyEmailWarning('');
     document.getElementById('auth-stage-roles')?.classList.add('hidden');
     document.getElementById('auth-stage-form')?.classList.remove('hidden');
     document.getElementById('auth-step-credentials')?.classList.add('hidden');
@@ -1014,14 +1108,33 @@ function showVerificationStep(email) {
     if (target) target.textContent = email;
 }
 
+function setVerifyEmailWarning(text) {
+    const el = document.getElementById('verify-email-warning');
+    if (!el) return;
+    if (text) {
+        el.textContent = text;
+        el.hidden = false;
+    } else {
+        el.hidden = true;
+        el.textContent = '';
+    }
+}
+
 async function resendVerificationEmail() {
     if (!supabaseClient || !pendingVerifyEmail) return notify('Enter your email and register again.', true);
     try {
-        const { error } = await supabaseClient.auth.resend({ type: 'signup', email: pendingVerifyEmail });
+        const { error } = await supabaseClient.auth.resend({
+            type: 'signup',
+            email: pendingVerifyEmail,
+            options: { emailRedirectTo: getAuthRedirectUrl() }
+        });
         if (error) throw error;
-        notify('Verification email resent.');
+        setVerifyEmailWarning('');
+        notify('Verification email resent. Check your inbox and spam folder.');
     } catch (err) {
-        notify(formatAuthError(err), true);
+        const text = formatAuthError(err);
+        setVerifyEmailWarning(text);
+        notify(text, true);
     }
 }
 
@@ -1032,12 +1145,64 @@ function showAuthTab(tab) {
     document.getElementById('tab-register')?.classList.toggle('active', tab === 'register');
     loginForm?.classList.toggle('hidden', tab !== 'login');
     regForm?.classList.toggle('hidden', tab !== 'register');
-    // Clear both error banners when switching tabs so the user sees a clean slate.
     clearAuthError();
+    if (tab === 'register') clearAuthRejectionBanner();
+}
+
+function clearAuthRejectionBanner() {
+    const el = document.getElementById('auth-rejection-banner');
+    if (!el) return;
+    el.hidden = true;
+    el.innerHTML = '';
+}
+
+function showAuthCredentialsView({ email = '', role = null } = {}) {
+    document.getElementById('auth-screen')?.classList.remove('hidden');
+    document.getElementById('app-shell')?.classList.add('hidden');
+    const trig = document.getElementById('notif-trigger');
+    if (trig) trig.style.display = 'none';
+    document.getElementById('auth-stage-roles')?.classList.add('hidden');
+    document.getElementById('auth-stage-form')?.classList.remove('hidden');
+    document.getElementById('auth-step-credentials')?.classList.remove('hidden');
+    document.getElementById('auth-step-verify')?.classList.add('hidden');
+    document.getElementById('auth-step-pending')?.classList.add('hidden');
+    if (role) setAuthRole(role);
+    showAuthTab('login');
+    clearAuthError();
+    const emailEl = document.getElementById('login-email');
+    if (emailEl && email) emailEl.value = email;
+}
+
+function showRejectedAccount(profile) {
+    const reason = (profile?.rejection_reason || '').trim() || 'No reason was recorded.';
+    const email = profile?.email || '';
+    const role = profile?.requested_role || 'user';
+
+    suppressAuthReset = true;
+    if (supabaseClient) supabaseClient.auth.signOut().catch(() => {});
+    currentUser = null;
+    currentRole = null;
+    currentProfile = null;
+    currentAccessToken = null;
+    authUiReady = false;
+
+    showAuthCredentialsView({ email, role });
+    const banner = document.getElementById('auth-rejection-banner');
+    if (banner) {
+        banner.innerHTML =
+            `<strong>Account rejected.</strong> Your ${escapeHtmlSafe(roleLabel(role))} request `
+            + `(<span class="auth-rejection-email">${escapeHtmlSafe(email)}</span>) was not approved. `
+            + `<span class="auth-rejection-reason">Reason: ${escapeHtmlSafe(reason)}</span>`;
+        banner.hidden = false;
+    }
+    notify('This account was rejected. You may register again with a different email or contact your administrator.', true);
+    setTimeout(() => { suppressAuthReset = false; }, 800);
 }
 
 function showPendingApproval(profile) {
-    // Make sure we are on Stage 2 so the pending sub-step is visible
+    clearAuthRejectionBanner();
+    document.getElementById('auth-screen')?.classList.remove('hidden');
+    document.getElementById('app-shell')?.classList.add('hidden');
     document.getElementById('auth-stage-roles')?.classList.add('hidden');
     document.getElementById('auth-stage-form')?.classList.remove('hidden');
     document.getElementById('auth-step-credentials')?.classList.add('hidden');
@@ -1068,6 +1233,9 @@ function formatAuthError(err) {
     }
     if (/email not confirmed/i.test(msg)) {
         return 'Email not yet verified. Click the link Supabase sent to your inbox, then sign in again.';
+    }
+    if (/error sending confirmation email|unexpected_failure/i.test(msg)) {
+        return 'Supabase could not send the verification email. In the Dashboard: turn OFF custom SMTP (Authentication → SMTP) to use built-in mail, enable Confirm email (Providers → Email), and add http://localhost:8000 to URL Configuration. If you enabled custom SMTP before with wrong credentials, disable it and try again. Test: npm run test:auth-email -- your@email.com';
     }
     if (/signup is disabled/i.test(msg)) {
         return 'Sign-up is disabled in Supabase. Enable Email provider under Authentication → Providers.';
@@ -1105,19 +1273,23 @@ async function handleRegister(event) {
     const originalLabel = btn ? btn.innerHTML : '';
     if (btn) { btn.disabled = true; btn.innerHTML = 'Creating account…'; }
     try {
-        const { error } = await supabaseClient.auth.signUp({
+        const { data, error } = await supabaseClient.auth.signUp({
             email,
             password,
             options: {
                 data: { requested_role: role },
-                emailRedirectTo: window.location.origin + window.location.pathname
+                emailRedirectTo: getAuthRedirectUrl()
             }
         });
         if (error) throw error;
-        // Real Supabase email verification — user_profiles row will be inserted by
-        // the on_auth_user_confirmed trigger only after the email is verified.
+        if (data?.session) {
+            pendingLoginRole = role;
+            await enterAuthenticatedApp(data.session, role);
+            notify('Account created — you are signed in.');
+            return;
+        }
         showVerificationStep(email);
-        notify('Verification email sent. Click the link in your inbox.');
+        notify('Verification email sent. Open the link in your inbox (check spam), then sign in here.');
     } catch (err) {
         showAuthError(formatAuthError(err), { target: 'register' });
     } finally {
@@ -1139,27 +1311,38 @@ async function handleLogin(event) {
         return;
     }
     if (btn) { btn.disabled = true; btn.innerHTML = 'Authenticating…'; }
+    pendingLoginRole = selectedRole;
     try {
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) {
+            pendingLoginRole = null;
             // Supabase returns "Email not confirmed" — surface the verify step
             if (/email not confirmed/i.test(error.message || '')) {
                 showVerificationStep(email);
             }
             throw error;
         }
-        if (!data?.session) throw new Error('No session returned.');
-        // enterAuthenticatedApp will either move us into the app shell OR keep
-        // us on the auth screen with the appropriate error/pending message.
-        await enterAuthenticatedApp(data.session, selectedRole);
+        if (!data?.session) {
+            pendingLoginRole = null;
+            throw new Error('No session returned.');
+        }
+        // onAuthStateChange(SIGNED_IN) normally drives enterAuthenticatedApp.
+        // Yield once so that listener runs first; fall back if it did not (edge builds).
+        await new Promise(r => setTimeout(r, 0));
+        if (!authUiReady) {
+            const role = pendingLoginRole;
+            pendingLoginRole = null;
+            await enterAuthenticatedApp(data.session, role ?? selectedRole);
+        }
     } catch (err) {
+        pendingLoginRole = null;
         const text = formatAuthError(err);
         showAuthError(text, { target: 'login' });
         notify(text, true);
-        // Belt-and-suspenders: if anything went wrong, make sure we are NOT
-        // showing the app shell. The error stays visible until next attempt.
-        document.getElementById('app-shell')?.classList.add('hidden');
-        document.getElementById('auth-screen')?.classList.remove('hidden');
+        if (!authUiReady) {
+            document.getElementById('app-shell')?.classList.add('hidden');
+            document.getElementById('auth-screen')?.classList.remove('hidden');
+        }
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -1216,17 +1399,56 @@ let authUiReady = false;
 // Tells the global onAuthStateChange listener to skip its reset cycle when
 // we intentionally trigger a signOut and want to keep the current error banner.
 let suppressAuthReset = false;
+// Role chosen on the login form; consumed by the SIGNED_IN handler so we do not
+// run enterAuthenticatedApp twice (handleLogin + onAuthStateChange) with mismatched args.
+let pendingLoginRole = null;
+let enterAppInFlight = null;
 
 async function enterAuthenticatedApp(session, requestedRole = null) {
+    if (!session?.user) return;
+    const userId = session.user.id;
+    if (enterAppInFlight?.userId === userId) return enterAppInFlight.promise;
+    const run = _enterAuthenticatedAppCore(session, requestedRole);
+    enterAppInFlight = { userId, promise: run };
+    try {
+        return await run;
+    } finally {
+        if (enterAppInFlight?.promise === run) enterAppInFlight = null;
+    }
+}
+
+async function _enterAuthenticatedAppCore(session, requestedRole = null) {
     if (!session?.user) return;
     currentUser = session.user;
     currentAccessToken = session.access_token || null;
     // The trigger creates user_profiles on email confirmation. If we somehow get
     // here without a row, treat the account as pending until the DB catches up.
-    currentProfile = await loadUserProfile(currentUser.id);
+    let profile;
+    try {
+        profile = await loadUserProfile(currentUser.id);
+    } catch (err) {
+        console.error('loadUserProfile:', err);
+        showAppShell();
+        const roleEl = document.getElementById('hdr-role');
+        const userEl = document.getElementById('hdr-user');
+        if (roleEl) roleEl.textContent = '—';
+        if (userEl) userEl.textContent = currentUser.email || '—';
+        notify('Signed in, but your profile could not be loaded. Refresh or check Supabase.', true);
+        authUiReady = true;
+        return;
+    }
+    currentProfile = profile;
     if (!currentProfile) {
         showAuthScreen();
         showPendingApproval({ email: currentUser.email, requested_role: requestedRole || 'user' });
+        return;
+    }
+    if (currentProfile.account_status === 'rejected') {
+        showRejectedAccount(currentProfile);
+        return;
+    }
+    if (currentProfile.account_status === 'pending') {
+        showPendingApproval(currentProfile);
         return;
     }
     if (currentProfile.account_status !== 'active') {
@@ -1363,6 +1585,13 @@ async function syncFromCloud(silent = false) {
 
         const { data: lData } = await supabaseClient.from('SystemLogs').select('*').order('created_at', { ascending: false }).limit(200);
         globalLogs = lData || globalLogs;
+
+        if (currentRole === 'infosec' || currentRole === 'admin') {
+            const { data: pData, error: pErr } = await supabaseClient.from('user_profiles').select('*').order('created_at', { ascending: false });
+            if (!pErr) globalUserProfiles = pData || [];
+        } else {
+            globalUserProfiles = [];
+        }
         renderNotificationBadge();
     } catch (err) {
         console.error('Cloud Sync Error: ', err);
@@ -1380,13 +1609,37 @@ function refreshCloudInBackground() {
     return syncInFlight;
 }
 
+function approverLabelForRole(requestedRole) {
+    if (requestedRole === 'user') return 'Info Sec';
+    if (requestedRole === 'infosec' || requestedRole === 'admin') return 'Admin (CISO)';
+    return '—';
+}
+
+function canApproveUserProfile(profile) {
+    if (!profile || profile.account_status !== 'pending') return false;
+    if (currentRole === 'admin') return true;
+    if (currentRole === 'infosec') return profile.requested_role === 'user';
+    return false;
+}
+
+function countActionablePendingUsers() {
+    return globalUserProfiles.filter(p => p.account_status === 'pending' && canApproveUserProfile(p)).length;
+}
+
 function updateWorkflowBadges() {
-    const drafts = globalAssets.filter(a => a.status === ASSET_STATUS.DRAFT).length;
+    const drafts = globalAssets.filter(a =>
+        a.status === ASSET_STATUS.DRAFT || a.status === ASSET_STATUS.REJECTED
+    ).length;
     const pending = globalAssets.filter(a => a.status === ASSET_STATUS.PENDING).length;
+    const pendingUsers = countActionablePendingUsers();
     const nd = document.getElementById('nav-drafts');
     const np = document.getElementById('nav-pending');
+    const npu = document.getElementById('nav-pending-users');
     if (nd) nd.textContent = drafts;
     if (np) np.textContent = pending;
+    if (npu) npu.textContent = pendingUsers;
+    const tabCount = document.getElementById('users-tab-pending-count');
+    if (tabCount) tabCount.textContent = pendingUsers;
 }
 
 async function seedSupabaseIfEmpty() {
@@ -1414,6 +1667,7 @@ function renderSectionContent(name) {
   if (name === 'risk') { renderRiskRegister(); updateMatrixHeatmap(); }
   if (name === 'draft-queue') renderDraftQueue();
   if (name === 'pending-queue') renderPendingQueue();
+  if (name === 'my-submissions') renderMySubmissions();
   if (name === 'logs') renderSystemLogs();
   if (name === 'users') renderUserManagement();
   updateWorkflowBadges();
@@ -1421,8 +1675,8 @@ function renderSectionContent(name) {
 
 function showSection(name) {
   const allowed = {
-    user: ['add', 'guidelines'],
-    infosec: ['dashboard', 'add', 'draft-queue', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'logs', 'users', 'guidelines'],
+    user: ['add', 'my-submissions', 'guidelines'],
+    infosec: ['dashboard', 'add', 'my-submissions', 'draft-queue', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'logs', 'users', 'guidelines'],
     admin: ['dashboard', 'add', 'draft-queue', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'report', 'users', 'logs', 'guidelines']
   };
   if (currentRole && allowed[currentRole] && !allowed[currentRole].includes(name)) {
@@ -1437,6 +1691,8 @@ function showSection(name) {
   document.querySelectorAll('.nav-item').forEach(n => {
     if (n.dataset.section === name) n.classList.add('active');
   });
+
+  if (name === 'users') showUsersTab(usersActiveTab || 'pending');
 
   renderSectionContent(name);
   refreshCloudInBackground().then(() => renderSectionContent(name));
@@ -1609,7 +1865,7 @@ function setNotifLastSeen(ts) {
 // Parse the "Reason: ... · originator=... · prior_status=..." log details
 // into a structured object so notifications can render cleanly.
 function parseLogDetails(details) {
-    const out = { reason: '', originator: '', target: '', priorStatus: '', requestedRole: '' };
+    const out = { reason: '', originator: '', target: '', priorStatus: '', requestedRole: '', infosecOfficer: '' };
     if (!details) return out;
     const segs = String(details).split(/\s*·\s*/);
     for (const s of segs) {
@@ -1624,8 +1880,188 @@ function parseLogDetails(details) {
         else if (key === 'target') out.target = val;
         else if (key === 'prior_status') out.priorStatus = val;
         else if (key === 'requested_role') out.requestedRole = val;
+        else if (key === 'infosec_officer' || key === 'submitted_by') out.infosecOfficer = val;
     }
     return out;
+}
+
+function isAssetOriginator(asset, email = currentUser?.email) {
+    if (!asset || !email) return false;
+    return String(asset.created_by || '').toLowerCase() === String(email).toLowerCase();
+}
+
+/** Info Sec submitted this asset to the CISO queue (audit log). */
+function infosecSubmittedAsset(assetId, me) {
+    if (!assetId || !me) return false;
+    const m = String(me).toLowerCase();
+    return (globalLogs || []).some(l => {
+        if (l.asset_id !== assetId || l.action !== 'ASSET_SUBMITTED_FOR_APPROVAL') return false;
+        if (String(l.user_email || '').toLowerCase() === m) return true;
+        return parseLogDetails(l.details).infosecOfficer.toLowerCase() === m;
+    });
+}
+
+/** True when this officer profiled/submitted the asset (incl. approved & rejected outcomes). */
+function assetHasInfosecSubmission(assetId, me) {
+    if (!assetId || !me) return false;
+    const m = String(me).toLowerCase();
+    if (infosecSubmittedAsset(assetId, me)) return true;
+    return (globalLogs || []).some(l => {
+        if (l.asset_id !== assetId) return false;
+        if (l.action === 'ASSET_REJECTED') {
+            return parseLogDetails(l.details).infosecOfficer.toLowerCase() === m;
+        }
+        if (l.action === 'ASSET_APPROVED' && infosecSubmittedAsset(assetId, me)) return true;
+        return false;
+    });
+}
+
+function isMyLiveSubmission(asset, me, role = currentRole) {
+    if (!asset || !me) return false;
+    const m = String(me).toLowerCase();
+    if (role === 'user') return isAssetOriginator(asset, m);
+    if (role === 'infosec') {
+        if (isAssetOriginator(asset, m)) return true;
+        if (String(asset.updated_by || '').toLowerCase() === m) return true;
+        return assetHasInfosecSubmission(asset.id, m);
+    }
+    return false;
+}
+
+function mySubmissionLogMatches(l, parsed, me, role = currentRole) {
+    if (!l?.asset_id || !me) return false;
+    const m = String(me).toLowerCase();
+    const originator = (parsed.originator || '').toLowerCase();
+    const officer = (parsed.infosecOfficer || '').toLowerCase();
+    const actor = (l.user_email || '').toLowerCase();
+    if (role === 'user') return originator === m;
+    if (role === 'infosec') {
+        if (originator === m) return true;
+        if (officer === m) return true;
+        if (l.action === 'ASSET_SUBMITTED_FOR_APPROVAL' && actor === m) return true;
+        if (l.action === 'ASSET_DELETED' && assetHasInfosecSubmission(l.asset_id, m)) return true;
+    }
+    return false;
+}
+
+/**
+ * Unified My Submissions rows: live assets + archived rejections/deletions from SystemLogs.
+ */
+function gatherMySubmissionRows() {
+    if (!currentUser?.email) return [];
+    const me = currentUser.email.toLowerCase();
+    const role = currentRole;
+    const byId = new Map();
+
+    for (const asset of globalAssets) {
+        if (!isMyLiveSubmission(asset, me, role)) continue;
+        let reason = '';
+        let eventAt = asset.reviewed_at || null;
+        let actor = '';
+        const originator = asset.created_by || '';
+        if (asset.status === ASSET_STATUS.REJECTED) {
+            const rejLog = (globalLogs || [])
+                .filter(l => l.asset_id === asset.id && l.action === 'ASSET_REJECTED')
+                .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0];
+            if (rejLog) {
+                reason = parseLogDetails(rejLog.details).reason;
+                eventAt = rejLog.created_at || eventAt;
+                actor = rejLog.user_email || '';
+            }
+        } else if (asset.status === ASSET_STATUS.APPROVED) {
+            const apprLog = (globalLogs || [])
+                .filter(l => l.asset_id === asset.id && l.action === 'ASSET_APPROVED')
+                .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0];
+            if (apprLog) {
+                eventAt = apprLog.created_at || eventAt;
+                actor = apprLog.user_email || '';
+            }
+        }
+        byId.set(asset.id, {
+            id: asset.id,
+            name: asset.name || '—',
+            type: asset.type || '—',
+            status: asset.status || ASSET_STATUS.DRAFT,
+            kind: 'live',
+            reason,
+            eventAt,
+            actor,
+            originator,
+            evaluatedUserDraft: role === 'infosec' && originator && originator.toLowerCase() !== me,
+            asset,
+        });
+    }
+
+    // Info Sec: include CISO-approved assets they evaluated (even if submit log aged out of cache).
+    if (role === 'infosec') {
+        for (const asset of globalAssets) {
+            if (asset.status !== ASSET_STATUS.APPROVED || byId.has(asset.id)) continue;
+            if (!assetHasInfosecSubmission(asset.id, me)) continue;
+            const apprLog = (globalLogs || [])
+                .filter(l => l.asset_id === asset.id && l.action === 'ASSET_APPROVED')
+                .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0];
+            byId.set(asset.id, {
+                id: asset.id,
+                name: asset.name || '—',
+                type: asset.type || '—',
+                status: ASSET_STATUS.APPROVED,
+                kind: 'live',
+                reason: '',
+                eventAt: apprLog?.created_at || asset.reviewed_at || null,
+                actor: apprLog?.user_email || '',
+                originator: asset.created_by || '',
+                evaluatedUserDraft: !!(asset.created_by && asset.created_by.toLowerCase() !== me),
+                asset,
+            });
+        }
+    }
+
+    const archiveActions = ['DRAFT_REJECTED', 'ASSET_DELETED'];
+    for (const l of globalLogs || []) {
+        if (!archiveActions.includes(l.action) || !l.asset_id) continue;
+        const parsed = parseLogDetails(l.details);
+        if (!mySubmissionLogMatches(l, parsed, me, role)) continue;
+        const existing = byId.get(l.asset_id);
+        if (existing?.kind === 'live') continue;
+        const ts = l.created_at ? new Date(l.created_at).getTime() : 0;
+        const prev = existing?.eventAt ? new Date(existing.eventAt).getTime() : 0;
+        if (existing && ts <= prev) continue;
+        const archived = globalAssets.find(a => a.id === l.asset_id);
+        const archOrigin = parsed.originator || archived?.created_by || '';
+        byId.set(l.asset_id, {
+            id: l.asset_id,
+            name: archived?.name || '—',
+            type: archived?.type || '—',
+            status: l.action === 'DRAFT_REJECTED' ? 'Draft Rejected' : 'Deleted',
+            kind: l.action === 'DRAFT_REJECTED' ? 'draft-rejected' : 'deleted',
+            reason: parsed.reason || '',
+            eventAt: l.created_at,
+            actor: l.user_email || '—',
+            originator: archOrigin,
+            evaluatedUserDraft: role === 'infosec' && archOrigin && archOrigin.toLowerCase() !== me,
+            asset: archived || null,
+        });
+    }
+
+    const sortRank = (row) => {
+        const k = row.kind === 'live' ? row.status : row.kind;
+        const order = {
+            'draft-rejected': 0,
+            deleted: 1,
+            [ASSET_STATUS.REJECTED]: 2,
+            [ASSET_STATUS.PENDING]: 3,
+            [ASSET_STATUS.APPROVED]: 4,
+            [ASSET_STATUS.DRAFT]: 5,
+        };
+        return order[k] ?? 9;
+    };
+    return [...byId.values()].sort((a, b) => sortRank(a) - sortRank(b));
+}
+
+function mySubmissionAssets() {
+    return gatherMySubmissionRows()
+        .filter(r => r.kind === 'live' && r.asset)
+        .map(r => r.asset);
 }
 
 function reasonHtml(reason, fallback = 'No reason recorded.') {
@@ -1663,8 +2099,9 @@ function computeNotifications() {
                 msg = `Your asset ${aLabel} was <strong>APPROVED</strong> by the CISO.`;
                 kind = 'success';
             } else if (action === 'ASSET_REJECTED' && meIsOriginator) {
-                msg = `Your asset ${aLabel} was <strong>REJECTED</strong> and returned to draft for revision.${reasonHtml(parsed.reason)}`;
+                msg = `Your asset ${aLabel} was <strong>REJECTED</strong> by the CISO. Check <strong>My Submissions</strong> for the reason.${reasonHtml(parsed.reason)}`;
                 kind = 'warn';
+                target = 'my-submissions';
             } else if (action === 'DRAFT_REJECTED' && meIsOriginator) {
                 msg = `Your draft submission <strong>${escapeHtmlSafe(aid)}</strong> was <strong>REJECTED</strong> by Info Sec and removed from the queue.${reasonHtml(parsed.reason)}`;
                 kind = 'warn';
@@ -1679,10 +2116,13 @@ function computeNotifications() {
             if (action === 'ASSET_APPROVED' && handled === me) {
                 msg = `Your submission ${aLabel} was <strong>APPROVED</strong> by the CISO.`;
                 kind = 'success';
-            } else if (action === 'ASSET_REJECTED' && handled === me) {
-                msg = `Your submission ${aLabel} was <strong>REJECTED</strong> by the CISO and returned to drafts.${reasonHtml(parsed.reason)}`;
-                kind = 'warn';
-                target = 'draft-queue';
+            } else if (action === 'ASSET_REJECTED') {
+                const officer = (parsed.infosecOfficer || '').toLowerCase();
+                if (officer === me || (!officer && handled === me)) {
+                    msg = `Your submission ${aLabel} was <strong>REJECTED</strong> by the CISO. Revise in the <strong>Draft Queue</strong> and resubmit.${reasonHtml(parsed.reason)}`;
+                    kind = 'warn';
+                    target = 'draft-queue';
+                }
             } else if (action === 'ASSET_DELETED' && (handled === me || actor === me)) {
                 msg = `Asset ${aLabel} was <strong>DELETED</strong> (prior status: ${escapeHtmlSafe(parsed.priorStatus || 'unknown')}) by ${escapeHtmlSafe(actor || 'an officer')}.${reasonHtml(parsed.reason)}`;
                 kind = 'warn';
@@ -1694,6 +2134,10 @@ function computeNotifications() {
                 msg = `Draft <strong>${escapeHtmlSafe(aid)}</strong> was rejected by ${escapeHtmlSafe(actor || 'another officer')}.${reasonHtml(parsed.reason)}`;
                 kind = 'info';
                 target = 'draft-queue';
+            } else if (action === 'USER_REQUEST') {
+                msg = `New <strong>Standard User</strong> account pending your approval: ${escapeHtmlSafe(parsed.target || details)}`;
+                kind = 'warn';
+                target = 'users';
             }
         } else if (currentRole === 'admin') {
             if (action === 'ASSET_SUBMITTED_FOR_APPROVAL' && actor !== me) {
@@ -1701,8 +2145,11 @@ function computeNotifications() {
                 kind = 'warn';
                 target = 'pending-queue';
             } else if (action === 'USER_REQUEST' || details.includes('account_status=pending')) {
-                msg = `New user account pending approval: ${escapeHtmlSafe(details)}`;
-                kind = 'info';
+                const needsAdmin = /requested_role=infosec|requested_role=admin/i.test(details);
+                msg = needsAdmin
+                    ? `New <strong>Info Sec</strong> account pending CISO approval: ${escapeHtmlSafe(parsed.target || details)}`
+                    : `New user account pending approval: ${escapeHtmlSafe(parsed.target || details)}`;
+                kind = 'warn';
                 target = 'users';
             } else if (action === 'USER_REJECTED' && actor !== me) {
                 msg = `User account rejected by ${escapeHtmlSafe(actor || 'Info Sec')} — ${escapeHtmlSafe(parsed.target || 'unknown')}.${reasonHtml(parsed.reason)}`;
@@ -2027,7 +2474,7 @@ async function saveAssetToDB() {
       detailMsg = `Status: Draft · awaiting Info Sec profiling · originator=${currentUser?.email || 'unknown'}`;
     } else if (currentRole === 'infosec') {
       logAction = 'ASSET_SUBMITTED_FOR_APPROVAL';
-      detailMsg = `Status: Pending · awaiting CISO approval · originator=${payload.created_by || currentUser?.email || 'unknown'}`;
+      detailMsg = `Status: Pending · awaiting CISO approval · originator=${payload.created_by || currentUser?.email || 'unknown'} · infosec_officer=${currentUser?.email || 'unknown'}`;
     } else {
       logAction = wasEditing ? 'ASSET_UPDATED' : 'ASSET_CREATED';
       detailMsg = `Status: ${payload.status} · by Admin`;
@@ -2079,10 +2526,6 @@ async function saveAssetToDB() {
   }
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
 async function approveAsset(id) {
   if (currentRole !== 'admin') return;
   const asset = globalAssets.find(a => a.id === id);
@@ -2103,25 +2546,30 @@ async function rejectAsset(id) {
   if (currentRole !== 'admin') return;
   const asset = globalAssets.find(a => a.id === id);
   if (!asset) return notify('Asset not found.', true);
-  const originator = asset.created_by || asset.updated_by || 'unknown';
+  const originator = asset.created_by || 'unknown';
+  const infosecOfficer = asset.updated_by || 'unknown';
   const reason = await promptReason({
-    title: 'Reject submission for revision',
+    title: 'Reject submission',
     eyebrow: 'CISO Review · Pending Approval',
-    description: 'This asset will be returned to Draft status for the Info Sec officer to address. The reason is logged in System Logs and surfaced in the originator\'s notifications.',
+    description: 'The asset is marked Rejected for both the Standard User (originator) and the Info Sec officer who submitted it. The reason is logged and appears in each role\'s inbox and workflow views.',
     presets: REASON_PRESETS.rejectAssetPending,
-    confirmLabel: 'Reject & return to draft',
+    confirmLabel: 'Reject submission',
     tone: 'warn',
   });
   if (reason === null) return;
   const { error } = await supabaseClient.from('Assets').update({
-    status: ASSET_STATUS.DRAFT,
+    status: ASSET_STATUS.REJECTED,
     reviewed_at: new Date().toISOString(),
     updated_by: currentUser?.email
   }).eq('id', id);
   if (error) return notify(error.message, true);
-  await logSystemEvent('ASSET_REJECTED', `Reason: ${reason} · originator=${originator}`, id);
+  await logSystemEvent(
+    'ASSET_REJECTED',
+    `Reason: ${reason} · originator=${originator} · infosec_officer=${infosecOfficer} · prior_status=${asset.status || ASSET_STATUS.PENDING}`,
+    id
+  );
   await syncFromCloud(true);
-  notify(`Asset ${id} returned to Info Sec for revision — reason logged and surfaced to ${originator}.`);
+  notify(`Asset ${id} rejected — surfaced to ${originator} and ${infosecOfficer}.`);
   showSection('pending-queue');
 }
 
@@ -2226,6 +2674,12 @@ function updateReapprovalBanner(asset) {
         banner.hidden = false;
     } else if (currentRole === 'infosec' && status === ASSET_STATUS.PENDING) {
         banner.innerHTML = '<strong>Awaiting CISO Review</strong> — This asset is in the approval queue. You can still update it; it will remain <span class="badge badge-mo">Pending Approval</span>.';
+        banner.hidden = false;
+    } else if (currentRole === 'infosec' && status === ASSET_STATUS.REJECTED) {
+        banner.innerHTML = '<strong>CISO Rejected</strong> — Revise the assessment and save to resubmit for <span class="badge badge-mo">Pending Approval</span>. The originator sees <span class="badge badge-hi">Rejected</span> in My Submissions.';
+        banner.hidden = false;
+    } else if (currentRole === 'user' && status === ASSET_STATUS.REJECTED) {
+        banner.innerHTML = '<strong>Rejected by CISO</strong> — Your submission was returned for Info Sec revision. See <strong>My Submissions</strong> for status; you cannot edit this record.';
         banner.hidden = false;
     } else if (currentRole === 'admin' && status === ASSET_STATUS.PENDING) {
         banner.innerHTML = '<strong>CISO Review Mode</strong> — Use Approve/Reject in the Pending Approval queue to finalize this submission.';
@@ -2348,29 +2802,121 @@ function statusBadge(status) {
 function renderDraftQueue() {
   const tbody = document.getElementById('draft-queue-body');
   if (!tbody) return;
-  const items = globalAssets.filter(a => a.status === ASSET_STATUS.DRAFT);
-  if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No draft assets in queue.</td></tr>';
+  const rejected = globalAssets.filter(a => a.status === ASSET_STATUS.REJECTED);
+  const drafts = globalAssets.filter(a => a.status === ASSET_STATUS.DRAFT);
+  if (!rejected.length && !drafts.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No draft or rejected assets in queue.</td></tr>';
     return;
   }
   const canActOnDraft = currentRole === 'admin' || currentRole === 'infosec';
-  tbody.innerHTML = items.map(a => {
-    const actions = [
-      `<button class="btn btn-sm btn-primary" onclick="editAsset('${a.id}')">Assess →</button>`,
-      canActOnDraft
-        ? `<button class="btn btn-sm btn-danger" style="margin-left:4px" onclick="rejectDraftAsset('${a.id}')">Reject</button>`
-        : '',
-      canActOnDraft
-        ? `<button class="btn btn-sm btn-danger" style="margin-left:4px;opacity:0.85" onclick="deleteAsset('${a.id}')">Delete</button>`
-        : ''
-    ].filter(Boolean).join('');
+  const rowHtml = (a, mode) => {
+    const actions = mode === 'rejected'
+      ? (canActOnDraft
+          ? workflowActionBtn('edit-asset', a.id, 'Revise & resubmit →', 'btn btn-sm btn-primary')
+          : '')
+      : [
+          workflowActionBtn('edit-asset', a.id, 'Assess →', 'btn btn-sm btn-primary'),
+          canActOnDraft
+            ? workflowActionBtn('reject-draft', a.id, 'Reject', 'btn btn-sm btn-danger', 'margin-left:4px')
+            : '',
+          canActOnDraft
+            ? workflowActionBtn('delete-asset', a.id, 'Delete', 'btn btn-sm btn-danger', 'margin-left:4px;opacity:0.85')
+            : ''
+        ].filter(Boolean).join('');
     return `
     <tr>
-      <td><span class="badge badge-id">${a.id}</span> ${statusBadge(a.status)}</td>
-      <td><strong>${a.name}</strong></td>
+      <td><span class="badge badge-id">${escapeHtmlSafe(a.id)}</span> ${statusBadge(a.status)}</td>
+      <td><strong>${escapeHtmlSafe(a.name || '')}</strong></td>
       <td><span class="badge badge-type">${a.type}</span></td>
       <td style="color:var(--text2)">${a.created_by || '—'}</td>
       <td style="white-space:nowrap">${actions}</td>
+    </tr>`;
+  };
+  const parts = [];
+  if (rejected.length) {
+    parts.push(`<tr class="queue-section-row"><td colspan="5" style="padding:10px 12px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--danger);background:rgba(255,58,46,.08);border-bottom:1px solid var(--border)">CISO rejected — revise &amp; resubmit</td></tr>`);
+    parts.push(rejected.map(a => rowHtml(a, 'rejected')).join(''));
+  }
+  if (drafts.length) {
+    if (rejected.length) {
+      parts.push(`<tr class="queue-section-row"><td colspan="5" style="padding:10px 12px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);background:var(--surface2);border-bottom:1px solid var(--border)">Awaiting Info Sec profiling</td></tr>`);
+    }
+    parts.push(drafts.map(a => rowHtml(a, 'draft')).join(''));
+  }
+  tbody.innerHTML = parts.join('');
+}
+
+function mySubmissionStatusBadge(row) {
+  if (row.kind === 'draft-rejected') {
+    return '<span class="badge badge-hi">Draft Rejected</span>';
+  }
+  if (row.kind === 'deleted') {
+    return '<span class="badge badge-hi" style="opacity:0.92">Deleted</span>';
+  }
+  return statusBadge(row.status);
+}
+
+function mySubmissionNote(row) {
+  const reasonLine = row.reason
+    ? `<span class="ms-note-reason">Reason: ${escapeHtmlSafe(row.reason)}</span>`
+    : '';
+  if (row.kind === 'draft-rejected') {
+    return `<span class="ms-note ms-note--bad">Removed from queue by ${escapeHtmlSafe(row.actor || 'Info Sec')}</span>${reasonLine}`;
+  }
+  if (row.kind === 'deleted') {
+    return `<span class="ms-note ms-note--bad">Permanently deleted by ${escapeHtmlSafe(row.actor || 'an officer')}</span>${reasonLine}`;
+  }
+  if (row.status === ASSET_STATUS.REJECTED) {
+    const who = currentRole === 'user'
+      ? 'Returned by CISO — Info Sec will revise'
+      : 'Rejected by CISO — revise in Draft Queue';
+    return `<span class="ms-note ms-note--bad">${who}</span>${reasonLine}`;
+  }
+  if (row.status === ASSET_STATUS.PENDING) {
+    return '<span class="ms-note ms-note--warn">With CISO for approval</span>';
+  }
+  if (row.status === ASSET_STATUS.DRAFT) {
+    return currentRole === 'user'
+      ? '<span class="ms-note ms-note--muted">Awaiting Info Sec profiling</span>'
+      : '<span class="ms-note ms-note--muted">In your draft workflow</span>';
+  }
+  if (row.status === ASSET_STATUS.APPROVED) {
+    if (currentRole === 'infosec' && row.evaluatedUserDraft) {
+      const by = row.actor ? ` · CISO sign-off by ${escapeHtmlSafe(row.actor)}` : '';
+      return `<span class="ms-note ms-note--ok">You evaluated this user submission — approved in register</span>`
+        + `<span class="ms-note ms-note--muted">Originator: ${escapeHtmlSafe(row.originator || '—')}${by}</span>`;
+    }
+    if (currentRole === 'infosec') {
+      return '<span class="ms-note ms-note--ok">You submitted this assessment — approved in register</span>';
+    }
+    return '<span class="ms-note ms-note--ok">Approved in register</span>';
+  }
+  return '—';
+}
+
+function renderMySubmissions() {
+  const tbody = document.getElementById('my-submissions-body');
+  if (!tbody) return;
+  const items = gatherMySubmissionRows();
+  const colSpan = currentRole === 'infosec' ? 6 : 5;
+  if (!items.length) {
+    tbody.innerHTML = `<tr><td colspan="${colSpan}" class="ms-empty">No submissions yet. Use <strong>Add Asset</strong> to register a new record.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = items.map(row => {
+    const when = row.eventAt
+      ? `<span class="ms-note-time">${escapeHtmlSafe(new Date(row.eventAt).toLocaleString())}</span>`
+      : '';
+    const originCol = currentRole === 'infosec' && row.originator && row.originator.toLowerCase() !== (currentUser?.email || '').toLowerCase()
+      ? `<span class="ms-origin">${escapeHtmlSafe(row.originator)}</span>`
+      : '<span class="ms-origin ms-origin--na">—</span>';
+    return `<tr>
+      <td><span class="badge badge-id">${escapeHtmlSafe(row.id)}</span></td>
+      <td><strong>${escapeHtmlSafe(row.name)}</strong></td>
+      <td><span class="badge badge-type">${escapeHtmlSafe(row.type)}</span></td>
+      ${currentRole === 'infosec' ? `<td>${originCol}</td>` : ''}
+      <td>${mySubmissionStatusBadge(row)}</td>
+      <td class="ms-notes-cell">${mySubmissionNote(row)}${when}</td>
     </tr>`;
   }).join('');
 }
@@ -2388,18 +2934,18 @@ function renderPendingQueue() {
   const isInfoSec = currentRole === 'infosec';
   el.innerHTML = items.map(a => {
     const ctrls = globalControls.filter(c => c.asset_id === a.id).length;
-    const reviewBtn = '<button class="btn btn-sm" onclick="editAsset(\'' + a.id + '\')">' + (isAdmin ? 'Review' : 'Open (read-only)') + '</button>';
+    const reviewBtn = workflowActionBtn('edit-asset', a.id, isAdmin ? 'Review' : 'Open (read-only)', 'btn btn-sm');
     let adminActions;
     if (isAdmin) {
       adminActions =
-        '<button class="btn btn-sm btn-danger" onclick="rejectAsset(\'' + a.id + '\')">Reject</button>'
-        + '<button class="btn btn-sm btn-danger" style="opacity:0.85" onclick="deleteAsset(\'' + a.id + '\')">Delete</button>'
-        + '<button class="btn btn-sm btn-success" onclick="approveAsset(\'' + a.id + '\')">Approve</button>';
+        workflowActionBtn('reject-pending', a.id, 'Reject', 'btn btn-sm btn-danger')
+        + workflowActionBtn('delete-asset', a.id, 'Delete', 'btn btn-sm btn-danger', 'opacity:0.85')
+        + workflowActionBtn('approve-asset', a.id, 'Approve', 'btn btn-sm btn-success');
     } else if (isInfoSec) {
       // Info Sec can withdraw their own pending submission with a logged reason.
       adminActions =
         '<span class="badge badge-mo" style="margin-left:8px">Awaiting CISO Review</span>'
-        + '<button class="btn btn-sm btn-danger" style="margin-left:8px;opacity:0.9" onclick="deleteAsset(\'' + a.id + '\')">Withdraw</button>';
+        + workflowActionBtn('delete-asset', a.id, 'Withdraw', 'btn btn-sm btn-danger', 'margin-left:8px;opacity:0.9');
     } else {
       adminActions = '<span class="badge badge-mo" style="margin-left:8px">Awaiting CISO Review</span>';
     }
@@ -2419,43 +2965,107 @@ function renderPendingQueue() {
   }).join('');
 }
 
+function showUsersTab(tab) {
+  usersActiveTab = tab;
+  document.querySelectorAll('.users-tab').forEach(btn => {
+    const on = btn.dataset.usersTab === tab;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  renderUserManagement();
+}
+window.showUsersTab = showUsersTab;
+
 async function renderUserManagement() {
   const tbody = document.getElementById('users-body');
+  const hint = document.getElementById('users-tab-hint');
   if (!tbody || !supabaseClient) return;
-  tbody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
-  const { data, error } = await supabaseClient.from('user_profiles').select('*').order('created_at', { ascending: false });
-  if (error) {
-    tbody.innerHTML = `<tr><td colspan="4">Error: ${error.message}. Run supabase/master_setup.sql.</td></tr>`;
+  if (currentRole !== 'infosec' && currentRole !== 'admin') {
+    tbody.innerHTML = '<tr><td colspan="5">You do not have access to account approvals.</td></tr>';
     return;
   }
-  const pending = (data || []).filter(p => p.account_status === 'pending');
-  if (!pending.length) {
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No pending account approvals.</td></tr>';
+
+  tbody.innerHTML = '<tr><td colspan="5">Loading…</td></tr>';
+  let rows = globalUserProfiles;
+  if (!rows.length) {
+    const { data, error } = await supabaseClient.from('user_profiles').select('*').order('created_at', { ascending: false });
+    if (error) {
+      tbody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtmlSafe(error.message)}. Run supabase/master_setup.sql.</td></tr>`;
+      return;
+    }
+    rows = globalUserProfiles = data || [];
+  }
+
+  const tab = usersActiveTab || 'pending';
+  if (hint) {
+    hint.textContent = tab === 'pending'
+      ? 'Info Sec approves Standard User requests · Admin (CISO) approves Info Sec (and any other) requests.'
+      : tab === 'active'
+        ? 'Accounts that completed email verification and role approval.'
+        : 'Declined account requests — applicants cannot sign in.';
+  }
+
+  let filtered = rows;
+  if (tab === 'pending') filtered = rows.filter(p => p.account_status === 'pending');
+  else if (tab === 'active') filtered = rows.filter(p => p.account_status === 'active');
+  else if (tab === 'rejected') filtered = rows.filter(p => p.account_status === 'rejected');
+
+  if (tab === 'pending') {
+    filtered = filtered.sort((a, b) => {
+      const aMine = canApproveUserProfile(a) ? 0 : 1;
+      const bMine = canApproveUserProfile(b) ? 0 : 1;
+      return aMine - bMine || new Date(b.created_at) - new Date(a.created_at);
+    });
+  }
+
+  if (!filtered.length) {
+    const empty = { pending: 'No accounts awaiting approval.', active: 'No active accounts.', rejected: 'No rejected accounts.' };
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">${empty[tab] || 'No records.'}</td></tr>`;
+    updateWorkflowBadges();
     return;
   }
-  tbody.innerHTML = pending.map(p => {
-    const canApprove =
-      (currentRole === 'admin') ||
-      (currentRole === 'infosec' && p.requested_role === 'user');
-    const actions = canApprove
-      ? `<button class="btn btn-sm btn-success" onclick="approveUserAccount('${p.id}')">Approve</button>
-         <button class="btn btn-sm btn-danger" onclick="rejectUserAccount('${p.id}')">Reject</button>`
-      : '<span style="color:var(--text3)">Awaiting Admin</span>';
-    return `<tr>
-      <td>${p.email}</td>
-      <td>${roleLabel(p.requested_role)}</td>
-      <td><span class="badge badge-mo">Pending</span></td>
-      <td>${actions}</td>
-    </tr>`;
-  }).join('');
+
+  if (tab === 'pending') {
+    tbody.innerHTML = filtered.map(p => {
+      const canAct = canApproveUserProfile(p);
+      const actions = canAct
+        ? `<button type="button" class="btn btn-sm btn-success" onclick="approveUserAccount('${p.id}')">Approve</button>
+           <button type="button" class="btn btn-sm btn-danger" onclick="rejectUserAccount('${p.id}')">Reject</button>`
+        : `<span class="badge badge-type">${escapeHtmlSafe(approverLabelForRole(p.requested_role))}</span>`;
+      return `<tr>
+        <td>${escapeHtmlSafe(p.email)}</td>
+        <td>${escapeHtmlSafe(roleLabel(p.requested_role))}</td>
+        <td>${escapeHtmlSafe(approverLabelForRole(p.requested_role))}</td>
+        <td><span class="badge badge-mo">Pending</span></td>
+        <td>${actions}</td>
+      </tr>`;
+    }).join('');
+  } else if (tab === 'active') {
+    tbody.innerHTML = filtered.map(p => `<tr>
+      <td>${escapeHtmlSafe(p.email)}</td>
+      <td>${escapeHtmlSafe(roleLabel(p.approved_role || p.requested_role))}</td>
+      <td>${escapeHtmlSafe(approverLabelForRole(p.requested_role))}</td>
+      <td><span class="badge badge-lo">Active</span></td>
+      <td style="font-size:11px;color:var(--text2)">${p.approved_at ? new Date(p.approved_at).toLocaleString() : '—'}</td>
+    </tr>`).join('');
+  } else {
+    tbody.innerHTML = filtered.map(p => `<tr>
+      <td>${escapeHtmlSafe(p.email)}</td>
+      <td>${escapeHtmlSafe(roleLabel(p.requested_role))}</td>
+      <td>—</td>
+      <td><span class="badge badge-hi">Rejected</span></td>
+      <td style="font-size:11px;color:var(--text2)">${escapeHtmlSafe(p.rejection_reason || '—')}</td>
+    </tr>`).join('');
+  }
+  updateWorkflowBadges();
 }
 
 async function approveUserAccount(userId) {
   if (!currentUser) return;
   const { data: target } = await supabaseClient.from('user_profiles').select('*').eq('id', userId).single();
   if (!target) return notify('User not found.', true);
-  if (currentRole === 'infosec' && target.requested_role !== 'user') {
-    return notify('Info Sec can only approve Standard User accounts.', true);
+  if (!canApproveUserProfile(target)) {
+    return notify(`This account must be approved by ${approverLabelForRole(target.requested_role)}.`, true);
   }
   const { error } = await supabaseClient.from('user_profiles').update({
     account_status: 'active',
@@ -2467,7 +3077,9 @@ async function approveUserAccount(userId) {
   if (error) return notify(error.message, true);
   await logSystemEvent('USER_APPROVED', `Approved ${target.email} as ${target.requested_role}`);
   notify(`Account ${target.email} approved.`);
+  await syncUserProfilesQuiet();
   renderUserManagement();
+  updateWorkflowBadges();
 }
 
 async function rejectUserAccount(userId) {
@@ -2505,7 +3117,15 @@ async function rejectUserAccount(userId) {
   }
   await logSystemEvent('USER_REJECTED', `Reason: ${reason} · target=${target.email} · requested_role=${target.requested_role}`);
   notify(`Account ${target.email} rejected.`);
+  await syncUserProfilesQuiet();
   renderUserManagement();
+  updateWorkflowBadges();
+}
+
+async function syncUserProfilesQuiet() {
+  if (!supabaseClient || !['infosec', 'admin'].includes(currentRole)) return;
+  const { data, error } = await supabaseClient.from('user_profiles').select('*').order('created_at', { ascending: false });
+  if (!error) globalUserProfiles = data || [];
 }
 
 function renderSystemLogs() {
@@ -2542,8 +3162,8 @@ function renderRegister() {
       <td style="color:var(--text2)">${a.group_name||'—'}</td>
       <td style="color:var(--text2)">${a.hostname||'—'}</td>
       <td>
-        <button class="btn btn-sm" onclick="editAsset('${a.id}')">Edit</button>
-        <button class="btn btn-sm btn-danger" style="margin-left:4px" onclick="deleteAsset('${a.id}')">Del</button>
+        ${workflowActionBtn('edit-asset', a.id, 'Edit', 'btn btn-sm')}
+        ${workflowActionBtn('delete-asset', a.id, 'Del', 'btn btn-sm btn-danger', 'margin-left:4px')}
       </td>
     </tr>
   `).join('');
@@ -3442,7 +4062,7 @@ async function exportDataXLSX() {
             .slice(0, 8)
             .map(l => {
                 const p = parseLogDetails(l.details);
-                const verb = l.action === 'DRAFT_REJECTED' ? 'draft rejected' : 'returned to Info Sec';
+                const verb = l.action === 'DRAFT_REJECTED' ? 'draft rejected' : 'rejected (CISO)';
                 const reasonTxt = p.reason ? ` — ${p.reason}` : ' — no reason recorded';
                 return `• ${fmtDate(l.created_at)} — Asset ${l.asset_id || ''} ${verb} by ${l.user_email || 'CISO'}${reasonTxt}`;
             });
@@ -3590,14 +4210,30 @@ async function exportDataXLSX() {
         return;
     }
 
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (session) await enterAuthenticatedApp(session);
-    else showAuthScreen();
+    const handledCallback = await handleAuthCallbackFromUrl();
+    if (!handledCallback) {
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        if (session) await enterAuthenticatedApp(session);
+        else showAuthScreen();
+    }
 
     supabaseClient.auth.onAuthStateChange(async (event, session) => {
         if (event === 'INITIAL_SESSION') return;
         if (event === 'SIGNED_IN' && session) {
-            await enterAuthenticatedApp(session);
+            if (authUiReady && currentUser?.id === session.user?.id) return;
+            const role = pendingLoginRole;
+            pendingLoginRole = null;
+            try {
+                await enterAuthenticatedApp(session, role);
+            } catch (err) {
+                console.error('SIGNED_IN handler:', err);
+                if (!authUiReady) showAuthScreen();
+                notify(formatAuthError(err), true);
+            }
+            return;
+        }
+        if (event === 'USER_UPDATED' && session?.user?.email_confirmed_at) {
+            notify('Email address confirmed.');
             return;
         }
         if (event === 'TOKEN_REFRESHED' && session?.access_token) {

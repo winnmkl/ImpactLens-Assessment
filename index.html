@@ -12,7 +12,7 @@
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   
-  <link rel="stylesheet" href="./assets/styles/main.css?v=20260517-dash1">
+  <link rel="stylesheet" href="./assets/styles/main.css?v=20260517-submissions1">
 </head>
 <body>
 
@@ -92,6 +92,8 @@
         Signing in as <strong id="auth-role-pill-label">Standard User</strong>
       </div>
 
+      <div id="auth-rejection-banner" class="auth-rejection-banner hidden" role="alert" hidden></div>
+
       <div class="auth-tabs-new">
         <button type="button" class="auth-tab-new active" id="tab-login" onclick="showAuthTab('login')">SIGN IN</button>
         <button type="button" class="auth-tab-new" id="tab-register" onclick="showAuthTab('register')">REGISTER</button>
@@ -162,7 +164,8 @@
         <div class="auth-info-icon" aria-hidden="true">✉</div>
         <h3>Check Your Inbox</h3>
         <p>We sent a verification link to <strong id="verify-email-target">your inbox</strong>.</p>
-        <p class="auth-info-sub">Click the link to confirm your email, then return here to sign in. Your account will enter the approval queue automatically.</p>
+        <p class="auth-info-sub">Click the link to confirm your email, then return here to sign in. Your account enters the approval queue after verification.</p>
+        <p id="verify-email-warning" class="auth-verify-warning hidden" role="alert" hidden></p>
         <div class="auth-info-actions">
           <button type="button" class="auth-btn-ghost" onclick="resendVerificationEmail()">Resend Email</button>
           <button type="button" class="auth-btn-ghost" onclick="resetAuthSteps()">← Back to Sign In</button>
@@ -233,12 +236,12 @@
 <div class="layout">
   <nav id="main-nav">
     <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Overview</div><div class="nav-item" data-section="dashboard" onclick="showSection('dashboard')"><span class="nav-icon">[■]</span> Dashboard</div></div>
-    <div class="nav-section nav-user-only nav-infosec-only nav-admin-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="add" onclick="showSection('add')"><span class="nav-icon">[+]</span> Add Asset</div></div>
+    <div class="nav-section nav-user-only nav-infosec-only nav-admin-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="add" onclick="showSection('add')"><span class="nav-icon">[+]</span> Add Asset</div><div class="nav-item nav-user-only nav-infosec-only" data-section="my-submissions" onclick="showSection('my-submissions')"><span class="nav-icon">[≡]</span> My Submissions</div></div>
     <div class="nav-section nav-infosec-only"><div class="nav-label">Workflow</div><div class="nav-item" data-section="draft-queue" onclick="showSection('draft-queue')"><span class="nav-icon">[◷]</span> Draft Queue <span class="nav-badge" id="nav-drafts">0</span></div></div>
-    <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Approval</div><div class="nav-item" data-section="pending-queue" onclick="showSection('pending-queue')"><span class="nav-icon">[◎]</span> Pending Approval <span class="nav-badge" id="nav-pending" style="color:var(--warn)">0</span></div></div>
+    <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Approval</div><div class="nav-item" data-section="pending-queue" onclick="showSection('pending-queue')"><span class="nav-icon">[◎]</span> Asset Approval <span class="nav-badge" id="nav-pending" style="color:var(--warn)">0</span></div><div class="nav-item nav-admin-users" data-section="users" onclick="showSection('users'); showUsersTab('pending');"><span class="nav-icon">[◉]</span> Account Approvals <span class="nav-badge" id="nav-pending-users" style="color:var(--warn)">0</span></div></div>
     <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="register" onclick="showSection('register')"><span class="nav-icon">[≡]</span> Asset Table <span class="nav-badge" id="nav-total">0</span></div></div>
     <div class="nav-section nav-admin-only nav-infosec-only"><div class="nav-label">Analysis</div><div class="nav-item" data-section="risk" onclick="showSection('risk')"><span class="nav-icon">[△]</span> Risk Register</div><div class="nav-item" data-section="controls" onclick="showSection('controls')"><span class="nav-icon">[✓]</span> Control Metrics</div><div class="nav-item" data-section="actions" onclick="showSection('actions')"><span class="nav-icon">[!]</span> Action Plans <span class="nav-badge" id="nav-actions" style="color:var(--warn)">0</span></div></div>
-    <div class="nav-section nav-infosec-only nav-admin-users"><div class="nav-label">Governance</div><div class="nav-item" data-section="users" onclick="showSection('users')"><span class="nav-icon">[◎]</span> User Management</div><div class="nav-item" data-section="logs" onclick="showSection('logs')"><span class="nav-icon">[⌗]</span> System Logs</div></div>
+    <div class="nav-section nav-infosec-only nav-admin-users"><div class="nav-label">Governance</div><div class="nav-item" data-section="logs" onclick="showSection('logs')"><span class="nav-icon">[⌗]</span> System Logs</div></div>
     <div class="nav-section"><div class="nav-label">Documentation</div><div class="nav-item nav-admin-only" data-section="report" onclick="showSection('report')"><span class="nav-icon">[✎]</span> Reporting & Sign-offs</div><div class="nav-item" data-section="guidelines" onclick="showSection('guidelines')"><span class="nav-icon">[?]</span> Risk Guidelines</div></div>
   </nav>
 
@@ -517,18 +520,32 @@
     </div>
 
 
+    <div id="sec-my-submissions" class="section">
+      <div class="page-header"><div><div class="page-title">MY <span>SUBMISSIONS</span></div>
+      <div class="page-desc">// Live workflow, approvals you evaluated, and rejected or deleted items (audit log)</div></div></div>
+      <div class="table-wrap table-wrap--submissions"><table class="my-submissions-table"><thead><tr><th>ID</th><th>Name</th><th>Type</th><th class="col-infosec-only">User originator</th><th>Status</th><th>Notes</th></tr></thead>
+      <tbody id="my-submissions-body"></tbody></table></div>
+    </div>
     <div id="sec-draft-queue" class="section">
       <div class="page-header"><div><div class="page-title">DRAFT <span>QUEUE</span></div><div class="page-desc">// Assets awaiting Info Sec profiling</div></div></div>
       <div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Submitted By</th><th>Actions</th></tr></thead><tbody id="draft-queue-body"></tbody></table></div>
     </div>
     <div id="sec-pending-queue" class="section">
-      <div class="page-header"><div><div class="page-title">PENDING <span>APPROVAL</span></div><div class="page-desc">// CISO review queue</div></div></div>
+      <div class="page-header"><div><div class="page-title">ASSET <span>APPROVAL</span></div><div class="page-desc">// CISO review queue for submitted assets</div></div></div>
       <div id="pending-queue-content"></div>
     </div>
 
     <div id="sec-users" class="section">
-      <div class="page-header"><div><div class="page-title">USER <span>MANAGEMENT</span></div><div class="page-desc">// Approve Standard User and Info Sec accounts</div></div></div>
-      <div class="table-wrap"><table><thead><tr><th>Email</th><th>Requested Role</th><th>Status</th><th>Actions</th></tr></thead><tbody id="users-body"></tbody></table></div>
+      <div class="page-header"><div><div class="page-title">ACCOUNT <span>APPROVALS</span></div><div class="page-desc">// Email-verified users awaiting role promotion</div></div></div>
+      <div class="users-tab-bar" role="tablist" aria-label="Account approval views">
+        <button type="button" class="users-tab active" data-users-tab="pending" role="tab" aria-selected="true" onclick="showUsersTab('pending')">Pending Approval <span class="users-tab-count" id="users-tab-pending-count">0</span></button>
+        <button type="button" class="users-tab" data-users-tab="active" role="tab" aria-selected="false" onclick="showUsersTab('active')">Active</button>
+        <button type="button" class="users-tab" data-users-tab="rejected" role="tab" aria-selected="false" onclick="showUsersTab('rejected')">Rejected</button>
+      </div>
+      <p id="users-tab-hint" class="users-tab-hint">Info Sec approves Standard User requests · Admin (CISO) approves Info Sec requests.</p>
+      <div class="table-wrap" data-users-panel="pending">
+        <table><thead><tr><th>Email</th><th>Requested Role</th><th>Approver</th><th>Status</th><th>Actions</th></tr></thead><tbody id="users-body"></tbody></table>
+      </div>
     </div>
     <div id="sec-logs" class="section">
       <div class="page-header"><div><div class="page-title">SYSTEM <span>LOGS</span></div><div class="page-desc">// Audit trail</div></div></div>
@@ -731,7 +748,7 @@
 
 <div id="notification" class="notification"></div>
 
-<script src="./assets/scripts/app.js?v=20260517-fix1"></script>
+<script src="./assets/scripts/app.js?v=20260517-rejected-auth"></script>
 
 </body>
 </html>
