@@ -14,7 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   
-  <link rel="stylesheet" href="./assets/styles/main.css?v=20260518-user-dash-csv">
+  <link rel="stylesheet" href="./assets/styles/main.css?v=20260518-user-asset-export">
 </head>
 <body>
 
@@ -676,6 +676,7 @@
           <button type="button" class="btn btn-sm" onclick="downloadAssetCsvTemplate()" title="Blank template: Sheet 1 — Asset Identification columns only">CSV template</button>
           <button type="button" class="btn btn-sm csv-elevated-only" onclick="downloadAllIarCsvTemplates()" title="Blank header-only CSVs for all IAR sheets (1–6, 8–9)">All CSV templates</button>
           <button type="button" class="btn btn-sm btn-primary" onclick="triggerAssetCsvImport()" title="Upload Sheet 1 CSV to create Drafts (Standard User) or any supported sheet (Info Sec / Admin)">Import CSV</button>
+          <button type="button" class="btn btn-sm btn-primary csv-user-only" onclick="exportUserAssetTableCsv()" title="Download the approved Asset Table as CSV (Sheet 1 — Asset Identification columns)">Export table (CSV)</button>
           <button type="button" class="btn btn-sm btn-primary csv-elevated-only" onclick="exportIarCsvPack()" title="Download eight data CSVs (sheets 1–6, 8–9) for approved + pending assets">Export all CSVs</button>
           <button type="button" class="btn btn-sm csv-elevated-only" onclick="exportAssetRegisterCsv()" title="Single wide table with all asset columns">Export register (CSV)</button>
           <button type="button" class="btn btn-sm csv-elevated-only" onclick="downloadIarExcelTemplateWorkbook()" title="Styled .xlsx with dropdowns; save sheets as CSV to import">Excel templates (styled)</button>

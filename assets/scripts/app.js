@@ -4347,6 +4347,27 @@ async function importCsvFirewall(rows) {
   notify(`Updated firewall review for ${n} asset(s).`);
 }
 
+/** Standard User: approved register only, Sheet 1 column layout (aligned with CSV template / IAR pack sheet 01). */
+function exportUserAssetTableCsv() {
+  if (!currentUser) {
+    notify('Sign in to export.', true);
+    return;
+  }
+  if (currentRole !== 'user') return;
+  const assets = approvedAssetsOnly();
+  if (!assets.length) {
+    notify('No approved records to export.', true);
+    return;
+  }
+  const body = [CSV_SHEET1_HEADERS.join(',')].concat(assets.map(a => csvLine(CSV_SHEET1_HEADERS, [
+    a.id, a.name, a.description || '', a.group_name || '', a.hostname || '', a.server || '', a.custodian || '',
+    a.ip_address || '', a.environment || '', a.department || '', a.type
+  ]))).join('\n');
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  downloadTextFile(`ImpactLens_Approved_Register_${stamp}.csv`, body);
+  notify(`Exported ${assets.length} approved asset row(s) (identification columns).`);
+}
+
 function exportAssetRegisterCsv() {
   if (currentRole !== 'infosec' && currentRole !== 'admin') {
     notify('CSV export requires Info Sec or Admin role.', true);
@@ -5614,6 +5635,7 @@ window.resetAuthSteps = resetAuthSteps;
 window.downloadAssetCsvTemplate = downloadAssetCsvTemplate;
 window.downloadAllIarCsvTemplates = downloadAllIarCsvTemplates;
 window.downloadIarExcelTemplateWorkbook = downloadIarExcelTemplateWorkbook;
+window.exportUserAssetTableCsv = exportUserAssetTableCsv;
 window.exportIarCsvPack = exportIarCsvPack;
 window.triggerAssetCsvImport    = triggerAssetCsvImport;
 window.handleAssetCsvFileSelected = handleAssetCsvFileSelected;

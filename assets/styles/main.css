@@ -260,6 +260,11 @@ body[data-role="user"] .csv-elevated-only {
   display: none !important;
 }
 
+/* Asset Table — read-only CSV export visible only to Standard User (elevated roles use full register / IAR pack) */
+body:not([data-role="user"]) .csv-user-only {
+  display: none !important;
+}
+
 body:not([data-role="user"]) .dashboard-user-only {
   display: none !important;
 }
