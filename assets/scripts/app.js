@@ -29,6 +29,40 @@ function getAuthRedirectUrl() {
     return origin + path;
 }
 
+/** Remove Supabase auth blobs from localStorage — local session only; keeps unrelated keys. */
+function clearSupabasePersistedSession() {
+    try {
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && (k.startsWith('sb-') || k.startsWith('supabase.'))) keys.push(k);
+        }
+        keys.forEach(k => localStorage.removeItem(k));
+    } catch (e) { console.warn('clearSupabasePersistedSession:', e); }
+}
+
+/** True when this document load was reached via browser Back/Forward (history). */
+function wasHistoryNavigation() {
+    try {
+        const n = performance.getEntriesByType?.('navigation')?.[0];
+        return !!(n && (n.type === 'back_forward'));
+    } catch (_) { return false; }
+}
+
+/** OTP / magic-link / hash-token flows — do not purge session on history navigation. */
+function urlHasAuthHandshakeParams() {
+    try {
+        const q = window.location.search || '';
+        const h = window.location.hash || '';
+        return /(?:^|[?&#])(?:token_hash|access_token|refresh_token|code)=/i.test(q + h);
+    } catch (_) { return false; }
+}
+
+const IMPACTLENS_HISTORY_SIGNOUT_NOTICE_KEY = 'impactlens_notice_history_return';
+/** Toast after session was cleared because the document was reached via browser history (Back/Forward). */
+const HISTORY_RETURN_SECURITY_SIGNOUT_MSG =
+    'You were signed out automatically for security after using the browser Back button. Sign in again to continue.';
+
 function stripAuthParamsFromUrl() {
     try {
         const url = new URL(window.location.href);
@@ -1841,7 +1875,7 @@ async function handleLogin(event) {
     }
 }
 
-function handleLogout() {
+function handleLogout(signOutMessage = 'Signed out.') {
     // Reset client state and flip the UI FIRST so the user is never trapped
     // waiting on the Supabase round-trip (which can hang on slow networks).
     document.body.dataset.role = '';
@@ -1852,7 +1886,7 @@ function handleLogout() {
     pendingVerifyEmail = null;
     authUiReady = false;
     showAuthScreen();
-    notify('Signed out.');
+    notify(signOutMessage, signOutMessage !== 'Signed out.');
     // Best-effort revoke the cloud session in the background; ignore errors.
     if (supabaseClient) {
         try {
@@ -1871,13 +1905,7 @@ function forceResetSession() {
         if (supabaseClient) supabaseClient.auth.signOut().catch(() => {});
     } catch (_) { /* noop */ }
     try {
-        // Remove any keys Supabase JS may have left behind.
-        const keys = [];
-        for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
-            if (k && (k.startsWith('sb-') || k.startsWith('supabase.'))) keys.push(k);
-        }
-        keys.forEach(k => localStorage.removeItem(k));
+        clearSupabasePersistedSession();
         sessionStorage.clear();
     } catch (e) { console.warn('Storage clear failed:', e); }
     // Drop our app caches too so notifications don't replay.
@@ -1894,6 +1922,33 @@ let suppressAuthReset = false;
 // run enterAuthenticatedApp twice (handleLogin + onAuthStateChange) with mismatched args.
 let pendingLoginRole = null;
 let enterAppInFlight = null;
+
+/** Clear persisted + in-browser Supabase session when this load is a history navigation — not OTP/OAuth handshake. */
+async function purgeSessionAfterHistoryNavigation() {
+    clearSupabasePersistedSession();
+    try {
+        await supabaseClient.auth.signOut();
+    } catch (_) { /* noop */ }
+    document.body.dataset.role = '';
+    currentUser = null;
+    currentRole = null;
+    currentProfile = null;
+    currentAccessToken = null;
+    pendingVerifyEmail = null;
+    authUiReady = false;
+    showAuthScreen();
+    try {
+        sessionStorage.setItem(IMPACTLENS_HISTORY_SIGNOUT_NOTICE_KEY, '1');
+    } catch (_) { /* noop */ }
+}
+
+function flushHistoryReturnSecurityNotice() {
+    try {
+        if (sessionStorage.getItem(IMPACTLENS_HISTORY_SIGNOUT_NOTICE_KEY) !== '1') return;
+        sessionStorage.removeItem(IMPACTLENS_HISTORY_SIGNOUT_NOTICE_KEY);
+        notify(HISTORY_RETURN_SECURITY_SIGNOUT_MSG, true);
+    } catch (_) { /* noop */ }
+}
 
 async function enterAuthenticatedApp(session, requestedRole = null) {
     if (!session?.user) return;
@@ -6227,6 +6282,15 @@ async function exportDataXLSX() {
 // ==========================================
 // 8. INITIALIZATION
 // ==========================================
+// BFCache restore: same JS heap as before freeze — sign out if they were in the app.
+window.addEventListener('pageshow', (e) => {
+    if (!e.persisted || !supabaseClient) return;
+    if (urlHasAuthHandshakeParams()) return;
+    if (authUiReady && currentUser) {
+        handleLogout(HISTORY_RETURN_SECURITY_SIGNOUT_MSG);
+    }
+});
+
 (async function initApp() {
     if (!supabaseClient) {
         showAuthScreen();
@@ -6235,10 +6299,17 @@ async function exportDataXLSX() {
 
     const handledCallback = await handleAuthCallbackFromUrl();
     if (!handledCallback) {
-        const { data: { session } } = await supabaseClient.auth.getSession();
-        if (session) await enterAuthenticatedApp(session);
-        else showAuthScreen();
+        const { data: { session: initialSession } } = await supabaseClient.auth.getSession();
+        if (wasHistoryNavigation() && !urlHasAuthHandshakeParams() && initialSession) {
+            await purgeSessionAfterHistoryNavigation();
+        } else if (initialSession) {
+            await enterAuthenticatedApp(initialSession);
+        } else {
+            showAuthScreen();
+        }
     }
+
+    flushHistoryReturnSecurityNotice();
 
     supabaseClient.auth.onAuthStateChange(async (event, session) => {
         if (event === 'INITIAL_SESSION') return;
