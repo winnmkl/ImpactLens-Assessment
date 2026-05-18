@@ -1,2 +1,3 @@
-Asset ID,Name of Asset,Description,Group,Hostname,Server,Custodian,IP Address,Environment,Department,Type
-IA-999,Example row from docs,Replace description,Registrar,REG-DB-01,PostgreSQL,University Registrar,10.0.0.1,Internal,Office of the Registrar,IA
+Asset ID,Name of Asset,Description,Group,Hostname,Server,Custodian,IP Address,Environment,Department,Type,Asset owners
+IA-999,Example row from docs,Replace description,Registrar,REG-DB-01,PostgreSQL,University Registrar,10.0.0.1,Internal,Office of the Registrar,IA,"Registrar CIO
+Data Steward"

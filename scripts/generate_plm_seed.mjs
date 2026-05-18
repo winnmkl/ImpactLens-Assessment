@@ -1,5 +1,7 @@
 /**
  * Generates supabase/seed_plm_assets.sql — run: node scripts/generate_plm_seed.mjs
+ * For the full ISRA JSON + 100+ asset block embedded in master_setup.sql,
+ * use: node scripts/regenerate_master_asset_seed.mjs (replaces section 4 of supabase/master_setup.sql).
  */
 import fs from 'fs';
 import path from 'path';

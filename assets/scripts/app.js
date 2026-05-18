@@ -95,6 +95,9 @@ let globalLogs = [];
 let globalUserProfiles = [];
 let usersActiveTab = 'pending';
 let editingId = null;
+/** @type {Array<object>} Persisted scenarios (see migrateLegacyToRiskScenarios). */
+let assetRiskScenarios = [];
+let currentRiskScenarioIx = 0;
 let currentUser = null;
 let currentRole = null; // 'user' | 'infosec' | 'admin'
 let currentProfile = null;
@@ -349,6 +352,51 @@ const MANDATORY_CONTROLS = {
 const RESIDUAL_FLOOR_RANK = { 'Very Low': 0, 'Low': 1, 'Moderate': 2, 'High': 3 };
 const RESIDUAL_FLOOR_NAME = ['Very Low', 'Low', 'Moderate', 'High'];
 
+function rollupWorstResidualRating(vals) {
+  const arr = vals && vals.length ? vals : ['Moderate'];
+  return arr.reduce((w, x) =>
+    RESIDUAL_FLOOR_RANK[x || 'Very Low'] > RESIDUAL_FLOOR_RANK[w] ? (x || 'Very Low') : w
+    , 'Very Low');
+}
+
+function rollupWorstInherentRatings(vals) {
+  const arr = vals && vals.length ? vals : ['Moderate'];
+  return arr.reduce((w, x) =>
+    RESIDUAL_FLOOR_RANK[x || 'Very Low'] > RESIDUAL_FLOOR_RANK[w] ? (x || 'Very Low') : w
+    , 'Very Low');
+}
+
+function worstScenarioForReporting(scenarios) {
+  if (!scenarios.length) return null;
+  let w = scenarios[0];
+  let rk = RESIDUAL_FLOOR_RANK[w.residual || 'Very Low'];
+  scenarios.forEach(sc => {
+    const r = RESIDUAL_FLOOR_RANK[sc.residual || 'Very Low'];
+    const inhCmp = RESIDUAL_FLOOR_RANK[sc.inherit || 'Very Low'] - RESIDUAL_FLOOR_RANK[w.inherit || 'Very Low'];
+    if (r > rk || (r === rk && inhCmp > 0)) {
+      w = sc;
+      rk = r;
+    }
+  });
+  return w;
+}
+
+function rollupScenarioWorstHeatmapAxes(scenarios) {
+  if (!scenarios || !scenarios.length) return null;
+  let w = scenarios[0];
+  let wr = RESIDUAL_FLOOR_RANK[w.inherit || 'Very Low'];
+  scenarios.forEach(sc => {
+    const r = RESIDUAL_FLOOR_RANK[sc.inherit || 'Very Low'];
+    const prod = (Number(sc.prob) || 3) * (Number(sc.sev) || 3);
+    const wp = (Number(w.prob) || 3) * (Number(w.sev) || 3);
+    if (r > wr || (r === wr && prod > wp)) {
+      w = sc;
+      wr = r;
+    }
+  });
+  return w;
+}
+
 /** Resolve which mandatory baselines apply to the current asset state. */
 function getApplicableMandatorySets(ctx) {
     const sets = [];
@@ -375,16 +423,23 @@ const RISK_TEMPLATES = {
     "legal_dpa": { desc: "Non-compliance to Data Privacy Act (DPA)", prob: "3", sev: "5", action: "Appoint DPO, conduct regular Privacy Impact Assessments (PIA), and update privacy notices." }
 };
 
-// THE STRICT CYBERSECURITY PROFILES MATRIX
-const ASSET_PROFILES = {
-    'IA':  { pii: 'Y', spi: 'Y', corp: 'Y', c: 3, i: 3, a: 3 },
-    'PhA': { pii: 'N', spi: 'N', corp: 'N', c: 1, i: 1, a: 2 },
-    'PA':  { pii: 'Y', spi: 'N', corp: 'Y', c: 3, i: 2, a: 2 },
-    'SA':  { pii: 'N', spi: 'N', corp: 'Y', c: 2, i: 3, a: 3 },
-    'SV':  { pii: 'N', spi: 'N', corp: 'Y', c: 2, i: 2, a: 3 },
-    'FA':  { pii: 'Y', spi: 'Y', corp: 'Y', c: 3, i: 3, a: 3 }
-};
+/** Valid register types (profiles no longer dictate CIA — assessors justify ratings in §02). */
+const ALLOWED_ASSET_TYPES = new Set(['IA', 'PhA', 'PA', 'SA', 'SV', 'FA']);
 
+/** Initial qualitative anchors when a threat taxonomy row is picked (editable; feeds likelihood/impact before escalations). */
+const RISK_QUALITATIVE_DEFAULTS = {
+    phys_theft:       { likelihood_qual: 3, impact_qual: 4 },
+    phys_destruct:    { likelihood_qual: 2, impact_qual: 5 },
+    hr_insider:       { likelihood_qual: 3, impact_qual: 4 },
+    hr_accidental:    { likelihood_qual: 4, impact_qual: 3 },
+    cyber_ext_ransomware: { likelihood_qual: 4, impact_qual: 5 },
+    cyber_ext_leak:   { likelihood_qual: 3, impact_qual: 5 },
+    cyber_ext_ddos:   { likelihood_qual: 3, impact_qual: 3 },
+    cyber_ext_supply: { likelihood_qual: 2, impact_qual: 4 },
+    cyber_int_unauth: { likelihood_qual: 3, impact_qual: 5 },
+    cyber_int_vuln:   { likelihood_qual: 4, impact_qual: 4 },
+    legal_dpa:        { likelihood_qual: 3, impact_qual: 5 }
+};
 function generateSequentialId(type) {
     if (!type) return '';
     const existing = globalAssets.filter(a => a.type === type);
@@ -417,44 +472,38 @@ function runEnforcementEngine(skipAutoTemplate = false) {
     const env = document.getElementById('f-environment') ? document.getElementById('f-environment').value : 'Internal';
     
     // ---------------------------------------------------------
-    // GUARDRAIL 1: STRICT CYBERSECURITY DATA & CIA LOCKS
+    // GUARDRAIL 1: CLASSIFICATION — assessor-led (ISO / RA 10173 / internal policy).
+    // Standard Users do not edit §02; neutral defaults persist until Info Sec validates.
     // ---------------------------------------------------------
     const lockC = document.getElementById('lock-c');
     const lockI = document.getElementById('lock-i');
     const lockA = document.getElementById('lock-a');
+    const elevate = currentRole === 'infosec' || currentRole === 'admin';
 
-    if (type && ASSET_PROFILES[type]) {
-        const profile = ASSET_PROFILES[type];
-        
-        // Auto-fill and completely lock ALL 6 fields based on the selected Type
-        ['f-pii', 'f-spi', 'f-corp', 'f-c', 'f-i', 'f-a'].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                const key = id.replace('f-', '');
-                el.value = profile[key];
-                el.disabled = true; // Hardcoded completely
-            }
-        });
+    ['f-pii', 'f-spi', 'f-corp', 'f-c', 'f-i', 'f-a'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !elevate || !type;
+    });
+    ['f-q-disclosure-impact', 'f-q-integrity-impact', 'f-q-availability-impact', 'f-q-personal-scope', 'f-q-corp-strategic'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !elevate || !type;
+    });
 
-        // Special Rule: Internet Facing always forces Availability to 3
+    if (env === 'Internet Facing') {
         const elA = document.getElementById('f-a');
-        if (env === 'Internet Facing' && elA) {
-            elA.value = '3';
+        if (elA && elevate) {
+            elA.value = String(Math.max(3, parseInt(elA.value, 10) || 3));
         }
+    }
 
-        if(lockC) lockC.textContent = '🔒 System Enforced';
-        if(lockI) lockI.textContent = '🔒 System Enforced';
-        if(lockA) lockA.textContent = (env === 'Internet Facing') ? '🔒 Env Driven' : '🔒 System Enforced';
-
-    } else {
-        // Unlock fields if no type is selected
-        ['f-pii', 'f-spi', 'f-corp', 'f-c', 'f-i', 'f-a'].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.disabled = false; 
-        });
-        if(lockC) lockC.textContent = '';
-        if(lockI) lockI.textContent = '';
-        if(lockA) lockA.textContent = '';
+    if (lockC) lockC.textContent = elevate ? 'Assessor' : '';
+    if (lockI) lockI.textContent = elevate ? 'Assessor' : '';
+    if (lockA) {
+        lockA.textContent = !elevate
+            ? ''
+            : env === 'Internet Facing'
+                ? 'Min. 3 — Internet-facing floor'
+                : 'Assessor';
     }
 
     const score = (+g('f-c')) + (+g('f-i')) + (+g('f-a'));
@@ -505,9 +554,7 @@ function runEnforcementEngine(skipAutoTemplate = false) {
     // disabled the very controls — RBAC/MFA/Backup/Encryption — that
     // the standards-based floor demands).
     // ---------------------------------------------------------
-    const threat = g('f-risk-category');
-    const relevantControls = new Set(controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13]);
-
+    const relevantUnion = relevanceUnionForConfiguredScenarios();
     const mandatoryCtx = {
         type,
         c: parseInt(g('f-c')) || 0,
@@ -524,7 +571,7 @@ function runEnforcementEngine(skipAutoTemplate = false) {
         const cb = document.getElementById('ctrl' + i);
         const label = cb ? cb.parentElement : null;
         if (!cb || !label) continue;
-        const isRelevant  = relevantControls.has(i);
+        const isRelevant  = relevantUnion.has(i);
         const isMandatory = mandatoryIds.has(i);
         // strip prior modifier classes
         label.classList.remove('ctrl-relevant', 'ctrl-mandatory', 'ctrl-both', 'ctrl-disabled');
@@ -676,67 +723,244 @@ function renderMbssFirewallAlignmentPanel(messages) {
     panel.classList.remove('hidden');
 }
 
-function calculateRiskMath() {
-    let p = parseInt(g('f-prob')) || 3;
-    let s = parseInt(g('f-sev')) || 3;
-    const threat        = g('f-risk-category');
-    const env           = g('f-environment');
-    const currentPii    = g('f-pii');
-    const currentSpi    = g('f-spi');
-    const type          = g('f-type');
-    const cVal          = parseInt(g('f-c')) || 0;
-    const iVal          = parseInt(g('f-i')) || 0;
-    const aVal          = parseInt(g('f-a')) || 0;
-    const ciaScore      = cVal + iVal + aVal;
+function controlIdsForThreatKey(threat) {
+    const ids = controlMap[threat] || [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+    return new Set(ids);
+}
 
-    // -----------------------------------------------------------
-    // INHERENT-RISK ESCALATIONS (NIST SP 800-30 Rev.1 — adversarial
-    // factors + ISO 27005 likelihood-impact adjustments)
-    // -----------------------------------------------------------
-    if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.min(5, p + 1);
-    if ((currentPii === 'Y' || currentSpi === 'Y') && (threat === 'cyber_ext_leak' || threat === 'legal_dpa')) s = 5;
-    // Restricted-class cyber/insider threats inherit max severity automatically.
-    if (ciaScore >= 8 && (threat.startsWith('cyber_') || threat === 'hr_insider')) s = Math.max(s, 4);
-    // PCI-DSS scoped assets always carry max severity for cyber threats (CHD breach is total loss).
-    if (type === 'FA' && threat.startsWith('cyber_')) s = 5;
-    // Internet-facing assets always face credible probability — never below 3 for cyber-external.
-    if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.max(p, 3);
+/** Union relevance across all drafted scenarios so implemented controls persist when profiling several risks per asset. */
+function relevanceUnionForConfiguredScenarios() {
+    const catsAll = [];
+    if (assetRiskScenarios.length) assetRiskScenarios.forEach(sc => catsAll.push(String(sc.riskCategory || '').trim()));
+    const uniq = [...new Set(catsAll.filter(Boolean))];
+    const cats = uniq.length ? uniq : [String(g('f-risk-category') || '').trim()];
+    const u = new Set();
+    cats.forEach(t => controlIdsForThreatKey(t || '').forEach(id => u.add(id)));
+    if (!u.size) [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].forEach(i => u.add(i));
+    return u;
+}
 
-    const inherentRating = INHERIT[s + '-' + p] || 'Moderate';
-    const probDisp = document.getElementById('f-prob-display');
-    const sevDisp  = document.getElementById('f-sev-display');
-    const probH    = document.getElementById('f-prob');
-    const sevH     = document.getElementById('f-sev');
-    if (probH)    probH.value = String(p);
-    if (sevH)     sevH.value = String(s);
-    if (probDisp) probDisp.value = String(p);
-    if (sevDisp)  sevDisp.value = String(s);
-    const rEl = document.getElementById('r-inherit');
-    if (rEl) { rEl.textContent = inherentRating; rEl.style.color = riskColor(inherentRating); }
+function anchorsFromRiskBasisPayload(basis) {
+    basis = basis && typeof basis === 'object' ? basis : {};
+    const lk = Math.max(1, Math.min(5, parseInt(basis.likelihood_qual ?? 3, 10)));
+    const iq = Math.max(1, Math.min(5, parseInt(basis.impact_qual ?? 3, 10)));
+    let p = lk;
+    const prior = String(basis.prior_incidents || 'N').trim().toUpperCase();
+    if (prior === 'Y') p = Math.min(5, p + 1);
+    const thr = String(basis.threat_statement || '').trim();
+    const vul = String(basis.vulnerability_statement || '').trim();
+    const occ = String(basis.occurrence_justification || '').trim();
+    let s = iq;
+    if (thr.length < 24 || vul.length < 24) {
+        if (thr.length >= 24) p = Math.max(p, 2);
+        if (vul.length >= 24) s = Math.max(s, 2);
+    } else {
+        if (vul.length >= 180) s = Math.min(5, s + 1);
+        if (thr.length >= 140) p = Math.min(5, Math.max(p, 3));
+        if ((occ.includes('historic') || occ.includes('prior') || occ.includes('happened')) && prior !== 'Y')
+            p = Math.min(5, p + 1);
+        if (/annual|regular|recent incident|past breach/i.test(occ)) p = Math.min(5, p + 1);
+    }
 
-    // -----------------------------------------------------------
-    // RESIDUAL REDUCTION (defense-in-depth, weighted, with diminishing
-    // returns and synergy bonuses)
-    // -----------------------------------------------------------
-    const relevantSet = new Set(controlMap[threat] || [1,2,3,4,5,6,7,8,9,10,11,12,13]);
+    const choiceBand = z => Math.max(1, Math.min(3, parseInt(String(z ?? 2), 10) || 2));
+    const tband = choiceBand(basis.threat_choice);
+    const vband = choiceBand(basis.vulnerability_choice);
+    /* High-threat band → ↑ likelihood anchor; Low → slight discount. Weakness posture → ↑ impact. */
+    if (tband === 3) p = Math.min(5, p + 1);
+    else if (tband === 1) p = Math.max(1, p - 1);
+    if (vband === 3) s = Math.min(5, s + 1);
+    else if (vband === 1) s = Math.max(1, s - 1);
+
+    return { p: Math.max(1, Math.min(5, p)), s: Math.max(1, Math.min(5, s)) };
+}
+
+function defaultRiskBasisObject() {
+    return {
+        threat_statement: '',
+        vulnerability_statement: '',
+        occurrence_justification: '',
+        likelihood_qual: 3,
+        impact_qual: 3,
+        prior_incidents: 'N',
+        threat_choice: 2,
+        vulnerability_choice: 2,
+    };
+}
+
+function blankRiskScenario() {
+    return {
+        id: 'rs-' + Math.random().toString(36).slice(2, 11),
+        riskCategory: '',
+        riskDesc: '',
+        risk_basis: defaultRiskBasisObject(),
+        prob: 3,
+        sev: 3,
+        inherit: 'Moderate',
+        residual: 'Moderate',
+        resProb: 3,
+        resSev: 3,
+        actionType: 'Mitigate',
+        actionStatus: 'Pending',
+        actionPlan: '',
+        actionOwner: '',
+        actionDate: '',
+    };
+}
+
+function parseAssetRiskScenariosArray(rawJson) {
+    try {
+        const v = typeof rawJson === 'string' ? JSON.parse(rawJson || 'null') : rawJson;
+        if (Array.isArray(v) && v.length) return v;
+    } catch (_) { /* noop */ }
+    return null;
+}
+
+function parsedRiskScenarioCountForAsset(asset) {
+    const p = parseAssetRiskScenariosArray(asset?.asset_risks_json);
+    return p ? p.length : 1;
+}
+
+function normalizeImportedRiskScenarioRow(row) {
+    const sc = blankRiskScenario();
+    if (row && typeof row === 'object') {
+        if (row.id) sc.id = String(row.id);
+        sc.riskCategory = row.riskCategory ?? row.risk_category ?? '';
+        sc.riskDesc = row.riskDesc ?? row.risk_desc ?? '';
+        const rbIn = row.risk_basis && typeof row.risk_basis === 'object' ? row.risk_basis : {};
+        sc.risk_basis = { ...defaultRiskBasisObject(), ...rbIn };
+        sc.actionType = row.actionType ?? row.action_type ?? 'Mitigate';
+        sc.actionStatus = row.actionStatus ?? row.action_status ?? 'Pending';
+        sc.actionPlan = row.actionPlan ?? row.action_plan ?? '';
+        sc.actionOwner = row.actionOwner ?? row.action_owner ?? '';
+        sc.actionDate = row.actionDate ?? row.action_date ?? '';
+        if (row.prob != null) sc.prob = row.prob;
+        if (row.sev != null) sc.sev = row.sev;
+        if (row.inherit) sc.inherit = row.inherit;
+        if (row.residual) sc.residual = row.residual;
+        if (row.resProb != null) sc.resProb = row.resProb;
+        if (row.resSev != null) sc.resSev = row.resSev;
+    }
+    return sc;
+}
+
+function migrateLegacyToRiskScenarios(asset) {
+    const parsed = parseAssetRiskScenariosArray(asset.asset_risks_json);
+    if (parsed) return parsed.map(normalizeImportedRiskScenarioRow);
+    const legacyBasis = parseJsonSafe(asset.risk_basis_json || '{}', {});
+    const rb = typeof legacyBasis === 'object' && legacyBasis !== null ? { ...defaultRiskBasisObject(), ...legacyBasis } : defaultRiskBasisObject();
+    const sc = blankRiskScenario();
+    sc.id = 'rs-legacy';
+    sc.riskCategory = asset.riskCategory ?? '';
+    sc.riskDesc = asset.riskDesc ?? '';
+    sc.risk_basis = rb;
+    sc.actionType = asset.actionType ?? 'Mitigate';
+    sc.actionStatus = asset.actionStatus ?? 'Pending';
+    sc.actionPlan = asset.actionPlan ?? '';
+    sc.actionOwner = asset.actionOwner ?? '';
+    sc.actionDate = asset.actionDate ?? '';
+    if (asset.prob != null) sc.prob = asset.prob;
+    if (asset.sev != null) sc.sev = asset.sev;
+    if (asset.inherit) sc.inherit = asset.inherit;
+    if (asset.residual) sc.residual = asset.residual;
+    return [sc];
+}
+
+function getActiveCheckboxCtrlIdsFromForm() {
     const active = [];
     for (let i = 1; i <= 13; i++) {
         const cb = document.getElementById('ctrl' + i);
         if (cb && cb.checked && !cb.disabled) active.push(i);
     }
-    const activeRelevant = active.filter(id => relevantSet.has(id));
-    const mbssFwEv = readMbssFirewallEvidenceFromForm();
+    return active;
+}
 
-    // Sum weighted reductions for relevant controls only (MBSS / perimeter evidence may amplify checked controls).
+function gatherAssetResidualCtxFromDom() {
+    const env = g('f-environment');
+    const currentPii = g('f-pii');
+    const currentSpi = g('f-spi');
+    const type = g('f-type');
+    const cVal = parseInt(g('f-c')) || 0;
+    const iVal = parseInt(g('f-i')) || 0;
+    const aVal = parseInt(g('f-a')) || 0;
+    const active = getActiveCheckboxCtrlIdsFromForm();
+    const mbssFwEv = readMbssFirewallEvidenceFromForm();
+    return { env, currentPii, currentSpi, type, cVal, iVal, aVal, active, mbssFwEv };
+}
+
+function flushCurrentRiskScenarioSnapshot() {
+    if (!assetRiskScenarios.length) assetRiskScenarios.push(blankRiskScenario());
+    if (currentRiskScenarioIx < 0 || currentRiskScenarioIx >= assetRiskScenarios.length) currentRiskScenarioIx = 0;
+    const ix = currentRiskScenarioIx;
+    const cur = { ...assetRiskScenarios[ix] };
+    cur.riskCategory = g('f-risk-category');
+    cur.riskDesc = g('f-risk-desc');
+    cur.risk_basis = normalizeRiskBasisForPersist();
+    cur.actionType = g('f-action-type');
+    cur.actionStatus = g('f-action-status');
+    cur.actionPlan = g('f-action-plan');
+    cur.actionOwner = g('f-action-owner');
+    cur.actionDate = g('f-action-date');
+    assetRiskScenarios[ix] = cur;
+}
+
+/** Load one scenario's structured fields onto the DOM (scenario switch). */
+function applyRiskScenarioToForm(sc) {
+    if (!sc) return;
+    const setSel = (id, v) => { const el = document.getElementById(id); if (el !== null && v !== undefined && v !== null) el.value = v; };
+    setSel('f-risk-category', sc.riskCategory || '');
+    setSel('f-risk-desc', sc.riskDesc || '');
+    const rb = { ...defaultRiskBasisObject(), ...(sc.risk_basis && typeof sc.risk_basis === 'object' ? sc.risk_basis : {}) };
+    setSel('f-threat-statement', rb.threat_statement || '');
+    setSel('f-vuln-statement', rb.vulnerability_statement || '');
+    setSel('f-occurrence-justification', rb.occurrence_justification || '');
+    setSel('f-likelihood-qual', rb.likelihood_qual != null ? String(rb.likelihood_qual) : '3');
+    setSel('f-impact-qual', rb.impact_qual != null ? String(rb.impact_qual) : '3');
+    setSel('f-threat-choice', rb.threat_choice != null ? String(rb.threat_choice) : '2');
+    setSel('f-vuln-choice', rb.vulnerability_choice != null ? String(rb.vulnerability_choice) : '2');
+    setSel('f-prior-incidents', rb.prior_incidents || 'N');
+    setSel('f-action-type', sc.actionType || 'Mitigate');
+    setSel('f-action-status', sc.actionStatus || 'Pending');
+    setSel('f-action-plan', sc.actionPlan || '');
+    setSel('f-action-owner', sc.actionOwner || '');
+    setSel('f-action-date', sc.actionDate || '');
+}
+
+function assignResidualMetricsOntoScenario(scenario, bundle) {
+    scenario.prob = bundle.p;
+    scenario.sev = bundle.s;
+    scenario.inherit = bundle.inherentRating;
+    scenario.residual = bundle.residualRating;
+    scenario.resProb = bundle.resP;
+    scenario.resSev = bundle.resSev;
+}
+
+function computeResidualBundleForScenario(scenario, assetCtx) {
+    const anch = anchorsFromRiskBasisPayload(scenario.risk_basis);
+    let p = anch.p;
+    let s = anch.s;
+    const threat = String(scenario.riskCategory || '').trim();
+    const { env, currentPii, currentSpi, type, cVal, iVal, aVal, active, mbssFwEv } = assetCtx;
+    const ciaScore = cVal + iVal + aVal;
+
+    if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.min(5, p + 1);
+    if ((currentPii === 'Y' || currentSpi === 'Y') && (threat === 'cyber_ext_leak' || threat === 'legal_dpa')) s = 5;
+    if (ciaScore >= 8 && (threat.startsWith('cyber_') || threat === 'hr_insider')) s = Math.max(s, 4);
+    if (type === 'FA' && threat.startsWith('cyber_')) s = 5;
+    if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.max(p, 3);
+
+    const inherentRating = INHERIT[s + '-' + p] || 'Moderate';
+
+    const relevantSet = controlIdsForThreatKey(threat);
+    const activeRelevant = active.filter(id => relevantSet.has(id));
+
     let pRedRaw = 0, sRedRaw = 0, evidenceBoostedCtrlCount = 0;
     activeRelevant.forEach(id => {
-        const w = CONTROL_WEIGHTS[id] || { p: 0, s: 0 };
+        const wgt = CONTROL_WEIGHTS[id] || { p: 0, s: 0 };
         const evMult = mbssFwEvidenceMultiplierForControl(id, mbssFwEv);
         if (evMult > 1.001) evidenceBoostedCtrlCount++;
-        pRedRaw += w.p * evMult;
-        sRedRaw += w.s * evMult;
+        pRedRaw += wgt.p * evMult;
+        sRedRaw += wgt.s * evMult;
     });
-    // Apply synergy bonuses where ALL ids of a synergy are active and relevant.
     const appliedSynergies = [];
     CONTROL_SYNERGIES.forEach(syn => {
         if (syn.ids.every(id => activeRelevant.includes(id))) {
@@ -745,13 +969,9 @@ function calculateRiskMath() {
             appliedSynergies.push(syn.label);
         }
     });
-    // Diminishing returns: a single dimension can never drop more than (score − 1)
-    // and the saturation curve plateaus around 70 % of the raw reduction once
-    // beyond the score. This stops "10 controls = score of 1" gaming.
     const dimReturn = (raw, max) => {
         if (raw <= 0) return 0;
         const cap = Math.max(0, max - 1);
-        // Saturating curve: r(x) = cap * (1 - exp(-x / k))   k tuned to 2.0
         const reduction = cap * (1 - Math.exp(-raw / 2.0));
         return Math.min(cap, reduction);
     };
@@ -761,9 +981,6 @@ function calculateRiskMath() {
     let resS = Math.max(1, Math.round(s - sRed));
     let residualRating = INHERIT[resS + '-' + resP] || 'Low';
 
-    // -----------------------------------------------------------
-    // MANDATORY-CONTROL FLOORS (cannot bypass minimum baselines)
-    // -----------------------------------------------------------
     const mandatorySets = getApplicableMandatorySets({ type, c: cVal, i: iVal, a: aVal, pii: currentPii, spi: currentSpi, environment: env });
     const gaps = [];
     let highestFloor = 'Very Low';
@@ -778,61 +995,189 @@ function calculateRiskMath() {
     });
     if (RESIDUAL_FLOOR_RANK[residualRating] < RESIDUAL_FLOOR_RANK[highestFloor]) {
         residualRating = highestFloor;
-        // Reflect the floor on the residual P/S display so the math stays consistent.
-        if (highestFloor === 'High')     { resP = Math.max(resP, 4); resS = Math.max(resS, 4); }
+        if (highestFloor === 'High') { resP = Math.max(resP, 4); resS = Math.max(resS, 4); }
         else if (highestFloor === 'Moderate') { resP = Math.max(resP, 3); resS = Math.max(resS, 3); }
-        else if (highestFloor === 'Low')      { resP = Math.max(resP, 2); resS = Math.max(resS, 2); }
+        else if (highestFloor === 'Low') { resP = Math.max(resP, 2); resS = Math.max(resS, 2); }
     }
 
+    return {
+        p,
+        s,
+        inherentRating,
+        resP,
+        resS,
+        residualRating,
+        appliedSynergies,
+        evidenceBoostedCtrlCount,
+        gaps,
+        mandatorySets,
+        activeRelevant,
+        relevantSetSize: relevantSet.size,
+        threat,
+    };
+}
+
+/** Snapshot current textarea → scenarios[], compute metrics for all scenarios sharing the asset control profile. */
+function ensureScenarioResidualsPersistedAndComputed() {
+    flushCurrentRiskScenarioSnapshot();
+    const ctx = gatherAssetResidualCtxFromDom();
+    let currentBundle = null;
+    assetRiskScenarios.forEach((sc, i) => {
+        const b = computeResidualBundleForScenario(sc, ctx);
+        assignResidualMetricsOntoScenario(sc, b);
+        if (i === currentRiskScenarioIx) currentBundle = b;
+    });
+    const fallbackBundle = computeResidualBundleForScenario(assetRiskScenarios[0], ctx);
+    return { bundle: currentBundle || fallbackBundle, ctx };
+}
+
+function updateRiskScenarioToolbarLabels() {
+    const sumEl = document.getElementById('risk-scenario-summary');
+    const rollEl = document.getElementById('risk-rollup-residual');
+    if (sumEl && assetRiskScenarios.length) {
+        sumEl.textContent = `${assetRiskScenarios.length} scenario${assetRiskScenarios.length === 1 ? '' : 's'} · viewing #${currentRiskScenarioIx + 1}`;
+    }
+    if (rollEl) {
+        const wr = rollupWorstResidualRating(assetRiskScenarios.map(sc => sc.residual));
+        const wi = rollupWorstInherentRatings(assetRiskScenarios.map(sc => sc.inherit));
+        rollEl.textContent = `${wi} inherent (worst) · ${wr} residual (worst) · ${assetRiskScenarios.length} scenario(s)`;
+    }
+}
+
+function renderRiskScenarioTabsUi() {
+    const host = document.getElementById('risk-scenario-tabs');
+    if (!host || !assetRiskScenarios.length) return;
+    host.innerHTML = assetRiskScenarios.map((_, i) =>
+        `<button type="button" class="risk-sc-tab${i === currentRiskScenarioIx ? ' risk-sc-tab--active' : ''}" data-rs-ix="${i}" onclick="switchRiskScenarioIndex(${i})">#${i + 1}</button>`
+    ).join('');
+}
+
+function switchRiskScenarioIndex(ix) {
+    if (typeof ix !== 'number' || ix === currentRiskScenarioIx) return;
+    if (ix < 0 || ix >= assetRiskScenarios.length) return;
+    flushCurrentRiskScenarioSnapshot();
+    currentRiskScenarioIx = ix;
+    applyRiskScenarioToForm(assetRiskScenarios[ix]);
+    renderRiskScenarioTabsUi();
+    updateRiskScenarioToolbarLabels();
+    runEnforcementEngine(false);
+}
+
+function addRiskScenario() {
+    flushCurrentRiskScenarioSnapshot();
+    assetRiskScenarios.push(blankRiskScenario());
+    currentRiskScenarioIx = assetRiskScenarios.length - 1;
+    applyRiskScenarioToForm(assetRiskScenarios[currentRiskScenarioIx]);
+    renderRiskScenarioTabsUi();
+    updateRiskScenarioToolbarLabels();
+    notify('Additional risk scenario — select category + ISRA narratives for each scenario.');
+    runEnforcementEngine(false);
+}
+
+function removeCurrentRiskScenario() {
+    if (assetRiskScenarios.length <= 1) {
+        notify('Each asset keeps at least one risk scenario.', true);
+        return;
+    }
+    flushCurrentRiskScenarioSnapshot();
+    assetRiskScenarios.splice(currentRiskScenarioIx, 1);
+    if (currentRiskScenarioIx >= assetRiskScenarios.length) currentRiskScenarioIx = assetRiskScenarios.length - 1;
+    applyRiskScenarioToForm(assetRiskScenarios[currentRiskScenarioIx]);
+    renderRiskScenarioTabsUi();
+    updateRiskScenarioToolbarLabels();
+    runEnforcementEngine(false);
+}
+
+function calculateRiskMath() {
+    syncInherentAnchorsFromRiskBasis();
+
+    let { bundle, ctx } = ensureScenarioResidualsPersistedAndComputed();
+
+    let p = bundle.p;
+    let s = bundle.s;
+    const inherentRating = bundle.inherentRating;
+    const probDisp = document.getElementById('f-prob-display');
+    const sevDisp = document.getElementById('f-sev-display');
+    const probH = document.getElementById('f-prob');
+    const sevH = document.getElementById('f-sev');
+    if (probH) probH.value = String(p);
+    if (sevH) sevH.value = String(s);
+    if (probDisp) probDisp.value = String(p);
+    if (sevDisp) sevDisp.value = String(s);
+    const rEl = document.getElementById('r-inherit');
+    if (rEl) { rEl.textContent = inherentRating; rEl.style.color = riskColor(inherentRating); }
+
+    let resP = bundle.resP;
+    let resS = bundle.resS;
+    const residualRating = bundle.residualRating;
+    let appliedSynergies = bundle.appliedSynergies;
+    let evidenceBoostedCtrlCount = bundle.evidenceBoostedCtrlCount;
+    const gaps = bundle.gaps;
+    const mandatorySets = bundle.mandatorySets;
+    const activeRelevant = bundle.activeRelevant;
+    const relevantSetSize = bundle.relevantSetSize;
+    const active = ctx.active;
+    const mbssFwEv = ctx.mbssFwEv;
+
+    const worstResidualOverall = rollupWorstResidualRating(assetRiskScenarios.map(sc => sc.residual));
+
     const resEl = document.getElementById('r-residual');
-    if (resEl) { resEl.textContent = residualRating; resEl.style.color = riskColor(residualRating); }
+    if (resEl) {
+        resEl.textContent = residualRating;
+        resEl.style.color = riskColor(residualRating);
+    }
+
     const resProbDisp = document.getElementById('f-res-prob-display');
-    const resSevDisp  = document.getElementById('f-res-sev-display');
+    const resSevDisp = document.getElementById('f-res-sev-display');
     if (resProbDisp) resProbDisp.value = String(resP);
-    if (resSevDisp)  resSevDisp.value = String(resS);
+    if (resSevDisp) resSevDisp.value = String(resS);
 
     const fbEl = document.getElementById('control-feedback');
     if (fbEl) {
         const synTxt = appliedSynergies.length ? ` · synergy: ${appliedSynergies.join(', ')}` : '';
         const evTxt = evidenceBoostedCtrlCount ? ` · MBSS/perimeter evidence reinforces ${evidenceBoostedCtrlCount} applied control(s)` : '';
-        fbEl.textContent = `(${activeRelevant.length} of ${relevantSet.size} relevant mitigating controls applied${synTxt})${evTxt}`;
+        const rollHint = assetRiskScenarios.length > 1 ? ` · rollup worst residual: ${worstResidualOverall}` : '';
+        fbEl.textContent = `Scenario #${currentRiskScenarioIx + 1}: (${activeRelevant.length} of ${relevantSetSize} mitigating controls for this scenario${synTxt})${evTxt}${rollHint}`;
     }
 
-    // -----------------------------------------------------------
-    // RISK-APPETITE ENFORCEMENT (ISO 27001:2022 §6.1.3 d / §8.3 +
-    // NIST RMF — risk acceptance authority by classification)
-    // -----------------------------------------------------------
+    renderRiskScenarioTabsUi();
+    updateRiskScenarioToolbarLabels();
+
+    const type = ctx.type;
     const actTypeSelect = document.getElementById('f-action-type');
-    const lockTreat     = document.getElementById('lock-treat');
+    const lockTreat = document.getElementById('lock-treat');
+    const ciaScore = ctx.cVal + ctx.iVal + ctx.aVal;
+
     if (actTypeSelect) {
-        // Reset the dropdown first.
         Array.from(actTypeSelect.options).forEach(opt => opt.disabled = false);
         let lockMsg = '';
         const optAccept = Array.from(actTypeSelect.options).find(o => o.value === 'Accept');
 
-        if (residualRating === 'High') {
+        if (worstResidualOverall === 'High') {
             if (optAccept) optAccept.disabled = true;
             if (actTypeSelect.value === 'Accept') actTypeSelect.value = 'Mitigate';
-            lockMsg = 'Cannot Accept High residual (ISO 27001:2022 §6.1.3 — outside risk appetite)';
-        } else if (type === 'FA' && residualRating !== 'Low' && residualRating !== 'Very Low') {
+            lockMsg = 'Cannot Accept while any scenario remains High residual (outside appetite)';
+        } else if (type === 'FA' && worstResidualOverall !== 'Low' && worstResidualOverall !== 'Very Low') {
             if (optAccept) optAccept.disabled = true;
             if (actTypeSelect.value === 'Accept') actTypeSelect.value = 'Mitigate';
-            lockMsg = 'PCI-DSS scoped (FA) — Accept blocked unless residual is Low';
-        } else if (ciaScore >= 8 && residualRating === 'Moderate') {
+            lockMsg = 'PCI-DSS scoped (FA) — Accept blocked unless every scenario is Low / Very Low residual';
+        } else if (ciaScore >= 8 && worstResidualOverall === 'Moderate') {
             if (optAccept) optAccept.disabled = true;
             if (actTypeSelect.value === 'Accept') actTypeSelect.value = 'Mitigate';
-            lockMsg = 'Restricted-class data — CISO sign-off needed; Accept blocked at Moderate';
+            lockMsg = 'Restricted-class asset — Accept blocked while any Moderate scenario remains';
         }
         if (lockTreat) lockTreat.textContent = lockMsg ? '🔒 ' + lockMsg : '';
     }
 
     const apSection = document.getElementById('action-plan-section');
+    const rollResidual = rollupWorstResidualRating(assetRiskScenarios.map(rs => rs.residual));
     if (apSection && actTypeSelect) {
-        apSection.style.display = (actTypeSelect.value === 'Accept' || residualRating === 'Very Low') ? 'none' : 'block';
+        const hidePrimary = actTypeSelect.value === 'Accept' || rollResidual === 'Very Low';
+        apSection.style.display = hidePrimary ? 'none' : 'block';
     }
 
     renderComplianceMapping();
-    renderControlGapAnalysis(gaps);
+    renderControlGapAnalysis(gaps, mandatorySets);
     renderMbssFirewallAlignmentPanel(collectMbssFwAlignmentMessages(active, mbssFwEv));
     syncMbssFirewallScoreMirrors();
     syncMbssFirewallSectionState();
@@ -842,16 +1187,18 @@ function applyRiskTemplate(skipEngineUpdate = false) {
     const key = g('f-risk-category');
     if (RISK_TEMPLATES[key]) {
         const descEl = document.getElementById('f-risk-desc');
-        const probEl = document.getElementById('f-prob');
-        const sevEl = document.getElementById('f-sev');
         const apEl = document.getElementById('f-action-plan');
-        
-        if(descEl) descEl.value = RISK_TEMPLATES[key].desc;
-        if(probEl) probEl.value = RISK_TEMPLATES[key].prob;
-        if(sevEl) sevEl.value = RISK_TEMPLATES[key].sev;
-        if(apEl && !apEl.value) apEl.value = RISK_TEMPLATES[key].action;
-        
-        if(!skipEngineUpdate) notify("Risk template applied.");
+        if (descEl) descEl.value = RISK_TEMPLATES[key].desc;
+        const defQ = RISK_QUALITATIVE_DEFAULTS[key];
+        if (defQ) {
+            const lq = document.getElementById('f-likelihood-qual');
+            const iq = document.getElementById('f-impact-qual');
+            if (lq) lq.value = String(Math.max(1, Math.min(5, defQ.likelihood_qual)));
+            if (iq) iq.value = String(Math.max(1, Math.min(5, defQ.impact_qual)));
+        }
+        if (apEl && !apEl.value) apEl.value = RISK_TEMPLATES[key].action;
+
+        if(!skipEngineUpdate) notify("Template applied: scenario text + qualitative anchors (revise threat / vuln narratives).");
     }
     if(!skipEngineUpdate) runEnforcementEngine();
 }
@@ -932,19 +1279,21 @@ function renderComplianceMapping() {
  * Renders missing-mandatory-control panel under the controls section.
  * Each gap is annotated with the framework rationale (ISO / NIST / PCI / DPA)
  * so Info Sec sees exactly WHY a baseline is required, not just THAT it is.
+ *
+ * `#control-gap-panel` is a static node in index.html so the panel cannot “disappear”
+ * when insertBefore targets the wrong parent or runs before DOM is ready.
  */
-function renderControlGapAnalysis(gaps) {
-    let panel = document.getElementById('control-gap-panel');
-    if (!panel) {
-        const compEl = document.getElementById('compliance-mapping-panel');
-        if (!compEl || !compEl.parentNode) return;
-        panel = document.createElement('div');
-        panel.id = 'control-gap-panel';
-        panel.className = 'compliance-panel control-gap-panel hidden';
-        compEl.parentNode.insertBefore(panel, compEl);
-    }
+function renderControlGapAnalysis(gaps, mandatorySets) {
+    const panel = document.getElementById('control-gap-panel');
+    if (!panel) return;
     const showRole = currentRole === 'infosec' || currentRole === 'admin';
-    if (!showRole || !gaps || !gaps.length) {
+    panel.classList.remove('gap-panel--clear');
+    if (!showRole) {
+        panel.classList.add('hidden');
+        panel.innerHTML = '';
+        return;
+    }
+    if (!mandatorySets || !mandatorySets.length) {
         panel.classList.add('hidden');
         panel.innerHTML = '';
         return;
@@ -957,6 +1306,22 @@ function renderControlGapAnalysis(gaps) {
         internetFacing:    'Internet-Facing Exposure'
     };
     const fwLabel = { nist: 'NIST', iso: 'ISO 27001', cis: 'CIS', soc2: 'SOC 2', pci: 'PCI-DSS' };
+    const headerBlock = `
+      <label class="gap-panel-title">⚠️ MANDATORY CONTROL GAPS</label>
+      <div class="gap-summary">Tick the controls below to lift the standards-based residual floor. Controls flagged <span class="ctrl-mandatory-pill">Compliance baseline</span> in the picker do NOT reduce P/S for the chosen threat — they exist solely to satisfy the framework requirement above. Until every gap closes, residual cannot drop below the indicated rating.</div>`;
+
+    if (!gaps || !gaps.length) {
+        panel.innerHTML = `
+      <label class="gap-panel-title gap-panel-title--ok">Mandatory control baselines</label>
+      <p class="gap-summary">When classification, PII, internet exposure, or FA scope applies, required controls raise the <strong>residual floor</strong> until every applicable ID is implemented. Controls flagged <span class="ctrl-mandatory-pill">Compliance baseline</span> satisfy the framework even when they do not reduce P/S for the current threat.</p>
+      <div class="gap-block gap-panel-all-clear">
+        <div class="gap-head"><span class="gap-label gap-label--ok">Status</span></div>
+        <p class="gap-all-clear-msg">All applicable mandatory controls are selected — no standards-based gap is driving the residual floor.</p>
+      </div>`;
+        panel.classList.add('gap-panel--clear');
+        panel.classList.remove('hidden');
+        return;
+    }
     const html = gaps.map(g => {
         const ctrls = g.missing.map(id => {
             const cm = CONTROL_COMPLIANCE[id] || { name: 'Control ' + id };
@@ -976,11 +1341,8 @@ function renderControlGapAnalysis(gaps) {
             <ul class="gap-list">${ctrls}</ul>
           </div>`;
     }).join('');
-    panel.innerHTML = `
-      <label style="margin-top:16px;display:block;color:var(--danger);">⚠ Mandatory Control Gaps</label>
-      <div class="gap-summary">Tick the controls below to lift the standards-based residual floor. Controls flagged <span class="ctrl-mandatory-pill">Compliance baseline</span> in the picker do NOT reduce P/S for the chosen threat — they exist solely to satisfy the framework requirement above. Until every gap closes, residual cannot drop below the indicated rating.</div>
-      ${html}`;
-    panel.classList.remove('hidden');
+    panel.innerHTML = headerBlock + html;
+    panel.classList.remove('hidden', 'gap-panel--clear');
 }
 
 // Lightweight HTML escaper for UI panels, modals, and dynamic tables.
@@ -2612,31 +2974,51 @@ function syncMbssFirewallSectionState() {
 }
 
 function buildAssetPayloadFromForm() {
+  ensureScenarioResidualsPersistedAndComputed();
   const type = g('f-type');
   const name = g('f-name').trim();
   const id = editingId || g('f-id');
-  const residual = document.getElementById('r-residual') ? document.getElementById('r-residual').textContent : 'Low';
-  const inheritEl = document.getElementById('r-inherit');
-  const inherit = inheritEl ? inheritEl.textContent : (INHERIT[(parseInt(g('f-sev')) || 3) + '-' + (parseInt(g('f-prob')) || 3)] || 'Moderate');
-  const p = parseInt(g('f-prob')) || 3;
-  const s = parseInt(g('f-sev')) || 3;
   const c = parseInt(document.getElementById('f-c').value) || 2;
   const ii = parseInt(document.getElementById('f-i').value) || 2;
   const a = parseInt(document.getElementById('f-a').value) || 2;
+
+  const uniqCat = [...new Set(assetRiskScenarios.map(s => (s.riskCategory || '').trim()).filter(Boolean))].slice(0, 12).join('|');
+  const descParts = assetRiskScenarios.map((s, i) =>
+    `[Scenario ${i + 1}] ${(s.riskDesc || '').trim()}`.trim()
+  ).filter(Boolean);
+
+  const heat = rollupScenarioWorstHeatmapAxes(assetRiskScenarios);
+  const rollupResRat = rollupWorstResidualRating(assetRiskScenarios.map(s => s.residual));
+  const rollupInRat = rollupWorstInherentRatings(assetRiskScenarios.map(s => s.inherit));
+  const repr = worstScenarioForReporting(assetRiskScenarios);
+
+  const pHM = heat != null ? heat.prob : (repr != null && repr.prob != null ? repr.prob : (parseInt(g('f-prob'), 10) || 3));
+  const sHM = heat != null ? heat.sev : (repr != null && repr.sev != null ? repr.sev : (parseInt(g('f-sev'), 10) || 3));
+  const firstBasis = assetRiskScenarios.length ? (assetRiskScenarios[0].risk_basis || defaultRiskBasisObject()) : normalizeRiskBasisForPersist();
+
   return {
     id, type, name,
     group_name: g('f-group'),
     hostname: g('f-hostname'), server: g('f-server'), custodian: g('f-custodian'), description: g('f-desc'),
     ip_address: g('f-ip'), environment: g('f-environment'), department: g('f-department'),
+    asset_owners: (document.getElementById('f-asset-owners')?.value || '').trim(),
+    classification_justification: (document.getElementById('f-classification-justification')?.value || '').trim(),
     pii: document.getElementById('f-pii').value,
     spi: document.getElementById('f-spi').value,
     corp: document.getElementById('f-corp').value,
     ciaC: c, ciaI: ii, ciaA: a, ciaScore: c + ii + a,
     ciaClass: document.getElementById('cia-class').textContent,
-    riskCategory: g('f-risk-category'), riskDesc: g('f-risk-desc'),
-    prob: p, sev: s, inherit, residual,
-    actionType: g('f-action-type'), actionStatus: g('f-action-status'),
-    actionPlan: g('f-action-plan'), actionOwner: g('f-action-owner'), actionDate: g('f-action-date'),
+    riskCategory: uniqCat || repr?.riskCategory || '',
+    riskDesc: descParts.join('\n').slice(0, 8000),
+    risk_basis_json: JSON.stringify(firstBasis),
+    asset_risks_json: JSON.stringify(assetRiskScenarios),
+    cia_questionnaire_json: JSON.stringify(normalizeCiaQuestionnaireForPersist()),
+    prob: pHM, sev: sHM, inherit: rollupInRat, residual: rollupResRat,
+    actionType: repr?.actionType || g('f-action-type'),
+    actionStatus: repr?.actionStatus || g('f-action-status'),
+    actionPlan: repr?.actionPlan || g('f-action-plan'),
+    actionOwner: repr?.actionOwner || g('f-action-owner'),
+    actionDate: repr?.actionDate || g('f-action-date'),
     updated_by: currentUser?.email || null,
     mbss_json: isMbssFirewallTypeLocked(type)
       ? JSON.stringify(getLockedMbssObject(type))
@@ -2648,17 +3030,114 @@ function buildAssetPayloadFromForm() {
 }
 
 function draftDefaultsFromType(type) {
-  const profile = ASSET_PROFILES[type];
-  if (!profile) return {};
-  const score = profile.c + profile.i + profile.a;
+  if (!ALLOWED_ASSET_TYPES.has(type)) return {};
+  const c = 2;
+  const i = 2;
+  const a = 2;
+  const score = c + i + a;
   return {
-    pii: profile.pii, spi: profile.spi, corp: profile.corp,
-    ciaC: profile.c, ciaI: profile.i, ciaA: profile.a,
+    pii: 'N', spi: 'N', corp: 'N',
+    ciaC: c, ciaI: i, ciaA: a,
     ciaScore: score, ciaClass: CIA_CLASS[score] || 'Internal Use',
     prob: 3, sev: 3, inherit: 'Moderate', residual: 'Moderate',
     riskCategory: '', riskDesc: '', actionType: 'Mitigate', actionStatus: 'Pending',
     actionPlan: '', actionOwner: '', actionDate: ''
   };
+}
+
+function normalizeCiaQuestionnaireForPersist() {
+  const gv = id => (document.getElementById(id)?.value || '').trim();
+  return {
+    disclosure_impact: gv('f-q-disclosure-impact') || '2',
+    integrity_impact: gv('f-q-integrity-impact') || '2',
+    availability_impact: gv('f-q-availability-impact') || '2',
+    personal_data_scope: gv('f-q-personal-scope') || 'none',
+    corp_strategic: gv('f-q-corp-strategic') || 'N',
+    version: 1,
+  };
+}
+
+function loadCiaQuestionnaireToForm(rawJson) {
+  const q = parseJsonSafe(rawJson, {});
+  const setSel = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+  setSel('f-q-disclosure-impact', q.disclosure_impact || '2');
+  setSel('f-q-integrity-impact', q.integrity_impact || '2');
+  setSel('f-q-availability-impact', q.availability_impact || '2');
+  setSel('f-q-personal-scope', q.personal_data_scope || 'none');
+  setSel('f-q-corp-strategic', q.corp_strategic === 'Y' ? 'Y' : 'N');
+}
+
+/** Map questionnaire answers onto PI / corp / CIA sliders (still refine justification below). */
+function syncCiaQuestionnaireIntoClassificationFields() {
+  const clamp13 = x => Math.max(1, Math.min(3, parseInt(String(x), 10) || 2));
+  const disc = clamp13(document.getElementById('f-q-disclosure-impact')?.value);
+  const integ = clamp13(document.getElementById('f-q-integrity-impact')?.value);
+  const avail = clamp13(document.getElementById('f-q-availability-impact')?.value);
+  const pEl = document.getElementById('f-pii');
+  const spiEl = document.getElementById('f-spi');
+  const scope = (document.getElementById('f-q-personal-scope')?.value || 'none').trim();
+  if (pEl && spiEl) {
+    if (scope === 'ordinary') { pEl.value = 'Y'; spiEl.value = 'N'; }
+    else if (scope === 'spi') { pEl.value = 'Y'; spiEl.value = 'Y'; }
+    else { pEl.value = 'N'; spiEl.value = 'N'; }
+  }
+  const corpEl = document.getElementById('f-corp');
+  const corpAnswer = (document.getElementById('f-q-corp-strategic')?.value || 'N').trim() === 'Y';
+  const disclosureHeavy = disc >= 3;
+  if (corpEl) corpEl.value = (corpAnswer || disclosureHeavy) ? 'Y' : 'N';
+  const fC = document.getElementById('f-c');
+  const fI = document.getElementById('f-i');
+  const fA = document.getElementById('f-a');
+  if (fC) fC.value = String(disc);
+  if (fI) fI.value = String(integ);
+  if (fA) fA.value = String(avail);
+}
+
+/** Normalized ISRA narrative + qualitative anchors persisted in risk_basis_json */
+function normalizeRiskBasisForPersist() {
+  const gs = id => (document.getElementById(id)?.value || '').trim();
+  return {
+    threat_statement: gs('f-threat-statement'),
+    vulnerability_statement: gs('f-vuln-statement'),
+    occurrence_justification: gs('f-occurrence-justification'),
+    likelihood_qual: Math.max(1, Math.min(5, parseInt(gs('f-likelihood-qual') || '3', 10))),
+    impact_qual: Math.max(1, Math.min(5, parseInt(gs('f-impact-qual') || '3', 10))),
+    threat_choice: Math.max(1, Math.min(3, parseInt(gs('f-threat-choice') || '2', 10))),
+    vulnerability_choice: Math.max(1, Math.min(3, parseInt(gs('f-vuln-choice') || '2', 10))),
+    prior_incidents: (() => {
+      const x = gs('f-prior-incidents').toUpperCase();
+      if (x === 'Y' || x === 'YES') return 'Y';
+      if (x === 'U' || x === 'UNKNOWN') return 'U';
+      return 'N';
+    })(),
+  };
+}
+
+function loadRiskBasisToForm(raw) {
+  const m = parseJsonSafe(raw, {});
+  const setVal = (id, v) => { const el = document.getElementById(id); if (el != null && v !== undefined) el.value = v; };
+  setVal('f-threat-statement', m.threat_statement || '');
+  setVal('f-vuln-statement', m.vulnerability_statement || '');
+  setVal('f-occurrence-justification', m.occurrence_justification || '');
+  setVal('f-likelihood-qual', m.likelihood_qual != null ? String(m.likelihood_qual) : '3');
+  setVal('f-impact-qual', m.impact_qual != null ? String(m.impact_qual) : '3');
+  setVal('f-threat-choice', m.threat_choice != null ? String(m.threat_choice) : '2');
+  setVal('f-vuln-choice', m.vulnerability_choice != null ? String(m.vulnerability_choice) : '2');
+  setVal('f-prior-incidents', m.prior_incidents || 'N');
+}
+
+/**
+ * Translate qualitative likelihood/impact (+ evidence fields) into inherent anchors 1–5.
+ * Existing calculateRiskMath() still applies CIA / FA / exposure escalations afterward.
+ */
+function syncInherentAnchorsFromRiskBasis() {
+  if (!document.getElementById('f-likelihood-qual')) return;
+  const b = normalizeRiskBasisForPersist();
+  const anch = anchorsFromRiskBasisPayload(b);
+  const probH = document.getElementById('f-prob');
+  const sevH = document.getElementById('f-sev');
+  if (probH) probH.value = String(anch.p);
+  if (sevH) sevH.value = String(anch.s);
 }
 
 function setSaveStatus(state, html) {
@@ -2675,6 +3154,27 @@ function setSaveStatus(state, html) {
   banner.dataset.state = state;
   banner.innerHTML = html || '';
   banner.style.display = state === 'idle' ? 'none' : '';
+}
+
+/** Info Sec / Admin — ISRA completeness before persisting assessed assets. */
+function validateIsraMandatoryFields() {
+  flushCurrentRiskScenarioSnapshot();
+  for (let i = 0; i < assetRiskScenarios.length; i++) {
+    const sc = assetRiskScenarios[i];
+    if (!(sc.riskCategory || '').trim())
+      return `Risk scenario #${i + 1}: template / category required.`;
+    if (!(sc.riskDesc || '').trim())
+      return `Risk scenario #${i + 1}: synthesized risk description required.`;
+    const rb = sc.risk_basis || defaultRiskBasisObject();
+    const thrS = String(rb.threat_statement || '').trim();
+    const vulS = String(rb.vulnerability_statement || '').trim();
+    const occS = String(rb.occurrence_justification || '').trim();
+    if (thrS.length < 24 || vulS.length < 24 || occS.length < 24)
+      return `Risk scenario #${i + 1}: threat narrative, vulnerabilities, and occurrence justification each need ≥ 24 characters.`;
+  }
+  const cj = (document.getElementById('f-classification-justification')?.value || '').trim();
+  if (cj.length < 24) return 'Classification justification required (how questionnaire + CIA/PI posture were decided; ≥ 24 characters).';
+  return '';
 }
 
 async function saveAssetToDB() {
@@ -2711,7 +3211,26 @@ async function saveAssetToDB() {
     if (!type) { setSaveStatus('err', '<strong>✗ Asset Type is required.</strong> Pick one from the dropdown.'); return; }
     if (!name) { setSaveStatus('err', '<strong>✗ Asset Name is required.</strong>'); return; }
 
-    let payload = buildAssetPayloadFromForm();
+    let payload;
+    if (currentRole === 'infosec') {
+      const v = validateIsraMandatoryFields();
+      if (v) { setSaveStatus('err', '<strong>✗ ' + escapeHtml(v) + '</strong>'); return; }
+      calculateRiskMath();
+      payload = buildAssetPayloadFromForm();
+    } else if (currentRole === 'admin') {
+      flushCurrentRiskScenarioSnapshot();
+      const hasProfiling =
+        assetRiskScenarios.some(s => (s.riskCategory || '').trim()) ||
+        !!(g('f-risk-category') || '').trim();
+      if (hasProfiling) {
+        const v = validateIsraMandatoryFields();
+        if (v) { setSaveStatus('err', '<strong>✗ ' + escapeHtml(v) + '</strong>'); return; }
+        calculateRiskMath();
+      }
+      payload = buildAssetPayloadFromForm();
+    } else {
+      payload = buildAssetPayloadFromForm();
+    }
     const id = payload.id;
     if (!id) { setSaveStatus('err', '<strong>✗ Asset ID missing.</strong> Re-pick the Asset Type.'); return; }
 
@@ -2724,11 +3243,6 @@ async function saveAssetToDB() {
       payload.status = ASSET_STATUS.DRAFT;
       payload.created_by = currentUser?.email || null;
     } else if (currentRole === 'infosec') {
-      if (!g('f-risk-category')) { setSaveStatus('err', '<strong>✗ Risk template / category required.</strong>'); return; }
-      if (!(g('f-risk-desc') || '').trim()) { setSaveStatus('err', '<strong>✗ Risk description required.</strong>'); return; }
-      payload.status = ASSET_STATUS.PENDING;
-      calculateRiskMath();
-      payload = { ...payload, ...buildAssetPayloadFromForm() };
       payload.status = ASSET_STATUS.PENDING;
       if (priorAsset?.created_by) payload.created_by = priorAsset.created_by;
     } else {
@@ -2949,6 +3463,8 @@ function editAsset(id) {
           'f-type':a.type, 'f-id':a.id, 'f-name':a.name, 'f-group':a.group_name, 'f-desc':a.description, 
           'f-hostname':a.hostname, 'f-server':a.server, 'f-custodian':a.custodian, 
           'f-ip':a.ip_address, 'f-environment':a.environment, 'f-department':a.department, 
+          'f-asset-owners': a.asset_owners,
+          'f-classification-justification': a.classification_justification,
           'f-pii':a.pii, 'f-spi':a.spi, 'f-corp':a.corp, 
           'f-c':a.ciaC, 'f-i':a.ciaI, 'f-a':a.ciaA, 
           'f-risk-category':a.riskCategory, 'f-risk-desc':a.riskDesc, 'f-prob':a.prob, 'f-sev':a.sev, 
@@ -2960,9 +3476,15 @@ function editAsset(id) {
           const el = document.getElementById(key);
           if(el !== null) el.value = map[key] || ''; 
       }
-      
+      loadCiaQuestionnaireToForm(a.cia_questionnaire_json || '{}');
+      assetRiskScenarios = migrateLegacyToRiskScenarios(a);
+      currentRiskScenarioIx = 0;
+      applyRiskScenarioToForm(assetRiskScenarios[0]);
+      renderRiskScenarioTabsUi();
+      updateRiskScenarioToolbarLabels();
+
       const typeEl = document.getElementById('f-type');
-      if(typeEl) typeEl.dataset.lastType = a.type;
+      if (typeEl) typeEl.dataset.lastType = a.type;
 
       const ctrls = globalControls.filter(x => x.asset_id === id).map(r => r.ctrl_id);
       for(let i=1; i<=13; i++) { 
@@ -3053,21 +3575,29 @@ async function deleteAsset(id) {
 
 function clearForm() {
   mbssFwUiSyncKey = '';
-  const fields = ['f-name','f-group','f-hostname','f-server','f-custodian','f-desc', 'f-ip', 'f-department', 'f-risk-desc','f-action-plan','f-action-owner','f-action-date','f-risk-category'];
+  assetRiskScenarios = [blankRiskScenario()];
+  currentRiskScenarioIx = 0;
+  const fields = ['f-name','f-group','f-hostname','f-server','f-custodian','f-desc', 'f-ip', 'f-department', 'f-asset-owners', 'f-classification-justification', 'f-threat-statement', 'f-vuln-statement', 'f-occurrence-justification', 'f-risk-desc','f-action-plan','f-action-owner','f-action-date','f-risk-category'];
   fields.forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   
   const selects = ['f-type', 'f-id'];
   selects.forEach(id => { const el = document.getElementById(id); if(el) { el.value = ''; el.dataset.lastType = ''; } });
 
   if(document.getElementById('f-environment')) document.getElementById('f-environment').value = 'Internal';
-  if(document.getElementById('f-pii')) document.getElementById('f-pii').value = 'N';
-  if(document.getElementById('f-spi')) document.getElementById('f-spi').value = 'N';
-  if(document.getElementById('f-corp')) document.getElementById('f-corp').value = 'N';
-  if(document.getElementById('f-c')) document.getElementById('f-c').value = '2';
-  if(document.getElementById('f-i')) document.getElementById('f-i').value = '2';
-  if(document.getElementById('f-a')) document.getElementById('f-a').value = '2';
+  ['f-q-disclosure-impact','f-q-integrity-impact','f-q-availability-impact'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '2';
+  });
+  if (document.getElementById('f-q-personal-scope')) document.getElementById('f-q-personal-scope').value = 'none';
+  if (document.getElementById('f-q-corp-strategic')) document.getElementById('f-q-corp-strategic').value = 'N';
+  syncCiaQuestionnaireIntoClassificationFields();
+
   if(document.getElementById('f-prob')) document.getElementById('f-prob').value = '3';
   if(document.getElementById('f-sev')) document.getElementById('f-sev').value = '3';
+  if(document.getElementById('f-likelihood-qual')) document.getElementById('f-likelihood-qual').value = '3';
+  if(document.getElementById('f-impact-qual')) document.getElementById('f-impact-qual').value = '3';
+  if(document.getElementById('f-prior-incidents')) document.getElementById('f-prior-incidents').value = 'N';
+  if(document.getElementById('f-threat-choice')) document.getElementById('f-threat-choice').value = '2';
+  if(document.getElementById('f-vuln-choice')) document.getElementById('f-vuln-choice').value = '2';
   if(document.getElementById('f-action-type')) document.getElementById('f-action-type').value = 'Mitigate';
   if(document.getElementById('f-action-status')) document.getElementById('f-action-status').value = 'Pending';
   
@@ -3097,8 +3627,12 @@ function clearForm() {
   setFormSectionsLocked(currentRole === 'user');
   const banner = document.getElementById('reapproval-banner');
   if (banner) { banner.hidden = true; banner.innerHTML = ''; }
-  
-  runEnforcementEngine(); 
+
+  applyRiskScenarioToForm(assetRiskScenarios[0]);
+  renderRiskScenarioTabsUi();
+  updateRiskScenarioToolbarLabels();
+
+  runEnforcementEngine();
   updateTagsUI();
 }
 
@@ -3492,12 +4026,12 @@ function renderSystemLogs() {
 // -------- CSV / IAR import — export (Excel column parity, MBSS + Firewall sheets) --------
 const ASSET_CSV_COLUMNS = [
   'type', 'name', 'group_name', 'hostname', 'server', 'custodian', 'description',
-  'ip_address', 'environment', 'department'
+  'ip_address', 'environment', 'department', 'asset_owners'
 ];
 
-const CSV_SHEET1_HEADERS = ['Asset ID', 'Name of Asset', 'Description', 'Group', 'Hostname', 'Server', 'Custodian', 'IP Address', 'Environment', 'Department', 'Type'];
-const CSV_SHEET2_HEADERS = ['Asset ID', 'Name of Asset', 'PII', 'SPI', 'Corp Info', 'C', 'I', 'A', 'Valuation', 'Class', 'Type'];
-const CSV_SHEET3_HEADERS = ['Asset ID', 'Name of Asset', 'Risk / Threat Description', 'Probability', 'Severity', 'Inherent', 'Residual'];
+const CSV_SHEET1_HEADERS = ['Asset ID', 'Name of Asset', 'Description', 'Group', 'Hostname', 'Server', 'Custodian', 'IP Address', 'Environment', 'Department', 'Type', 'Asset owners'];
+const CSV_SHEET2_HEADERS = ['Asset ID', 'Name of Asset', 'PII', 'SPI', 'Corp Info', 'C', 'I', 'A', 'Valuation', 'Class', 'Type', 'Classification justification', 'CIA questionnaire JSON'];
+const CSV_SHEET3_HEADERS = ['Asset ID', 'Name of Asset', 'Risk / Threat Description', 'Probability', 'Severity', 'Inherent', 'Residual', 'Risk category key', 'Threat band', 'Vuln band', 'Risk basis JSON', 'Asset risks JSON'];
 const CSV_SHEET4_HEADERS = ['Asset ID', 'Name of Asset', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12', 'C13', 'Residual', 'Strategy'];
 const CSV_SHEET5_HEADERS = ['Asset ID', 'Name of Asset', 'Residual', 'Strategy', 'Status', 'Action Plan', 'Action Owner', 'Target Date'];
 const CSV_SHEET6_HEADERS = ['Asset ID', 'Name of Asset', 'NIST CSF', 'ISO 27001 / 27002', 'CIS Controls', 'SOC 2', 'PCI-DSS'];
@@ -3592,6 +4126,26 @@ function escapeCsvCell(val) {
   return s;
 }
 
+/** Canonical risk_basis blob for CSV / Excel parity (structured bands + narratives). */
+function exportRiskBasisJsonCell(asset) {
+  const merged = { ...defaultRiskBasisObject(), ...parseJsonSafe(asset?.risk_basis_json, {}) };
+  return JSON.stringify(merged);
+}
+
+/** asset_risks_json as JSON text (prefer array if parseable); round-trip aligned with importer. */
+function exportAssetRisksJsonCell(asset) {
+  const parsed = parseAssetRiskScenariosArray(asset?.asset_risks_json);
+  if (parsed) return JSON.stringify(parsed);
+  const raw = String(asset?.asset_risks_json ?? '').trim();
+  return raw || '[]';
+}
+
+function csvThreatVulnBandsFromRiskBasis(asset) {
+  const rb = { ...defaultRiskBasisObject(), ...parseJsonSafe(asset?.risk_basis_json, {}) };
+  return [(rb.threat_choice != null && rb.threat_choice !== '') ? rb.threat_choice : 2,
+    (rb.vulnerability_choice != null && rb.vulnerability_choice !== '') ? rb.vulnerability_choice : 2];
+}
+
 function downloadTextFile(filename, text, mime = 'text/csv;charset=utf-8') {
   const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -3669,7 +4223,15 @@ function normalizeCsvHeader(raw) {
     'change control': 'fw_change',
     'central logging': 'fw_logging',
     'rule review cadence': 'fw_cadence',
-    'overly permissive rules': 'fw_permissive'
+    'overly permissive rules': 'fw_permissive',
+    'asset owners': 'asset_owners',
+    'classification justification': 'classification_justification',
+    'cia questionnaire json': 'cia_questionnaire_json',
+    'risk category key': 'riskCategory',
+    'threat band': 'threat_band',
+    'vuln band': 'vuln_band',
+    'risk basis json': 'risk_basis_json',
+    'asset risks json': 'asset_risks_json'
   };
   if (exact[t]) return exact[t];
   const rawTrim = (raw || '').trim();
@@ -3703,7 +4265,8 @@ function detectCsvImportKind(keys) {
   if (h.has('_nist') || h.has('_iso')) return 'compliance';
   if (h.has('mbss_edr_epp') || h.has('mbss_patch')) return 'mbss';
   if (h.has('fw_scope') || (h.has('fw_cadence') && h.has('fw_defaultdeny'))) return 'firewall';
-  if (h.has('inherit') || h.has('riskDesc')) return 'risk';
+  if (h.has('inherit') || h.has('riskDesc') ||
+      (h.has('id') && (h.has('threat_band') || h.has('vuln_band') || h.has('risk_basis_json') || h.has('asset_risks_json') || (h.has('riskCategory') && !h.has('description'))))) return 'risk';
   if (h.has('ciaScore') || (h.has('ciaC') && h.has('corp'))) return 'sensitivity';
   if (h.has('description') && h.has('type')) return 'identification';
   return 'legacy';
@@ -3735,7 +4298,7 @@ function buildDraftPayloadFromCsvRow(row, counters) {
   const type = (row.type || '').trim();
   const name = (row.name || '').trim();
   if (!type || !name) return { error: 'Row missing type or name' };
-  if (!ASSET_PROFILES[type]) return { error: `Invalid type "${type}" (use IA, PhA, PA, SA, SV, FA)` };
+  if (!ALLOWED_ASSET_TYPES.has(type)) return { error: `Invalid type "${type}" (use IA, PhA, PA, SA, SV, FA)` };
   let id = (row.id || '').trim();
   if (id && globalAssets.some(a => a.id === id)) return { error: `Duplicate id ${id}` };
   if (!id) id = nextCsvAssetId(type, counters);
@@ -3753,6 +4316,7 @@ function buildDraftPayloadFromCsvRow(row, counters) {
     ip_address: row.ip_address || '',
     environment: row.environment || 'Internal',
     department: row.department || '',
+    asset_owners: row.asset_owners || '',
     created_by: currentUser?.email || null,
     updated_by: currentUser?.email || null,
     mbss_json: '{}',
@@ -3793,7 +4357,7 @@ async function replaceAssetControls(assetId, ctrlIds) {
 
 function downloadAssetCsvTemplate() {
   const example = ['IA-999', 'Example Student Records', 'Description', 'Registrar', 'REG-DB-01', 'PostgreSQL', 'University Registrar',
-    '10.0.0.1', 'Internal', 'Office of the Registrar', 'IA'].map(escapeCsvCell).join(',');
+    '10.0.0.1', 'Internal', 'Office of the Registrar', 'IA', 'Registrar / Data steward'].map(escapeCsvCell).join(',');
   downloadTextFile('ImpactLens_01_Asset_Identification_template.csv',
     CSV_SHEET1_HEADERS.map(escapeCsvCell).join(',') + '\n' + example + '\n');
 }
@@ -3879,47 +4443,51 @@ async function downloadIarExcelTemplateWorkbook() {
 
   {
     const ws = wb.addWorksheet('1 — Asset ID', { views: [{ state: 'frozen', ySplit: 4 }] });
-    styleTitle(ws, 1, 'IMPACTLENS  ·  PLM ISMS  —  Template: Asset Identification', 11);
-    styleSubtitle(ws, 2, hint + '  ·  Sheet 1 of 8', 11);
+    styleTitle(ws, 1, 'IMPACTLENS  ·  PLM ISMS  —  Template: Asset Identification', 12);
+    styleSubtitle(ws, 2, hint + '  ·  Sheet 1 of 8', 12);
     ws.addRow([]);
     const hdr = ws.addRow(CSV_SHEET1_HEADERS);
-    styleHeaderRow(ws, hdr.number, 11);
+    styleHeaderRow(ws, hdr.number, 12);
     const ex = ws.addRow(['IA-999', 'Example asset name', 'Short description', 'Unit / group', 'HOST-01', 'DB primary', 'Custodian name',
-      '10.0.0.1 or Cloud', 'Internal', 'Department name', 'IA']);
+      '10.0.0.1 or Cloud', 'Internal', 'Department name', 'IA', 'One owner per line (optional)']);
     ex.font = { italic: true, color: { argb: 'FF6A6A78' } };
     iarTemplateAddList(ws, 9, XLSX_LIST_ENVIRONMENT);
     iarTemplateAddList(ws, 11, XLSX_LIST_ASSET_TYPE);
-    setWidths(ws, [12, 38, 46, 18, 18, 22, 22, 16, 16, 22, 10]);
+    setWidths(ws, [12, 38, 46, 18, 18, 22, 22, 16, 16, 22, 10, 28]);
   }
 
   {
     const ws = wb.addWorksheet('2 — Sensitivity', { views: [{ state: 'frozen', ySplit: 4 }] });
-    styleTitle(ws, 1, 'IMPACTLENS  —  Sensitivity & Valuation', 11);
-    styleSubtitle(ws, 2, hint + '  ·  Match Asset ID from sheet 1', 11);
+    styleTitle(ws, 1, 'IMPACTLENS  —  Sensitivity & Valuation', 13);
+    styleSubtitle(ws, 2, hint + '  ·  Match Asset ID from sheet 1', 13);
     ws.addRow([]);
     const hdr = ws.addRow(CSV_SHEET2_HEADERS);
-    styleHeaderRow(ws, hdr.number, 11);
-    ws.addRow(['IA-999', 'Example asset', 'Y', 'Y', 'Y', '3', '3', '3', '9', 'Restricted', 'IA']);
+    styleHeaderRow(ws, hdr.number, 13);
+    ws.addRow(['IA-999', 'Example asset', 'Y', 'Y', 'Y', '3', '3', '3', '9', 'Restricted', 'IA',
+      'Brief justification for CIA / PI stance', '{"disclosure":"","integrity":"","availability":"","personal_data":"","corporate":""}']);
     for (const c of [3, 4, 5]) iarTemplateAddList(ws, c, XLSX_LIST_YN);
     for (const c of [6, 7, 8]) iarTemplateAddList(ws, c, XLSX_LIST_CIA_1_3);
     iarTemplateAddList(ws, 10, XLSX_LIST_CIA_CLASS);
     iarTemplateAddList(ws, 11, XLSX_LIST_ASSET_TYPE);
-    setWidths(ws, [12, 38, 6, 6, 9, 5, 5, 5, 10, 18, 8]);
+    setWidths(ws, [12, 38, 6, 6, 9, 5, 5, 5, 10, 18, 8, 36, 48]);
   }
 
   {
     const ws = wb.addWorksheet('3 — Risk', { views: [{ state: 'frozen', ySplit: 4 }] });
-    styleTitle(ws, 1, 'IMPACTLENS  —  Risk Assessment', 7);
-    styleSubtitle(ws, 2, hint, 7);
+    styleTitle(ws, 1, 'IMPACTLENS  —  Risk Assessment', 12);
+    styleSubtitle(ws, 2, hint, 12);
     ws.addRow([]);
     const hdr = ws.addRow(CSV_SHEET3_HEADERS);
-    styleHeaderRow(ws, hdr.number, 7);
-    ws.addRow(['IA-999', 'Example', 'Describe threat / scenario', '3', '4', 'Moderate', 'Low']);
+    styleHeaderRow(ws, hdr.number, 12);
+    ws.addRow(['IA-999', 'Example', 'Describe threat / scenario', '3', '4', 'Moderate', 'Low', '',
+      '2', '2', '', '[]']);
     iarTemplateAddList(ws, 4, XLSX_LIST_PROB_SEV);
     iarTemplateAddList(ws, 5, XLSX_LIST_PROB_SEV);
     iarTemplateAddList(ws, 6, XLSX_LIST_RISK_RATING);
     iarTemplateAddList(ws, 7, XLSX_LIST_RISK_RATING);
-    setWidths(ws, [12, 38, 60, 12, 10, 14, 14]);
+    iarTemplateAddList(ws, 9, XLSX_LIST_CIA_1_3);
+    iarTemplateAddList(ws, 10, XLSX_LIST_CIA_1_3);
+    setWidths(ws, [12, 38, 60, 12, 10, 14, 14, 24, 8, 8, 40, 42]);
   }
 
   {
@@ -4031,17 +4599,34 @@ function exportIarCsvPack() {
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
   const s1 = [CSV_SHEET1_HEADERS.join(',')].concat(assets.map(a => csvLine(CSV_SHEET1_HEADERS, [
-    a.id, a.name, a.description, a.group_name, a.hostname, a.server, a.custodian, a.ip_address, a.environment, a.department, a.type
+    a.id, a.name, a.description, a.group_name, a.hostname, a.server, a.custodian, a.ip_address, a.environment, a.department, a.type,
+    (a.asset_owners != null && String(a.asset_owners).trim()) ? String(a.asset_owners).trim() : ''
   ]))).join('\n');
 
-  const s2 = [CSV_SHEET2_HEADERS.join(',')].concat(assets.map(a => csvLine(CSV_SHEET2_HEADERS, [
-    a.id, a.name, a.pii === 'Y' ? 'Y' : 'N', a.spi === 'Y' ? 'Y' : 'N', a.corp === 'Y' ? 'Y' : 'N',
-    a.ciaC, a.ciaI, a.ciaA, a.ciaScore, a.ciaClass, a.type
-  ]))).join('\n');
+  const s2 = [CSV_SHEET2_HEADERS.join(',')].concat(assets.map(a => {
+    const ciaQ = (() => {
+      const raw = a.cia_questionnaire_json;
+      if (raw == null || !String(raw).trim()) return '';
+      const q = parseJsonSafe(String(raw).trim(), null);
+      return (q !== null && typeof q === 'object' && !Array.isArray(q)) ? JSON.stringify(q) : String(raw).trim();
+    })();
+    return csvLine(CSV_SHEET2_HEADERS, [
+      a.id, a.name, a.pii === 'Y' ? 'Y' : 'N', a.spi === 'Y' ? 'Y' : 'N', a.corp === 'Y' ? 'Y' : 'N',
+      a.ciaC, a.ciaI, a.ciaA, a.ciaScore, a.ciaClass, a.type,
+      (a.classification_justification != null && String(a.classification_justification).trim())
+        ? String(a.classification_justification).trim() : '',
+      ciaQ
+    ]);
+  })).join('\n');
 
-  const s3 = [CSV_SHEET3_HEADERS.join(',')].concat(assets.map(a => csvLine(CSV_SHEET3_HEADERS, [
-    a.id, a.name, a.riskDesc || '', a.prob, a.sev, a.inherit, a.residual
-  ]))).join('\n');
+  const s3 = [CSV_SHEET3_HEADERS.join(',')].concat(assets.map(a => {
+    const bands = csvThreatVulnBandsFromRiskBasis(a);
+    return csvLine(CSV_SHEET3_HEADERS, [
+      a.id, a.name, a.riskDesc || '', a.prob, a.sev, a.inherit, a.residual,
+      (a.riskCategory != null && String(a.riskCategory).trim()) ? String(a.riskCategory).trim() : '',
+      bands[0], bands[1], exportRiskBasisJsonCell(a), exportAssetRisksJsonCell(a)
+    ]);
+  })).join('\n');
 
   const s4 = [CSV_SHEET4_HEADERS.join(',')].concat(assets.map(a => {
     const ctrlIds = new Set(globalControls.filter(c => c.asset_id === a.id).map(c => c.ctrl_id));
@@ -4196,7 +4781,7 @@ async function importCsvIdentification(rows) {
     const type = (row.type || '').trim();
     const name = (row.name || '').trim();
     if (!type || !name) { errors.push(`Row ${idx + 2}: missing type or name`); return; }
-    if (!ASSET_PROFILES[type]) { errors.push(`Row ${idx + 2}: invalid type`); return; }
+    if (!ALLOWED_ASSET_TYPES.has(type)) { errors.push(`Row ${idx + 2}: invalid type`); return; }
     let fid = id;
     if (fid && globalAssets.some(a => a.id === fid)) { errors.push(`Row ${idx + 2}: duplicate ${fid}`); return; }
     if (!fid) fid = nextCsvAssetId(type, counters);
@@ -4205,7 +4790,8 @@ async function importCsvIdentification(rows) {
       id: fid, type, name, status: ASSET_STATUS.DRAFT,
       group_name: row.group_name || '', hostname: row.hostname || '', server: row.server || '', custodian: row.custodian || '',
       description: row.description || '', ip_address: row.ip_address || '', environment: row.environment || 'Internal',
-      department: row.department || '', created_by: currentUser?.email || null, updated_by: currentUser?.email || null,
+      department: row.department || '', asset_owners: row.asset_owners || '',
+      created_by: currentUser?.email || null, updated_by: currentUser?.email || null,
       mbss_json: '{}', firewall_json: '{}', ...defaults
     });
   });
@@ -4234,6 +4820,16 @@ async function importCsvSensitivity(rows) {
     };
     partial.ciaScore = partial.ciaC + partial.ciaI + partial.ciaA;
     partial.ciaClass = CIA_CLASS[partial.ciaScore] || a.ciaClass;
+    if (row.ciaClass != null && String(row.ciaClass).trim())
+      partial.ciaClass = String(row.ciaClass).trim();
+    if (row.classification_justification != null && String(row.classification_justification).trim())
+      partial.classification_justification = String(row.classification_justification).trim();
+    if (row.cia_questionnaire_json != null && String(row.cia_questionnaire_json).trim()) {
+      const qRaw = String(row.cia_questionnaire_json).trim();
+      const qp = parseJsonSafe(qRaw, null);
+      if (qp !== null && typeof qp === 'object' && !Array.isArray(qp))
+        partial.cia_questionnaire_json = JSON.stringify(qp);
+    }
     await patchAssetById(id, partial);
     n++;
   }
@@ -4247,14 +4843,42 @@ async function importCsvRisk(rows) {
   for (const row of rows) {
     const id = (row.id || '').trim();
     if (!id || !globalAssets.some(x => x.id === id)) continue;
-    await patchAssetById(id, {
-      riskDesc: row.riskDesc || '',
-      prob: parseInt(row.prob, 10) || 3,
-      sev: parseInt(row.sev, 10) || 3,
-      inherit: row.inherit || 'Moderate',
-      residual: row.residual || 'Moderate',
-      updated_by: currentUser?.email || null
-    });
+    const a = globalAssets.find(x => x.id === id);
+    const patch = { updated_by: currentUser?.email || null };
+
+    patch.riskDesc = (row.riskDesc != null && String(row.riskDesc).trim() !== '')
+      ? row.riskDesc
+      : (a.riskDesc || '');
+    const pNum = parseInt(row.prob, 10);
+    const sNum = parseInt(row.sev, 10);
+    patch.prob = !isNaN(pNum) ? pNum : (parseInt(a.prob, 10) || 3);
+    patch.sev = !isNaN(sNum) ? sNum : (parseInt(a.sev, 10) || 3);
+    patch.inherit = (row.inherit != null && String(row.inherit).trim())
+      ? String(row.inherit).trim()
+      : (a.inherit || 'Moderate');
+    patch.residual = (row.residual != null && String(row.residual).trim())
+      ? String(row.residual).trim()
+      : (a.residual || 'Moderate');
+    if (row.riskCategory != null && String(row.riskCategory).trim())
+      patch.riskCategory = String(row.riskCategory).trim();
+
+    let rb = { ...defaultRiskBasisObject(), ...parseJsonSafe(a.risk_basis_json, {}) };
+    if (row.risk_basis_json != null && String(row.risk_basis_json).trim()) {
+      const j = parseJsonSafe(String(row.risk_basis_json).trim(), null);
+      if (j && typeof j === 'object' && !Array.isArray(j)) rb = { ...rb, ...j };
+    }
+    const tb = parseInt(row.threat_band, 10);
+    const vb = parseInt(row.vuln_band, 10);
+    if (!isNaN(tb) && tb >= 1 && tb <= 3) rb.threat_choice = tb;
+    if (!isNaN(vb) && vb >= 1 && vb <= 3) rb.vulnerability_choice = vb;
+    patch.risk_basis_json = JSON.stringify(rb);
+
+    if (row.asset_risks_json != null && String(row.asset_risks_json).trim()) {
+      const ar = parseJsonSafe(String(row.asset_risks_json).trim(), null);
+      if (Array.isArray(ar)) patch.asset_risks_json = JSON.stringify(ar.map(normalizeImportedRiskScenarioRow));
+    }
+
+    await patchAssetById(id, patch);
     n++;
   }
   await logSystemEvent('ASSET_CSV_IMPORTED', `Risk CSV merged · ${n} row(s)`);
@@ -4361,7 +4985,8 @@ function exportUserAssetTableCsv() {
   }
   const body = [CSV_SHEET1_HEADERS.join(',')].concat(assets.map(a => csvLine(CSV_SHEET1_HEADERS, [
     a.id, a.name, a.description || '', a.group_name || '', a.hostname || '', a.server || '', a.custodian || '',
-    a.ip_address || '', a.environment || '', a.department || '', a.type
+    a.ip_address || '', a.environment || '', a.department || '', a.type,
+    (a.asset_owners != null && String(a.asset_owners).trim()) ? String(a.asset_owners).trim() : ''
   ]))).join('\n');
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   downloadTextFile(`ImpactLens_Approved_Register_${stamp}.csv`, body);
@@ -4374,10 +4999,22 @@ function exportAssetRegisterCsv() {
     return;
   }
   const headers = ['id', 'status', 'type', 'name', ...ASSET_CSV_COLUMNS.filter(c => c !== 'type' && c !== 'name'),
-    'ciaScore', 'ciaClass', 'inherit', 'residual', 'riskCategory', 'mbss_json', 'firewall_json'];
+    'ciaScore', 'ciaClass', 'classification_justification', 'cia_questionnaire_json',
+    'inherit', 'residual', 'riskCategory', 'riskDesc', 'prob', 'sev',
+    'risk_basis_json', 'asset_risks_json', 'mbss_json', 'firewall_json'];
   const rows = globalAssets.map(a => [
     a.id, a.status, a.type, a.name, a.group_name, a.hostname, a.server, a.custodian, a.description,
-    a.ip_address, a.environment, a.department, a.ciaScore, a.ciaClass, a.inherit, a.residual, a.riskCategory,
+    a.ip_address, a.environment, a.department, (a.asset_owners || '').trim() ? a.asset_owners : '',
+    a.ciaScore, a.ciaClass,
+    (a.classification_justification || '').trim() ? a.classification_justification : '',
+    (() => {
+      const raw = a.cia_questionnaire_json;
+      if (raw == null || !String(raw).trim()) return '';
+      const q = parseJsonSafe(String(raw).trim(), null);
+      return (q !== null && typeof q === 'object' && !Array.isArray(q)) ? JSON.stringify(q) : String(raw).trim();
+    })(),
+    a.inherit, a.residual, a.riskCategory, a.riskDesc, a.prob, a.sev,
+    exportRiskBasisJsonCell(a), exportAssetRisksJsonCell(a),
     a.mbss_json || '', a.firewall_json || ''
   ].map(escapeCsvCell));
   const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
@@ -4436,16 +5073,21 @@ function renderRiskRegister() {
 
   tbody.innerHTML = data.map(a => {
     const ctrls = globalControls.filter(c => c.asset_id === a.id).length;
+    const rc = parsedRiskScenarioCountForAsset(a);
+    const snippet = escapeHtmlSafe((a.riskDesc || '—').substring(0, 60));
+    const more = (a.riskDesc || '').length > 60 ? '…' : '';
+    const multi = rc > 1 ? ` <span style="color:var(--accent2);font-weight:600;">(${rc} risks)</span>` : '';
     return `
     <tr>
       <td><span class="badge badge-id">${a.id}</span></td>
-      <td><strong>${a.name}</strong></td>
-      <td style="color:var(--text2);font-size:11px">${(a.riskDesc||'—').substring(0,60)}${(a.riskDesc||'').length>60?'...':''}</td>
+      <td><strong>${escapeHtmlSafe(a.name || '')}</strong></td>
+      <td style="color:var(--text2);font-size:11px">${snippet}${more}${multi}</td>
       <td>${riskBadge(a.inherit)}</td>
       <td style="font-size:11px;color:var(--text2);">${ctrls} Controls</td>
       <td>${riskBadge(a.residual)}</td>
     </tr>
-  `}).join('');
+  `;
+  }).join('');
 }
 
 function updateMatrixHeatmap() {
@@ -4974,17 +5616,18 @@ async function exportDataXLSX() {
     // =====================================================
     {
         const ws = wb.addWorksheet('1 — Asset Identification', { views: [{ state: 'frozen', ySplit: 4 }] });
-        addBranding(ws, 11);
-        const headers = ['Asset ID', 'Name of Asset', 'Description', 'Group', 'Hostname', 'Server', 'Custodian', 'IP Address', 'Environment', 'Department', 'Type'];
+        addBranding(ws, CSV_SHEET1_HEADERS.length);
+        const headers = [...CSV_SHEET1_HEADERS];
         const hdr = ws.addRow(headers);
         styleHeaderRow(ws, hdr.number, headers.length);
         assets.forEach(a => {
-            const r = ws.addRow([a.id, a.name, a.description, a.group_name, a.hostname, a.server, a.custodian, a.ip_address, a.environment, a.department, a.type]);
+            const r = ws.addRow([a.id, a.name, a.description, a.group_name, a.hostname, a.server, a.custodian, a.ip_address, a.environment, a.department, a.type,
+              (a.asset_owners != null && String(a.asset_owners).trim()) ? String(a.asset_owners).trim() : '']);
             r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
             r.getCell(11).alignment = { horizontal: 'center' };
             styleBodyCells(ws, r.number, headers.length);
         });
-        setCols(ws, [12, 38, 46, 18, 18, 22, 22, 16, 16, 22, 8]);
+        setCols(ws, [12, 38, 46, 18, 18, 22, 22, 16, 16, 22, 8, 28]);
     }
 
     // =====================================================
@@ -4992,12 +5635,20 @@ async function exportDataXLSX() {
     // =====================================================
     {
         const ws = wb.addWorksheet('2 — Sensitivity & Valuation', { views: [{ state: 'frozen', ySplit: 4 }] });
-        addBranding(ws, 11);
-        const headers = ['Asset ID', 'Name of Asset', 'PII', 'SPI', 'Corp Info', 'C', 'I', 'A', 'Valuation', 'Class', 'Type'];
+        addBranding(ws, CSV_SHEET2_HEADERS.length);
+        const headers = [...CSV_SHEET2_HEADERS];
         const hdr = ws.addRow(headers);
         styleHeaderRow(ws, hdr.number, headers.length);
         assets.forEach(a => {
-            const r = ws.addRow([a.id, a.name, yn(a.pii), yn(a.spi), yn(a.corp), a.ciaC, a.ciaI, a.ciaA, a.ciaScore, a.ciaClass, a.type]);
+            const ciaQ = (() => {
+              const raw = a.cia_questionnaire_json;
+              if (raw == null || !String(raw).trim()) return '';
+              const q = parseJsonSafe(String(raw).trim(), null);
+              return (q !== null && typeof q === 'object' && !Array.isArray(q)) ? JSON.stringify(q) : String(raw).trim();
+            })();
+            const r = ws.addRow([a.id, a.name, yn(a.pii), yn(a.spi), yn(a.corp), a.ciaC, a.ciaI, a.ciaA, a.ciaScore, a.ciaClass, a.type,
+              (a.classification_justification != null && String(a.classification_justification).trim()) ? String(a.classification_justification).trim() : '',
+              ciaQ]);
             r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
             [3,4,5].forEach(idx => {
                 r.getCell(idx).fill = ynFill(idx === 3 ? a.pii : idx === 4 ? a.spi : a.corp);
@@ -5014,9 +5665,10 @@ async function exportDataXLSX() {
             else if (cls === 'public')       { classCell.fill = excelRiskFill('very');     classRating = 'very low'; }
             classCell.font = { bold: true, color: { argb: excelRiskTextOn(classRating) } };
             classCell.alignment = { horizontal: 'center' };
+            r.getCell(11).alignment = { horizontal: 'center' };
             styleBodyCells(ws, r.number, headers.length);
         });
-        setCols(ws, [12, 38, 6, 6, 9, 5, 5, 5, 10, 16, 8]);
+        setCols(ws, [12, 38, 6, 6, 9, 5, 5, 5, 10, 16, 8, 36, 42]);
     }
 
     // =====================================================
@@ -5024,19 +5676,23 @@ async function exportDataXLSX() {
     // =====================================================
     {
         const ws = wb.addWorksheet('3 — Risk Assessment', { views: [{ state: 'frozen', ySplit: 4 }] });
-        addBranding(ws, 7);
-        const headers = ['Asset ID', 'Name of Asset', 'Risk / Threat Description', 'Probability', 'Severity', 'Inherent', 'Residual'];
+        addBranding(ws, 12);
+        const headers = [...CSV_SHEET3_HEADERS];
         const hdr = ws.addRow(headers);
         styleHeaderRow(ws, hdr.number, headers.length);
         assets.forEach(a => {
-            const r = ws.addRow([a.id, a.name, a.riskDesc || '', a.prob, a.sev, a.inherit, a.residual]);
+            const bands = csvThreatVulnBandsFromRiskBasis(a);
+            const rowVals = [a.id, a.name, a.riskDesc || '', a.prob, a.sev, a.inherit, a.residual,
+              (a.riskCategory != null && String(a.riskCategory).trim()) ? String(a.riskCategory).trim() : '',
+              bands[0], bands[1], exportRiskBasisJsonCell(a), exportAssetRisksJsonCell(a)];
+            const r = ws.addRow(rowVals);
             r.getCell(1).font = { bold: true, color: { argb: COL_TITLE_FG } };
-            [4,5].forEach(i => { r.getCell(i).alignment = { horizontal: 'center' }; });
+            [4, 5, 9, 10].forEach(i => { r.getCell(i).alignment = { horizontal: 'center' }; });
             const inh = r.getCell(6); inh.fill = excelRiskFill(a.inherit);  inh.font = { bold: true, color: { argb: excelRiskTextOn(a.inherit)  } }; inh.alignment = { horizontal: 'center' };
             const res = r.getCell(7); res.fill = excelRiskFill(a.residual); res.font = { bold: true, color: { argb: excelRiskTextOn(a.residual) } }; res.alignment = { horizontal: 'center' };
             styleBodyCells(ws, r.number, headers.length);
         });
-        setCols(ws, [12, 38, 60, 12, 10, 12, 12]);
+        setCols(ws, [12, 38, 60, 12, 10, 12, 12, 24, 8, 8, 40, 42]);
     }
 
     // =====================================================
@@ -5650,6 +6306,10 @@ window.promptReason         = promptReason;
 window.showSection          = showSection;
 window.runEnforcementEngine = runEnforcementEngine;
 window.applyRiskTemplate    = applyRiskTemplate;
+window.syncCiaQuestionnaireIntoClassificationFields = syncCiaQuestionnaireIntoClassificationFields;
+window.addRiskScenario             = addRiskScenario;
+window.removeCurrentRiskScenario   = removeCurrentRiskScenario;
+window.switchRiskScenarioIndex     = switchRiskScenarioIndex;
 window.updateTags           = updateTags;
 window.removeTag            = removeTag;
 window.clearForm            = clearForm;
