@@ -33,6 +33,8 @@
     "start": "node scripts/serve.mjs 8000",
     "start:node": "node scripts/serve.mjs 8000",
     "build": "echo 'No build step required - vanilla JS'",
+    "deploy": "vercel deploy --yes",
+    "deploy:prod": "vercel deploy --prod --yes",
     "test": "echo 'Add tests here'",
     "test:auth-email": "node scripts/test-auth-email.mjs"
   },
@@ -47,5 +49,8 @@
     "> 1%",
     "last 2 versions",
     "not dead"
-  ]
+  ],
+  "devDependencies": {
+    "vercel": "^54.1.0"
+  }
 }

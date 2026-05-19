@@ -24,9 +24,8 @@ function initSupabaseClient() {
 
 /** Redirect URL after email verification — must be listed in Supabase Auth → URL Configuration. */
 function getAuthRedirectUrl() {
-    const { origin, pathname } = window.location;
-    const path = pathname && pathname !== '/' ? pathname : '/index.html';
-    return origin + path;
+    const { origin } = window.location;
+    return origin.replace(/\/$/, '') + '/';
 }
 
 /** Remove Supabase auth blobs from localStorage — local session only; keeps unrelated keys. */
@@ -488,13 +487,27 @@ function rollupScenarioWorstHeatmapAxes(scenarios) {
   return w;
 }
 
+/** PCI-DSS v4 floor applies only to FA assets that process CHD or are cyber/payment-exposed — not petty-cash ledgers. */
+function isPciInScopeFaAsset(ctx, threatKey) {
+    const t = String(threatKey || '').trim().toLowerCase();
+    if (ctx.environment === 'Internet Facing') return true;
+    if (t.startsWith('cyber_')) return true;
+    if (/pay|bank|gateway|card|pci|unauth|supply|leak|ddos|vuln|legal_dpa/.test(t)) return true;
+    return false;
+}
+
 /** Resolve which mandatory baselines apply to the current asset state. */
-function getApplicableMandatorySets(ctx) {
+function getApplicableMandatorySets(ctx, threatKey) {
     const sets = [];
     const ciaMaxVal = ciaMax(parseInt(ctx.c) || 0, parseInt(ctx.i) || 0, parseInt(ctx.a) || 0);
-    if (ciaMaxVal >= 4)            sets.push({ key: 'restrictedClass', ...MANDATORY_CONTROLS.restrictedClass });
-    else if (ciaMaxVal >= 3)       sets.push({ key: 'confidentialClass', ...MANDATORY_CONTROLS.confidentialClass });
-    if (ctx.type === 'FA')        sets.push({ key: 'fa', ...MANDATORY_CONTROLS.fa });
+    const digitalTypes = new Set(['IA', 'SA', 'SV', 'FA']);
+    if (digitalTypes.has(ctx.type)) {
+        if (ciaMaxVal >= 4)            sets.push({ key: 'restrictedClass', ...MANDATORY_CONTROLS.restrictedClass });
+        else if (ciaMaxVal >= 3)       sets.push({ key: 'confidentialClass', ...MANDATORY_CONTROLS.confidentialClass });
+    }
+    if (ctx.type === 'FA' && isPciInScopeFaAsset(ctx, threatKey)) {
+        sets.push({ key: 'fa', ...MANDATORY_CONTROLS.fa });
+    }
     if (ctx.pii === 'Y' || ctx.spi === 'Y') sets.push({ key: 'pii', ...MANDATORY_CONTROLS.pii });
     if (ctx.environment === 'Internet Facing') sets.push({ key: 'internetFacing', ...MANDATORY_CONTROLS.internetFacing });
     return sets;
@@ -1099,7 +1112,7 @@ function runEnforcementEngine(skipAutoTemplate = false) {
         environment: g('f-environment')
     };
     const mandatoryIds = new Set();
-    getApplicableMandatorySets(mandatoryCtx).forEach(set => set.ids.forEach(id => mandatoryIds.add(id)));
+    getApplicableMandatorySets(mandatoryCtx, g('f-risk-category') || '').forEach(set => set.ids.forEach(id => mandatoryIds.add(id)));
 
     for (let i = 1; i <= 13; i++) {
         const cb = document.getElementById('ctrl' + i);
@@ -1349,6 +1362,42 @@ function parseAssetRiskScenariosArray(rawJson) {
     return null;
 }
 
+/** Worst residual across roll-up column and per-scenario JSON (matches save-time rollup). */
+function effectiveAssetResidual(asset) {
+    const sc = parseAssetRiskScenariosArray(asset?.asset_risks_json);
+    if (sc && sc.length) {
+        const repr = worstScenarioForReporting(sc);
+        return repr?.residual || asset?.residual || 'Moderate';
+    }
+    return rollupWorstResidualRating([asset?.residual].filter(Boolean));
+}
+
+function effectiveAssetInherent(asset) {
+    const sc = parseAssetRiskScenariosArray(asset?.asset_risks_json);
+    if (sc && sc.length) {
+        const repr = worstScenarioForReporting(sc);
+        return repr?.inherit || asset?.inherit || 'Moderate';
+    }
+    return rollupWorstInherentRatings([asset?.inherit].filter(Boolean));
+}
+
+/** Single paired scenario for register / export (inherent + residual + P×S stay aligned). */
+function effectiveAssetReportingScenario(asset) {
+    const sc = parseAssetRiskScenariosArray(asset?.asset_risks_json);
+    if (sc && sc.length) {
+        const repr = worstScenarioForReporting(sc);
+        if (repr) return repr;
+    }
+    return {
+        prob: asset?.prob,
+        sev: asset?.sev,
+        inherit: asset?.inherit,
+        residual: asset?.residual,
+        resProb: asset?.resProb,
+        resSev: asset?.resSev,
+    };
+}
+
 function parsedRiskScenarioCountForAsset(asset) {
     const p = parseAssetRiskScenariosArray(asset?.asset_risks_json);
     return p ? p.length : 1;
@@ -1418,6 +1467,83 @@ function getActiveCheckboxCtrlIdsFromForm() {
         if (cb && cb.checked && !cb.disabled) active.push(i);
     }
     return active;
+}
+
+function gatherAssetResidualCtxFromStored(asset) {
+    const active = globalControls.filter(c => c.asset_id === asset.id).map(c => c.ctrl_id);
+    let mbss = {};
+    let fw = {};
+    try { mbss = parseJsonSafe(asset.mbss_json, {}) || {}; } catch (_) { /* noop */ }
+    try { fw = parseJsonSafe(asset.firewall_json, {}) || {}; } catch (_) { /* noop */ }
+    return {
+        env: asset.environment,
+        currentPii: asset.pii,
+        currentSpi: asset.spi,
+        type: asset.type,
+        cVal: normalizeCiaStored(asset.ciaC),
+        iVal: normalizeCiaStored(asset.ciaI),
+        aVal: normalizeCiaStored(asset.ciaA),
+        active,
+        mbssFwEv: { mbss, fw },
+    };
+}
+
+/** Live engine pass for register rows — uses actual controls, not stale DB columns. */
+function liveRegisterMetricsForAsset(asset) {
+    const ctx = gatherAssetResidualCtxFromStored(asset);
+    let scenarios = parseAssetRiskScenariosArray(asset.asset_risks_json);
+    if (!scenarios || !scenarios.length) {
+        const rb = { ...defaultRiskBasisObject(), ...parseJsonSafe(asset.risk_basis_json, {}) };
+        scenarios = [{
+            riskCategory: (asset.riskCategory || '').split('|')[0].trim(),
+            riskDesc: asset.riskDesc || '',
+            risk_basis: rb,
+            prob: parseInt(asset.prob, 10) || 3,
+            sev: parseInt(asset.sev, 10) || 3,
+        }];
+    }
+    const computed = scenarios.map(sc => {
+        const row = {
+            ...sc,
+            risk_basis: { ...defaultRiskBasisObject(), ...(sc.risk_basis && typeof sc.risk_basis === 'object' ? sc.risk_basis : {}) },
+        };
+        const bundle = computeResidualBundleForScenario(row, ctx);
+        return {
+            ...row,
+            prob: bundle.p,
+            sev: bundle.s,
+            inherit: bundle.inherentRating,
+            residual: bundle.residualRating,
+            resProb: bundle.resP,
+            resSev: bundle.resSev,
+            controlGaps: bundle.gaps || [],
+        };
+    });
+    return worstScenarioForReporting(computed) || computed[0];
+}
+
+function isElevatedResidualTier(tier) {
+    return tier === 'High' || tier === 'Moderate';
+}
+
+function liveAssetResidualTier(asset) {
+    return liveRegisterMetricsForAsset(asset).residual || effectiveAssetResidual(asset);
+}
+
+function liveAssetInherentTier(asset) {
+    return liveRegisterMetricsForAsset(asset).inherit || effectiveAssetInherent(asset);
+}
+
+function assetRequiresActionPlan(asset) {
+    return isElevatedResidualTier(liveAssetResidualTier(asset)) && asset.actionType !== 'Accept';
+}
+
+function approvedElevatedAssets() {
+    return approvedAssetsOnly().filter(a => isElevatedResidualTier(liveAssetResidualTier(a)));
+}
+
+function approvedAssetsRequiringActionPlan() {
+    return approvedAssetsOnly().filter(assetRequiresActionPlan);
 }
 
 function gatherAssetResidualCtxFromDom() {
@@ -1520,7 +1646,10 @@ function computeResidualBundleForScenario(scenario, assetCtx) {
     let resS = Math.max(1, Math.round(s - sRed));
     let residualRating = INHERIT[resS + '-' + resP] || 'Low';
 
-    const mandatorySets = getApplicableMandatorySets({ type, c: cVal, i: iVal, a: aVal, pii: currentPii, spi: currentSpi, environment: env });
+    const mandatorySets = getApplicableMandatorySets(
+        { type, c: cVal, i: iVal, a: aVal, pii: currentPii, spi: currentSpi, environment: env },
+        threat
+    );
     const gaps = [];
     let highestFloor = 'Very Low';
     mandatorySets.forEach(set => {
@@ -1537,6 +1666,9 @@ function computeResidualBundleForScenario(scenario, assetCtx) {
         if (highestFloor === 'High') { resP = Math.max(resP, 4); resS = Math.max(resS, 4); }
         else if (highestFloor === 'Moderate') { resP = Math.max(resP, 3); resS = Math.max(resS, 3); }
         else if (highestFloor === 'Low') { resP = Math.max(resP, 2); resS = Math.max(resS, 2); }
+    }
+    if (!gaps.length && RESIDUAL_FLOOR_RANK[residualRating] > RESIDUAL_FLOOR_RANK[inherentRating]) {
+        residualRating = inherentRating;
     }
 
     return {
@@ -2916,7 +3048,7 @@ function removeTag(n, event) {
 }
 
 function updateActionBadge() {
-    const actionsCount = approvedAssetsOnly().filter(a => ['High', 'Moderate'].includes(a.residual) && a.actionType !== 'Accept').length;
+    const actionsCount = approvedAssetsRequiringActionPlan().length;
     const navActions = document.getElementById('nav-actions');
     if(navActions) navActions.textContent = actionsCount;
 }
@@ -3349,7 +3481,7 @@ function calculateDeadlines() {
         }
     });
     
-    const hCount = approvedAssetsOnly().filter(a => a.residual === 'High').length;
+    const hCount = approvedAssetsOnly().filter(a => liveAssetResidualTier(a) === 'High').length;
     
     const highBadge = document.getElementById('hdr-high');
     if(highBadge) highBadge.textContent = hCount;
@@ -3571,13 +3703,16 @@ function buildAssetPayloadFromForm() {
   ).filter(Boolean);
 
   const heat = rollupScenarioWorstHeatmapAxes(assetRiskScenarios);
-  const rollupResRat = rollupWorstResidualRating(assetRiskScenarios.map(s => s.residual));
-  const rollupInRat = rollupWorstInherentRatings(assetRiskScenarios.map(s => s.inherit));
   const repr = worstScenarioForReporting(assetRiskScenarios);
 
   const pHM = heat != null ? heat.prob : (repr != null && repr.prob != null ? repr.prob : (parseInt(g('f-prob'), 10) || 3));
   const sHM = heat != null ? heat.sev : (repr != null && repr.sev != null ? repr.sev : (parseInt(g('f-sev'), 10) || 3));
   const firstBasis = assetRiskScenarios.length ? (assetRiskScenarios[0].risk_basis || defaultRiskBasisObject()) : normalizeRiskBasisForPersist();
+  const rollupInRat = repr?.inherit || rollupWorstInherentRatings(assetRiskScenarios.map(s => s.inherit));
+  let rollupResRat = repr?.residual || rollupWorstResidualRating(assetRiskScenarios.map(s => s.residual));
+  if (RESIDUAL_FLOOR_RANK[rollupResRat] > RESIDUAL_FLOOR_RANK[rollupInRat]) {
+    rollupResRat = rollupInRat;
+  }
 
   return {
     id, type, name,
@@ -5660,30 +5795,45 @@ function renderRegister() {
 
 function renderRiskRegister() {
   let data = [...approvedAssetsOnly()];
-  data.sort((a,b) => {
-    const order = {High:0, Moderate:1, Low:2, 'Very Low':3};
-    return (order[a.residual]||4) - (order[b.residual]||4);
+  data.sort((a, b) => {
+    const order = { High: 0, Moderate: 1, Low: 2, 'Very Low': 3 };
+    const ra = liveRegisterMetricsForAsset(a).residual;
+    const rb = liveRegisterMetricsForAsset(b).residual;
+    const diff = (order[ra] || 4) - (order[rb] || 4);
+    if (diff !== 0) return diff;
+    const ia = liveRegisterMetricsForAsset(a).inherit;
+    const ib = liveRegisterMetricsForAsset(b).inherit;
+    return (order[ia] || 4) - (order[ib] || 4);
   });
 
   const tbody = document.getElementById('risk-body');
-  if(!tbody) return;
-  
+  if (!tbody) return;
+
   if (!data.length) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;">No records in DB.</td></tr>`; return; }
 
+  const pxs = (p, s) => (p && s ? `<div style="font-size:9px;color:var(--text3);margin-top:2px;">P${p}×S${s}</div>` : '');
+
   tbody.innerHTML = data.map(a => {
+    const repr = liveRegisterMetricsForAsset(a);
+    const inh = repr.inherit || a.inherit;
+    const res = repr.residual || a.residual;
     const ctrls = globalControls.filter(c => c.asset_id === a.id).length;
     const rc = parsedRiskScenarioCountForAsset(a);
     const snippet = escapeHtmlSafe((a.riskDesc || '—').substring(0, 60));
     const more = (a.riskDesc || '').length > 60 ? '…' : '';
     const multi = rc > 1 ? ` <span style="color:var(--accent2);font-weight:600;">(${rc} risks)</span>` : '';
+    const resP = repr.resProb ?? Math.max(1, (repr.prob || 3) - 1);
+    const resS = repr.resSev ?? Math.max(1, (repr.sev || 3) - 1);
+    const gapHint = (repr.controlGaps && repr.controlGaps.length)
+      ? `<div style="font-size:9px;color:var(--warn);margin-top:2px;">↑ control gap floor</div>` : '';
     return `
     <tr>
       <td><span class="badge badge-id">${a.id}</span></td>
       <td><strong>${escapeHtmlSafe(a.name || '')}</strong></td>
       <td style="color:var(--text2);font-size:11px">${snippet}${more}${multi}</td>
-      <td>${riskBadge(a.inherit)}</td>
+      <td>${riskBadge(inh)}${pxs(repr.prob, repr.sev)}</td>
       <td style="font-size:11px;color:var(--text2);">${ctrls} Controls</td>
-      <td>${riskBadge(a.residual)}</td>
+      <td>${riskBadge(res)}${pxs(resP, resS)}${gapHint}</td>
     </tr>
   `;
   }).join('');
@@ -5742,7 +5892,7 @@ function renderControls() {
 }
 
 function renderActions() {
-    const items = approvedAssetsOnly().filter(a => ['High', 'Moderate'].includes(a.residual) && a.actionType !== 'Accept')
+    const items = approvedAssetsRequiringActionPlan()
                               .sort((a,b) => new Date(a.actionDate||'2099-01-01') - new Date(b.actionDate||'2099-01-01'));
     const el = document.getElementById('actions-content');
     if(!el) return;
@@ -5764,15 +5914,17 @@ function renderActions() {
                 <span style="color:var(--accent2)">Strategy Category:</span> ${strategy.toUpperCase()} (${groupItems.length} items)
             </div>`;
         
-        html += groupItems.map(a => `
-            <div class="card" style="border-left:3px solid ${a.residual==='High'?'var(--danger)':'var(--warn)'}; margin-bottom:12px; padding:16px 24px;">
+        html += groupItems.map(a => {
+            const resTier = liveAssetResidualTier(a);
+            return `
+            <div class="card" style="border-left:3px solid ${resTier==='High'?'var(--danger)':'var(--warn)'}; margin-bottom:12px; padding:16px 24px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
                     <div>
                         <span class="badge badge-id" style="margin-right:8px">${a.id}</span>
                         <strong style="font-size:14px">${a.name}</strong>
                         <span class="badge badge-type" style="margin-left:8px">${a.type}</span>
                     </div>
-                    ${riskBadge(a.residual)}
+                    ${riskBadge(resTier)}
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
                     <div>
@@ -5789,7 +5941,8 @@ function renderActions() {
                     <button class="btn btn-sm" onclick="editAsset('${a.id}')">Update Asset →</button>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
         html += `</div>`; 
     }
     el.innerHTML = html;
@@ -5850,13 +6003,23 @@ function renderDashboard() {
   const approved = approvedAssetsOnly();
   const total = approved.length;
 
-  /* -------- Risk posture KPIs (elevated = High + Moderate residual) -------- */
-  const elevated = approved.filter(a => a.residual === 'High' || a.residual === 'Moderate');
+  /* -------- Risk posture KPIs (elevated = High + Moderate residual, live engine) -------- */
+  const liveById = new Map(approved.map(a => [a.id, liveRegisterMetricsForAsset(a)]));
+  const residualOf = (a) => liveById.get(a.id)?.residual ?? effectiveAssetResidual(a);
+  const inherentOf = (a) => liveById.get(a.id)?.inherit ?? effectiveAssetInherent(a);
+  const elevated = approved.filter(a => isElevatedResidualTier(residualOf(a)));
+  const actionPlans = approved.filter(a => isElevatedResidualTier(residualOf(a)) && a.actionType !== 'Accept');
+  const acceptable = approved.filter(a => {
+    const r = residualOf(a);
+    return r === 'Low' || r === 'Very Low';
+  });
   const elevatedN = elevated.length;
+  const acceptableN = acceptable.length;
   const thresholdPct = total ? Math.round((elevatedN / total) * 1000) / 10 : 0;
+  const acceptablePct = total ? Math.round((acceptableN / total) * 1000) / 10 : 0;
 
   const inhMap = { High: 4, Moderate: 3, Low: 2, 'Very Low': 1 };
-  const inhVals = approved.map(a => inhMap[a.inherit]).filter(v => v > 0);
+  const inhVals = approved.map(a => inhMap[inherentOf(a)]).filter(v => v > 0);
   const avgInh = inhVals.length ? inhVals.reduce((x, y) => x + y, 0) / inhVals.length : 0;
 
   const assessed = approved.filter(a =>
@@ -5877,6 +6040,7 @@ function renderDashboard() {
 
   const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   setTxt('dm-risk-threshold-pct', `${thresholdPct}%`);
+  setTxt('dm-risk-acceptable-pct', `${acceptablePct}% acceptable`);
   setTxt('dm-risk-threshold-n', String(elevatedN));
   setTxt('dm-risk-avg-inherit', avgInh ? `Avg inherent tier: ${avgInh.toFixed(2)} (1=Very Low … 4=High)` : 'Avg inherent tier: —');
   setTxt('dm-risk-analysis-pct', `${analysisPct}%`);
@@ -5886,12 +6050,16 @@ function renderDashboard() {
   if(document.getElementById('nav-total')) document.getElementById('nav-total').textContent = total;
   if(document.getElementById('dm-total')) document.getElementById('dm-total').textContent = total;
   
-  const highRisk = approved.filter(a => a.residual === 'High').length;
-  const modRisk = approved.filter(a => a.residual === 'Moderate').length;
+  const highRisk = approved.filter(a => residualOf(a) === 'High').length;
+  const modRisk = approved.filter(a => residualOf(a) === 'Moderate').length;
+  const lowRisk = approved.filter(a => residualOf(a) === 'Low').length;
+  const vlowRisk = approved.filter(a => residualOf(a) === 'Very Low').length;
   const piiCount = approved.filter(a => a.pii === 'Y' || a.spi === 'Y').length;
   
   if(document.getElementById('dm-high')) document.getElementById('dm-high').textContent = highRisk;
   if(document.getElementById('dm-mod')) document.getElementById('dm-mod').textContent = modRisk;
+  if(document.getElementById('dm-low')) document.getElementById('dm-low').textContent = lowRisk;
+  if(document.getElementById('dm-vlow')) document.getElementById('dm-vlow').textContent = vlowRisk;
   if(document.getElementById('dm-pii')) document.getElementById('dm-pii').textContent = piiCount;
 
   const barHtml = (label, val, t, color) => {
@@ -5908,7 +6076,11 @@ function renderDashboard() {
       else typeEl.innerHTML = Object.keys(byType).map(t => barHtml(t, byType[t], total || 1, typeColors[t])).join('');
   }
 
-  const byRes = {}; approved.forEach(a => byRes[a.residual] = (byRes[a.residual] || 0) + 1);
+  const byRes = {};
+  approved.forEach(a => {
+    const r = residualOf(a);
+    byRes[r] = (byRes[r] || 0) + 1;
+  });
   const rColors = {'High':'var(--danger)','Moderate':'var(--warn)','Low':'var(--accent2)','Very Low':'var(--success)'};
   const resEl = document.getElementById('dash-residual');
   if(resEl) {
@@ -5927,12 +6099,12 @@ function renderDashboard() {
   const trEl = document.getElementById('dash-top-risk');
   if(trEl) {
       const sevMap = { 'Critical': 1, 'High': 2, 'Moderate': 3, 'Low': 4, 'Very Low': 5 };
-      const topRisks = [...approved].sort((a, b) => (sevMap[a.residual] || 6) - (sevMap[b.residual] || 6)).slice(0, 5);
+      const topRisks = [...approved].sort((a, b) => (sevMap[residualOf(a)] || 6) - (sevMap[residualOf(b)] || 6)).slice(0, 5);
       if(!topRisks.length) trEl.innerHTML = '<p style="color:var(--text3);text-align:center;">No data</p>';
       else trEl.innerHTML = topRisks.map(a => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
           <div><span class="badge badge-id" style="margin-right:6px;font-size:9px">${a.id}</span><span style="font-size:12px;color:var(--text)">${a.name}</span></div>
-          ${riskBadge(a.residual)}
+          ${riskBadge(residualOf(a))}
         </div>
       `).join('');
   }
@@ -5945,11 +6117,12 @@ function renderDashboard() {
     { label: 'Very Low', n: byRes['Very Low'] || 0, hex: '#00cc77' }
   ]);
 
-  const stDone = elevated.filter(a => a.actionStatus === 'Done').length;
-  const stProg = elevated.filter(a => a.actionStatus === 'In Progress').length;
-  const stPend = elevated.filter(a => a.actionStatus === 'Pending').length;
+  const actionPlanN = actionPlans.length;
+  const stDone = actionPlans.filter(a => a.actionStatus === 'Done').length;
+  const stProg = actionPlans.filter(a => a.actionStatus === 'In Progress').length;
+  const stPend = actionPlans.filter(a => a.actionStatus === 'Pending').length;
   const stSum = stDone + stProg + stPend;
-  const stOther = Math.max(0, elevatedN - stSum);
+  const stOther = Math.max(0, actionPlanN - stSum);
   renderDashboardDonut(document.getElementById('dash-action-donut'), [
     { label: 'Done', n: stDone, hex: '#00cc77' },
     { label: 'In progress', n: stProg, hex: '#00d4ff' },

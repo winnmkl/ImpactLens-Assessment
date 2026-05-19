@@ -272,9 +272,11 @@
 
       <p class="dash-section-title dashboard-elevated-only">Risk posture</p>
       <div class="metrics-grid metrics-grid--risk dashboard-elevated-only">
-        <div class="metric-card danger">
+        <div class="metric-card warn">
           <div class="metric-num" id="dm-risk-threshold-pct">0%</div>
-          <div class="metric-label">Share ≥ Moderate residual <span class="metric-hint">(elevated)</span></div>
+          <div class="metric-sub" id="dm-risk-threshold-elevated-label">Elevated · Moderate + High</div>
+          <div class="metric-sub" id="dm-risk-acceptable-pct">0% Low / Very Low</div>
+          <div class="metric-label">Residual risk share</div>
         </div>
         <div class="metric-card warn">
           <div class="metric-num" id="dm-risk-threshold-n">0</div>
@@ -297,6 +299,8 @@
         <div class="metric-card accent"><div class="metric-num" id="dm-total">0</div><div class="metric-label" id="dm-total-label">Approved in register</div></div>
         <div class="metric-card danger dashboard-elevated-only"><div class="metric-num" id="dm-high">0</div><div class="metric-label">High Residual Risk</div></div>
         <div class="metric-card warn dashboard-elevated-only"><div class="metric-num" id="dm-mod">0</div><div class="metric-label">Moderate Residual Risk</div></div>
+        <div class="metric-card accent dashboard-elevated-only"><div class="metric-num" id="dm-low">0</div><div class="metric-label">Low Residual Risk</div></div>
+        <div class="metric-card info dashboard-elevated-only"><div class="metric-num" id="dm-vlow">0</div><div class="metric-label">Very Low Residual</div></div>
         <div class="metric-card info"><div class="metric-num" id="dm-pii">0</div><div class="metric-label">Assets with PII/SPI tagged</div></div>
       </div>
 
@@ -310,7 +314,7 @@
           <div id="dash-heatmap"></div>
         </div>
         <div class="card">
-          <div class="card-header">Action plan status <span style="font-size:9px;color:var(--text3);margin-left:6px;">Elevated residuals (High / Moderate)</span></div>
+          <div class="card-header">Action plan status <span style="font-size:9px;color:var(--text3);margin-left:6px;">High / Moderate · excludes accepted risk</span></div>
           <div class="dash-donut-block" id="dash-action-donut"></div>
         </div>
       </div>
@@ -826,7 +830,7 @@
     </div>
 
     <div id="sec-risk" class="section">
-      <div class="page-header"><div><div class="page-title">RISK <span>REGISTER</span></div><div class="page-desc">// Combined Risk Heatmap and Query Table</div></div></div>
+      <div class="page-header"><div><div class="page-title">RISK <span>REGISTER</span></div><div class="page-desc">// Inherent = P×S before controls · Residual = P×S after controls (residual never exceeds inherent unless control gaps are flagged)</div></div></div>
       
       <div class="card">
         <div class="card-header">Inherent Risk Matrix Heatmap</div>
@@ -1052,7 +1056,7 @@
 
 <div id="notification" class="notification"></div>
 
-<script src="./assets/scripts/app.js?v=20260519-cia5-isra-multi"></script>
+<script src="./assets/scripts/app.js?v=20260519-action-count-fix"></script>
 
 </body>
 </html>

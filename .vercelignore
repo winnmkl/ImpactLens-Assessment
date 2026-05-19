@@ -1,0 +1,6 @@
+node_modules
+.git
+supabase/.temp
+/scripts
+/docs
+*.md

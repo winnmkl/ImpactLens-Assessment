@@ -1,7 +1,7 @@
 /**
- * Regenerates the PLM asset DELETE/INSERT/controls block in supabase/master_setup.sql
- * with 110–120 assets, cia_questionnaire_json, multi-scenario asset_risks_json, risk_basis_json,
- * owners & classification justification + inline mbss/firewall JSON.
+ * Regenerates the asset DELETE/INSERT/controls block in supabase/master_setup.sql
+ * with 110–120 assets, cia_questionnaire_json (1–5), multi-scenario asset_risks_json,
+ * risk_basis_json (threats[] / vulnerabilities[] bands 1–5, max-based CIA), owners & justification.
  *
  * Run from repo root: node scripts/regenerate_master_asset_seed.mjs
  */
@@ -13,7 +13,132 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
 const masterPath = path.join(root, 'supabase', 'master_setup.sql');
 
-/** @type {[string,string,string,string,string,string,string,string,string,string,string,number,number,string,string][]} */
+const TARGET_TOTAL = 117;
+
+/** Matches assets/scripts/app.js INHERIT matrix (severity-probability → rating). */
+const INHERIT = {
+  '5-1': 'Moderate', '5-2': 'Moderate', '5-3': 'High', '5-4': 'High', '5-5': 'High',
+  '4-1': 'Low', '4-2': 'Moderate', '4-3': 'Moderate', '4-4': 'High', '4-5': 'High',
+  '3-1': 'Low', '3-2': 'Moderate', '3-3': 'Moderate', '3-4': 'Moderate', '3-5': 'High',
+  '2-1': 'Low', '2-2': 'Low', '2-3': 'Moderate', '2-4': 'Moderate', '2-5': 'Moderate',
+  '1-1': 'Very Low', '1-2': 'Low', '1-3': 'Low', '1-4': 'Low', '1-5': 'Moderate',
+};
+
+const RISK_RANK = { 'Very Low': 0, 'Low': 1, 'Moderate': 2, 'High': 3 };
+
+function clampPS(n) {
+  return Math.max(1, Math.min(5, parseInt(String(n), 10) || 3));
+}
+
+function inheritFromPS(prob, sev) {
+  return INHERIT[`${clampPS(sev)}-${clampPS(prob)}`] || 'Moderate';
+}
+
+/** Residual after control stack — `gaps` simulates material control gaps (High residual demo). */
+function residualFromAppliedControls(prob, sev, controlStrength = 'full') {
+  const p = clampPS(prob);
+  const s = clampPS(sev);
+  let pDrop;
+  let sDrop;
+  if (controlStrength === 'gaps') {
+    pDrop = 0;
+    sDrop = 0;
+  } else if (controlStrength === 'partial') {
+    pDrop = 1;
+    sDrop = 1;
+  } else {
+    pDrop = p >= 4 ? 2 : 1;
+    sDrop = s >= 4 ? 2 : 1;
+  }
+  const resP = clampPS(p - pDrop);
+  const resS = clampPS(s - sDrop);
+  return { resP, resS, residual: inheritFromPS(resP, resS) };
+}
+
+function rollupWorstRating(vals) {
+  const arr = (vals || []).filter(Boolean);
+  if (!arr.length) return 'Moderate';
+  return arr.reduce((w, x) => (RISK_RANK[x] > RISK_RANK[w] ? x : w), 'Very Low');
+}
+
+/** Residual cannot exceed inherent unless mandatory-control floors apply (seed assumes controls in place). */
+function capResidualToInherent(inherit, residual) {
+  if ((RISK_RANK[residual] ?? 0) > (RISK_RANK[inherit] ?? 0)) return inherit;
+  return residual;
+}
+
+function scenarioMetrics(prob, sev, controlStrength = 'full') {
+  const p = clampPS(prob);
+  const s = clampPS(sev);
+  const inherit = inheritFromPS(p, s);
+  const { resP, resSev, residual } = residualFromAppliedControls(p, s, controlStrength);
+  const capped = capResidualToInherent(inherit, residual);
+  return { prob: p, sev: s, inherit, residual: capped, resProb: resP, resSev, controlStrength };
+}
+
+function worstScenarioForSeed(scenarios) {
+  if (!scenarios.length) return scenarios[0];
+  return scenarios.reduce((w, sc) => {
+    const rCmp = (RISK_RANK[sc.residual] ?? 0) - (RISK_RANK[w.residual] ?? 0);
+    const iCmp = (RISK_RANK[sc.inherit] ?? 0) - (RISK_RANK[w.inherit] ?? 0);
+    if (rCmp > 0 || (rCmp === 0 && iCmp > 0)) return sc;
+    return w;
+  }, scenarios[0]);
+}
+
+/** Realistic P×S spread with a visible High tail for dashboard elevation KPIs. */
+function controlStrengthForAsset(type, env, cat, rowSeed) {
+  const catKey = String(cat || '');
+  const isCrownJewel =
+    (type === 'IA' || type === 'FA' || type === 'SA') &&
+    (env === 'Internet Facing' ||
+      /leak|emr|payroll|bank|bor|proc|endow|president|vpn|adm-portal|pay-gw|unauth|vuln|ddos|supply/i.test(catKey));
+  if (isCrownJewel && (rowSeed % 11 === 0 || rowSeed % 13 === 0 || rowSeed % 17 === 0)) return 'gaps';
+  if (isCrownJewel && rowSeed % 7 === 0) return 'partial';
+  if (env === 'Internet Facing' && rowSeed % 19 === 0) return 'partial';
+  return 'full';
+}
+
+function assignRealisticRisk(type, env, cat, rowSeed, tplProb, tplSev) {
+  const roll = rowSeed % 20;
+  const catKey = String(cat || '');
+  const strength = controlStrengthForAsset(type, env, cat, rowSeed);
+  const isCritical =
+    (type === 'IA' || type === 'FA') &&
+    (tplSev >= 5 || /leak|emr|payroll|bank|bor|proc|endow|president|vpn|adm-portal|pay-gw/i.test(catKey));
+  const isPeripheral = type === 'PhA' || (type === 'SV' && env === 'Internal' && tplSev <= 3);
+
+  let prob;
+  let sev;
+  if (strength === 'gaps') {
+    prob = 5;
+    sev = rowSeed % 3 === 0 ? 5 : 4;
+  } else if (strength === 'partial') {
+    prob = clampPS(Math.max(tplProb, 4));
+    sev = clampPS(Math.max(tplSev, 4));
+  } else if (isCritical) {
+    prob = clampPS(Math.max(tplProb, 3));
+    sev = clampPS(Math.max(tplSev, 4));
+  } else if (isPeripheral && roll < 9) {
+    prob = 1 + (roll % 2);
+    sev = 1 + (roll % 3);
+  } else if (roll < 7) {
+    prob = 2;
+    sev = 2;
+  } else if (roll < 12) {
+    prob = 2;
+    sev = 3;
+  } else if (roll < 16) {
+    prob = 3;
+    sev = 3;
+  } else {
+    prob = clampPS(tplProb);
+    sev = clampPS(tplSev);
+  }
+
+  return scenarioMetrics(prob, sev, strength);
+}
+
 const PLM_ASSETS_BASE = [
   ['IA', 'PLM Central Registration System (CRS) Database', 'Registrar', 'CRS-DB-PROD', 'CRS Primary PostgreSQL', 'University Registrar', 'Student records, grades, enrollment — primary SIS datastore.', '10.20.1.10', 'Internal', 'Office of the Registrar', 'cyber_ext_leak', 3, 5, 'High', 'Moderate'],
   ['IA', 'Yoshii Scholarship Foundation Beneficiary Records', 'Scholarship Office', 'SCHOL-DB-01', 'Scholarship DB Server', 'Scholarship Office Head', 'Financial aid and donor-linked student PII/SPI.', '10.20.2.15', 'Internal', 'Scholarship & Financial Aid', 'legal_dpa', 3, 5, 'High', 'Moderate'],
@@ -126,53 +251,70 @@ function dollarChunks(id, rb, ar, cq, mbssS, fw) {
   return { dRb, dAr, dCq, dM, dF };
 }
 
-/** @typedef {{pii:string,spi:string,corp:string,c:number,i:number,a:number}} Profile */
-/** @returns {Profile} */
+/** CIA 1–5 profiles by asset type (ISO 27005 / NIST SP 800-60 aligned). */
 function baseProfile(type) {
   switch (type) {
-    case 'IA': return { pii: 'Y', spi: 'Y', corp: 'Y', c: 3, i: 3, a: 3 };
-    case 'PhA': return { pii: 'N', spi: 'N', corp: 'N', c: 1, i: 1, a: 2 };
-    case 'PA': return { pii: 'Y', spi: 'N', corp: 'Y', c: 3, i: 2, a: 2 };
-    case 'SA': return { pii: 'N', spi: 'N', corp: 'Y', c: 2, i: 3, a: 3 };
-    case 'SV': return { pii: 'N', spi: 'N', corp: 'Y', c: 2, i: 2, a: 3 };
-    case 'FA': return { pii: 'Y', spi: 'Y', corp: 'Y', c: 3, i: 3, a: 3 };
-    default: return { pii: 'N', spi: 'N', corp: 'N', c: 2, i: 2, a: 2 };
+    case 'IA': return { pii: 'Y', spi: 'Y', corp: 'Y', c: 4, i: 4, a: 4 };
+    case 'PhA': return { pii: 'N', spi: 'N', corp: 'N', c: 2, i: 2, a: 3 };
+    case 'PA': return { pii: 'Y', spi: 'N', corp: 'Y', c: 3, i: 3, a: 3 };
+    case 'SA': return { pii: 'N', spi: 'N', corp: 'Y', c: 3, i: 4, a: 3 };
+    case 'SV': return { pii: 'N', spi: 'N', corp: 'Y', c: 3, i: 3, a: 4 };
+    case 'FA': return { pii: 'Y', spi: 'Y', corp: 'Y', c: 4, i: 4, a: 4 };
+    default: return { pii: 'N', spi: 'N', corp: 'N', c: 3, i: 3, a: 3 };
   }
 }
 
 function jitterProfile(type, seed) {
   const p = { ...baseProfile(type) };
-  const v = seed % 5;
-  if (v === 1) p.c = Math.max(1, p.c - 1);
-  if (v === 2) { p.i = Math.max(1, p.i - 1); }
-  if (v === 3) { p.a = Math.max(1, p.a - 1); p.c = Math.min(3, p.c + 1); }
-  if (type === 'IA' && v === 4) { p.spi = 'N'; }
-  const score = p.c + p.i + p.a;
-  if ((type === 'PhA' || type === 'PA') && score > 9) {
-    p.c = Math.max(1, p.c - 1);
-  }
+  const v = seed % 7;
+  const clamp15 = x => Math.max(1, Math.min(5, x));
+  if (v === 1) p.c = clamp15(p.c - 1);
+  if (v === 2) p.i = clamp15(p.i - 1);
+  if (v === 3) p.a = clamp15(p.a - 1);
+  if (v === 4) { p.c = clamp15(p.c + 1); p.spi = type === 'IA' ? 'N' : p.spi; }
+  if (v === 5 && type === 'SV') p.a = clamp15(p.a + 1);
+  if (v === 6 && type === 'PhA') { p.c = 2; p.i = 2; p.a = 2; }
   return p;
 }
 
-const CIA_CLASSES = {
-  3: 'Public', 4: 'Internal Use', 5: 'Internal Use',
-  6: 'Confidential', 7: 'Confidential', 8: 'Restricted', 9: 'Restricted',
-};
-
-function classifyScore(s) {
-  return CIA_CLASSES[Math.min(9, Math.max(3, s))] || 'Internal Use';
+function ciaMax(c, i, a) {
+  return Math.max(c, i, a);
 }
 
-function defaultRiskBasis(primaryCat, threatChoice, vulnChoice, descSnippet) {
+function ciaClassFromMax(c, i, a) {
+  const m = ciaMax(c, i, a);
+  if (m <= 1) return 'Public';
+  if (m <= 2) return 'Internal Use';
+  if (m <= 3) return 'Confidential';
+  return 'Restricted';
+}
+
+/** Map legacy 1–3 band to 1–5 spread. */
+function band15(v) {
+  const n = parseInt(String(v), 10) || 3;
+  if (n <= 3) return [2, 3, 4][Math.max(0, n - 1)];
+  return Math.max(1, Math.min(5, n));
+}
+
+function defaultRiskBasis(primaryCat, threatBand, vulnBand) {
+  const tb = band15(threatBand);
+  const vb = band15(vulnBand);
+  const threatStmt =
+    `${primaryCat}: external or insider actor could misuse access paths against this asset (band ${tb}/5).`;
+  const vulnStmt =
+    'Residual control gaps include patch posture, privileged access breadth, logging coverage, and annual backup restore verification (band ' + vb + '/5).';
   return {
-    threat_statement: `${primaryCat}: external or insider misuse affecting confidentiality of this dataset.`,
-    vulnerability_statement: 'Patch posture, privileged access breadth, logging coverage, backup restore tested annually.',
-    occurrence_justification: 'Historical incidents uncommon at PLM; peer-university disclosures inform conservative estimates.',
-    likelihood_qual: 2 + ((threatChoice + vulnChoice) % 3),
-    impact_qual: 2 + (((threatChoice * 2) + vulnChoice) % 4),
-    prior_incidents: (threatChoice + vulnChoice) % 4 === 0 ? 'Y' : 'N',
-    threat_choice: threatChoice,
-    vulnerability_choice: vulnChoice,
+    threats: [{ band: tb, actor: 'external', path: 'credential', statement: threatStmt }],
+    vulnerabilities: [{ band: vb, gap: 'access', scope: 'systemic', statement: vulnStmt }],
+    threat_statement: threatStmt,
+    vulnerability_statement: vulnStmt,
+    occurrence_justification:
+      'No known organizational incidents for this scenario; peer-sector and assurance testing inform a conservative likelihood estimate.',
+    likelihood_qual: Math.max(1, Math.min(5, 2 + (tb + vb) % 3)),
+    impact_qual: Math.max(1, Math.min(5, 2 + ((tb * 2 + vb) % 4))),
+    prior_incidents: (tb + vb) % 5 === 0 ? 'Y' : 'N',
+    threat_choice: tb,
+    vulnerability_choice: vb,
   };
 }
 
@@ -180,13 +322,14 @@ function ciaQuestionnaireFromProfile(profile, disclosureHint) {
   const scope =
     profile.pii === 'Y' && profile.spi === 'Y' ? 'spi' :
     profile.pii === 'Y' ? 'ordinary' : 'none';
+  const clamp15 = x => Math.max(1, Math.min(5, parseInt(String(x), 10) || 3));
   return {
-    disclosure_impact: String(disclosureHint ?? profile.c),
-    integrity_impact: String(profile.i),
-    availability_impact: String(profile.a),
+    disclosure_impact: String(clamp15(disclosureHint ?? profile.c)),
+    integrity_impact: String(clamp15(profile.i)),
+    availability_impact: String(clamp15(profile.a)),
     personal_data_scope: scope,
     corp_strategic: profile.corp,
-    version: 1,
+    version: 2,
   };
 }
 
@@ -195,7 +338,7 @@ function mbssPayload(type, env) {
     return { edr_epp: 'N', patch_current: 'N', disk_encryption: 'N', host_firewall: 'N', admin_priv_review: 'Y', last_review_date: '', notes: 'Physical asset — host MBSS baseline not applicable (system fixed).' };
   if (type === 'PA')
     return { edr_epp: 'N', patch_current: 'N', disk_encryption: 'N', host_firewall: 'N', admin_priv_review: 'Y', last_review_date: '', notes: 'Personnel asset — endpoint baseline not applicable (system fixed).' };
-  return { edr_epp: 'Y', patch_current: 'Y', disk_encryption: 'Y', host_firewall: 'Y', admin_priv_review: 'Y', last_review_date: '2026-05-01', notes: 'PLM ISMS seed baseline from master_setup; validate per asset.' };
+  return { edr_epp: 'Y', patch_current: 'Y', disk_encryption: 'Y', host_firewall: 'Y', admin_priv_review: 'Y', last_review_date: '2026-05-01', notes: 'ISMS seed baseline; validate per asset.' };
 }
 
 function firewallPayload(type, env) {
@@ -208,14 +351,14 @@ function firewallPayload(type, env) {
   return { scope: 'Network firewall', default_deny: 'Y', change_control: 'Y', logging_soc: 'Y', rule_review_cadence: 'Quarterly', overly_permissive: 'N', notes: 'Internal or hybrid; campus firewall baseline.' };
 }
 
-/** Multi-risk scenarios: primary mirrors rolled-up legacy columns */
+/** Multi-risk scenarios: secondary angles stay at or below primary P×S. */
 function riskScenariosForAsset(rowSeed, meta) {
-  const { id, riskCategory, riskDesc, prob, sev, inherit, residual,
-    primaryCat } = meta;
+  const { id, riskCategory, riskDesc, prob, sev, inherit, residual, resP, resSev,
+    primaryCat, controlStrength = 'full' } = meta;
   const n =
     meta.type === 'PhA' || meta.type === 'PA' ? 1 :
-      rowSeed % 11 === 0 ? 4 :
-      rowSeed % 6 === 0 ? 3 :
+      rowSeed % 11 === 0 ? 3 :
+      rowSeed % 6 === 0 ? 2 :
       rowSeed % 4 === 0 ? 2 : 1;
 
   const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
@@ -223,8 +366,8 @@ function riskScenariosForAsset(rowSeed, meta) {
   const out = [];
 
   for (let k = 0; k < n; k++) {
-    const tc = 1 + ((rowSeed + k * 7) % 3);
-    const vc = 1 + ((rowSeed + k * 5) % 3);
+    const tc = 2 + ((rowSeed + k * 7) % 4);
+    const vc = 2 + ((rowSeed + k * 5) % 4);
     const cat =
       k === 0 ? riskCategory :
       `${secondCats[k % secondCats.length]}__${riskCategory}`;
@@ -232,25 +375,34 @@ function riskScenariosForAsset(rowSeed, meta) {
       k === 0 ? riskDesc :
       `${secondCats[k % secondCats.length].replace(/_/g, ' ')} angle on the same asset: ${riskDesc.slice(0, 120)}`;
 
-    const p0 = clamp(prob + (k === 0 ? 0 : k - 2), 1, 5);
-    const s0 = clamp(sev + (k % 3) - 1, 1, 5);
+    let metrics;
+    if (k === 0) {
+      metrics = scenarioMetrics(prob, sev, controlStrength);
+    } else {
+      metrics = scenarioMetrics(
+        clamp(prob - 1 - (k % 2), 1, 5),
+        clamp(sev - 1 - (k % 2), 1, 5),
+        'full',
+      );
+    }
+    const { prob: p0, sev: s0, inherit: inh, residual: res, resProb: rp, resSev: rs } = metrics;
 
     /** @type {Record<string, unknown>} */
     const sc = {
       id: `${id.replace(/-/g, '')}-rs${k}`,
       riskCategory: cat,
       riskDesc: desc.slice(0, 4000),
-      risk_basis: defaultRiskBasis(primaryCat, tc, vc, desc),
+      risk_basis: defaultRiskBasis(primaryCat, tc, vc),
       prob: p0,
       sev: s0,
-      inherit: k === 0 ? inherit : (['Low', 'Moderate', 'High'][Math.abs(rowSeed + k) % 3]),
-      residual: k === 0 ? residual : (['Low', 'Moderate'][Math.abs(rowSeed + 2 * k) % 2]),
-      resProb: clamp(p0 - 1, 1, 5),
-      resSev: clamp(s0 - 1, 1, 5),
+      inherit: inh,
+      residual: res,
+      resProb: rp,
+      resSev: rs,
       actionType: 'Mitigate',
       actionStatus: k === 1 ? 'In Progress' : 'Pending',
       actionPlan:
-        k === 0 ? 'PLM ISMS mitigation in progress.' :
+        k === 0 ? 'ISMS mitigation in progress.' :
           `Scenario-specific control gap closure — ${cat.split('__')[0]}.`,
       actionOwner: 'Asset Owner',
       actionDate: '2026-12-31',
@@ -267,10 +419,10 @@ function buildRow(idx0, counters, tpl, variant) {
   counters[type] = (counters[type] || 0) + 1;
   const num = counters[type];
   const id = `${type}-${String(num).padStart(3, '0')}`;
-  let name, group, hostname, server, custodian, description, ip, env, dept, cat, prob, sev, inh, res;
+  let name, group, hostname, server, custodian, description, ip, env, dept, cat, prob, sev;
 
   if (variant === 'base') {
-    [, name, group, hostname, server, custodian, description, ip, env, dept, cat, prob, sev, inh, res] = tpl;
+    [, name, group, hostname, server, custodian, description, ip, env, dept, cat, prob, sev] = tpl;
   } else {
     const unit = UNITS[idx0 % UNITS.length];
     const [unitFull, abbr] = unit;
@@ -282,25 +434,38 @@ function buildRow(idx0, counters, tpl, variant) {
       .replace(/\{abbr\}/g, abbr + String(idx0 % 900 + 100))
       .replace(/\{n\}/g, String(n))
       .replace(/\{campus\}/g, campus));
-    [name, group, hostname, server, custodian, description, ip, env, dept, cat, prob, sev, inh, res] = ph;
-    prob = +prob;
-    sev = +sev;
+    [name, group, hostname, server, custodian, description, ip, env, dept, cat, prob, sev] = ph;
   }
 
-  const prof = jitterProfile(type, idx0);
-  const score = prof.c + prof.i + prof.a;
-  const ciaClass = classifyScore(score);
-  const disclosureHint = Math.max(1, Math.min(3, prof.c + (idx0 % 2 === 0 ? 0 : -1)));
+  prob = +prob;
+  sev = +sev;
+  const risk = assignRealisticRisk(type, env, cat, idx0, prob, sev);
+  prob = risk.prob;
+  sev = risk.sev;
 
-  const shortDesc = description.slice(0, 240);
-  const tc = 1 + (idx0 % 3);
-  const vc = 1 + ((idx0 * 2) % 3);
+  const prof = jitterProfile(type, idx0);
+  const cMax = ciaMax(prof.c, prof.i, prof.a);
+  const cSum = prof.c + prof.i + prof.a;
+  const ciaClass = ciaClassFromMax(prof.c, prof.i, prof.a);
+  const disclosureHint = Math.max(1, Math.min(5, prof.c + (idx0 % 2 === 0 ? 0 : -1)));
+
+  const tc = 2 + (idx0 % 4);
+  const vc = 2 + ((idx0 * 2) % 4);
   const primaryCat = cat;
-  const risk_basis = defaultRiskBasis(primaryCat, tc, vc, shortDesc);
+  const risk_basis = defaultRiskBasis(primaryCat, tc, vc);
   const scenarios = riskScenariosForAsset(idx0, {
-    id, type, riskCategory: cat, riskDesc: description.slice(0, 600), prob, sev, inherit: inh, residual: res,
+    id, type, riskCategory: cat, riskDesc: description.slice(0, 600),
+    prob, sev, inherit: risk.inherit, residual: risk.residual,
+    resP: risk.resProb, resSev: risk.resSev,
+    controlStrength: risk.controlStrength,
     primaryCat,
   });
+  const reporting = worstScenarioForSeed(scenarios);
+  prob = reporting.prob;
+  sev = reporting.sev;
+  const rollupInh = reporting.inherit;
+  const rollupRes = reporting.residual;
+
   /** align roll-up narrative with primary scenario wording */
   const rollDesc =
     scenarios[0].riskDesc.length > description.length ?
@@ -311,9 +476,9 @@ function buildRow(idx0, counters, tpl, variant) {
     `${custodian}\nDeputy custodian (${group})`;
 
   const justification =
-    `CIA C=${prof.c}/I=${prof.i}/A=${prof.a} (score ${score}, ${ciaClass}). ` +
-    `Questionnaire maps disclosure (${disclosureHint}) to confidentiality, integrity to academic records trust, availability to service windows. ` +
-    `Personal-data scope reflects DPA-aligned interpretation for this registrar/finance/academic posture.`;
+    `CIA C=${prof.c}/I=${prof.i}/A=${prof.a} (max ${cMax}, sum ${cSum}, ${ciaClass}). ` +
+    `Questionnaire maps disclosure (${disclosureHint}) to confidentiality; integrity and availability reflect operational reliance. ` +
+    `Personal-data scope reflects privacy-law-aligned interpretation for this asset profile.`;
 
   const cq = ciaQuestionnaireFromProfile(prof, disclosureHint);
   const mbss = JSON.stringify(mbssPayload(type, env));
@@ -322,10 +487,8 @@ function buildRow(idx0, counters, tpl, variant) {
   const ar = JSON.stringify(scenarios);
   const { dRb, dAr, dCq, dM, dF } = dollarChunks(id, rb, ar, cq, mbss, fw);
 
-  return `('${id}', 'Approved', '${type}', '${esc(name)}', '${esc(group)}', '${esc(hostname)}', '${esc(server)}', '${esc(custodian)}', '${esc(description)}', '${esc(ip)}', '${esc(env)}', '${esc(dept)}', '${prof.pii}', '${prof.spi}', '${prof.corp}', ${prof.c}, ${prof.i}, ${prof.a}, ${score}, '${esc(ciaClass)}', '${esc(cat)}', '${esc(rollDesc)}', ${prob}, ${sev}, '${inh}', '${res}', 'Mitigate', 'In Progress', 'PLM ISMS mitigation in progress.', 'Asset Owner', '2026-12-31', '${esc(owners)}', '${esc(justification)}', ${dRb}, ${dAr}, ${dCq}, ${dM}, ${dF})`;
+  return `('${id}', 'Approved', '${type}', '${esc(name)}', '${esc(group)}', '${esc(hostname)}', '${esc(server)}', '${esc(custodian)}', '${esc(description)}', '${esc(ip)}', '${esc(env)}', '${esc(dept)}', '${prof.pii}', '${prof.spi}', '${prof.corp}', ${prof.c}, ${prof.i}, ${prof.a}, ${cMax}, '${esc(ciaClass)}', '${esc(cat)}', '${esc(rollDesc)}', ${prob}, ${sev}, '${rollupInh}', '${rollupRes}', 'Mitigate', 'In Progress', 'ISMS mitigation in progress.', 'Asset Owner', '2026-12-31', '${esc(owners)}', '${esc(justification)}', ${dRb}, ${dAr}, ${dCq}, ${dM}, ${dF})`;
 }
-
-const TARGET_TOTAL = 117;
 
 function ctrlPool(type) {
   const map = {
@@ -366,8 +529,9 @@ function main() {
   }
 
   const insertHeader = `-- ============================================================
--- 4. PLM ASSET SEED — ${valueLines.length} contextualized records (+ CIA questionnaire,
---    ISO 27005 multi-risk JSON, owners, justification, MBSS/firewall payloads) + controls
+-- 4. ASSET SEED — ${valueLines.length} contextualized records (+ CIA questionnaire 1–5,
+--    ISO 27005 multi-risk JSON with threats[]/vulnerabilities[] bands 1–5, owners,
+--    max-based classification, MBSS/firewall payloads) + controls
 -- ============================================================
 
 DELETE FROM public."AssetControls";
@@ -411,12 +575,15 @@ ON CONFLICT DO NOTHING;
   const assetBlock = insertHeader + '\n' + ctrlBlock;
 
   let master = fs.readFileSync(masterPath, 'utf8');
-  master = master.replace(/--\s+•\s+\d+\s+PLM-contextualized asset records/, `--   • ${valueLines.length} PLM-contextualized asset records`);
+  master = master.replace(/--\s+•\s+\d+\s+PLM-contextualized asset records/, `--   • ${valueLines.length} contextualized asset records`);
+  master = master.replace(/--\s+•\s+\d+\s+contextualized asset records/, `--   • ${valueLines.length} contextualized asset records`);
 
-  const startPat = '-- ============================================================\n-- 4. PLM ASSET SEED';
-  const tailPat = '\n-- ============================================================\n-- 5. ACTION-PLAN';
-  const i0 = master.indexOf(startPat);
-  const i5 = master.indexOf(tailPat, i0);
+  const startRe = /-- ============================================================\r?\n-- 4\. (?:PLM )?ASSET SEED/;
+  const tailRe = /\r?\n-- ============================================================\r?\n-- 5\. ACTION-PLAN/;
+  const startMatch = master.match(startRe);
+  const i0 = startMatch ? startMatch.index : -1;
+  const tailMatch = i0 >= 0 ? master.slice(i0).match(tailRe) : null;
+  const i5 = tailMatch ? i0 + tailMatch.index : -1;
   if (i0 < 0 || i5 < 0) {
     console.error('Could not locate PLM asset seed block boundaries in master_setup.sql');
     process.exit(1);
