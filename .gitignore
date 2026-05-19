@@ -48,3 +48,4 @@ coverage/
 # Browser cache
 .cache
 *.cache
+.vercel
