@@ -60,7 +60,36 @@ SET
 WHERE id = 'SA-008'
   AND "actionType" = 'Accept';
 
--- 6) Verify — expect no illogical pairs
+-- 6) Restore roll-up columns from paired asset_risks_json (fixes 100% elevated from old Step 2)
+WITH worst AS (
+  SELECT
+    a.id,
+    (
+      SELECT elem
+      FROM jsonb_array_elements(a.asset_risks_json::jsonb) AS elem
+      ORDER BY
+        CASE elem->>'residual'
+          WHEN 'High' THEN 3 WHEN 'Moderate' THEN 2 WHEN 'Low' THEN 1 WHEN 'Very Low' THEN 0 ELSE 0
+        END DESC,
+        CASE elem->>'inherit'
+          WHEN 'High' THEN 3 WHEN 'Moderate' THEN 2 WHEN 'Low' THEN 1 WHEN 'Very Low' THEN 0 ELSE 0
+        END DESC
+      LIMIT 1
+    ) AS sc
+  FROM public."Assets" a
+  WHERE a.asset_risks_json IS NOT NULL
+    AND trim(a.asset_risks_json) <> ''
+    AND a.asset_risks_json <> 'null'
+)
+UPDATE public."Assets" a SET
+  prob     = COALESCE((w.sc->>'prob')::int, a.prob),
+  sev      = COALESCE((w.sc->>'sev')::int, a.sev),
+  inherit  = COALESCE(w.sc->>'inherit', a.inherit),
+  residual = COALESCE(w.sc->>'residual', a.residual)
+FROM worst w
+WHERE a.id = w.id AND w.sc IS NOT NULL;
+
+-- 7) Verify — expect no illogical pairs
 SELECT id, name, type, prob, sev, inherit, residual, "riskCategory"
 FROM public."Assets"
 WHERE (
@@ -70,5 +99,5 @@ WHERE (
 )
 ORDER BY type, id;
 
--- 7) Residual distribution snapshot
+-- 8) Residual distribution snapshot
 SELECT residual, COUNT(*) FROM public."Assets" GROUP BY residual ORDER BY 1;

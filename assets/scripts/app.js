@@ -1526,20 +1526,33 @@ function isElevatedResidualTier(tier) {
     return tier === 'High' || tier === 'Moderate';
 }
 
-function liveAssetResidualTier(asset) {
-    return liveRegisterMetricsForAsset(asset).residual || effectiveAssetResidual(asset);
+/** Authoritative register roll-up from paired asset_risks_json (seed / save-time). */
+function reportingAssetResidualTier(asset) {
+    return effectiveAssetResidual(asset);
 }
 
-function liveAssetInherentTier(asset) {
-    return liveRegisterMetricsForAsset(asset).inherit || effectiveAssetInherent(asset);
+function reportingAssetInherentTier(asset) {
+    return effectiveAssetInherent(asset);
+}
+
+function reportingAssetMetrics(asset) {
+    const repr = effectiveAssetReportingScenario(asset);
+    return {
+        inherit: repr.inherit || asset.inherit || 'Moderate',
+        residual: repr.residual || asset.residual || 'Moderate',
+        prob: repr.prob ?? asset.prob,
+        sev: repr.sev ?? asset.sev,
+        resProb: repr.resProb ?? asset.resProb,
+        resSev: repr.resSev ?? asset.resSev,
+    };
 }
 
 function assetRequiresActionPlan(asset) {
-    return isElevatedResidualTier(liveAssetResidualTier(asset)) && asset.actionType !== 'Accept';
+    return isElevatedResidualTier(reportingAssetResidualTier(asset)) && asset.actionType !== 'Accept';
 }
 
 function approvedElevatedAssets() {
-    return approvedAssetsOnly().filter(a => isElevatedResidualTier(liveAssetResidualTier(a)));
+    return approvedAssetsOnly().filter(a => isElevatedResidualTier(reportingAssetResidualTier(a)));
 }
 
 function approvedAssetsRequiringActionPlan() {
@@ -3481,7 +3494,7 @@ function calculateDeadlines() {
         }
     });
     
-    const hCount = approvedAssetsOnly().filter(a => liveAssetResidualTier(a) === 'High').length;
+    const hCount = approvedAssetsOnly().filter(a => reportingAssetResidualTier(a) === 'High').length;
     
     const highBadge = document.getElementById('hdr-high');
     if(highBadge) highBadge.textContent = hCount;
@@ -5797,12 +5810,12 @@ function renderRiskRegister() {
   let data = [...approvedAssetsOnly()];
   data.sort((a, b) => {
     const order = { High: 0, Moderate: 1, Low: 2, 'Very Low': 3 };
-    const ra = liveRegisterMetricsForAsset(a).residual;
-    const rb = liveRegisterMetricsForAsset(b).residual;
+    const ra = reportingAssetResidualTier(a);
+    const rb = reportingAssetResidualTier(b);
     const diff = (order[ra] || 4) - (order[rb] || 4);
     if (diff !== 0) return diff;
-    const ia = liveRegisterMetricsForAsset(a).inherit;
-    const ib = liveRegisterMetricsForAsset(b).inherit;
+    const ia = reportingAssetInherentTier(a);
+    const ib = reportingAssetInherentTier(b);
     return (order[ia] || 4) - (order[ib] || 4);
   });
 
@@ -5814,9 +5827,10 @@ function renderRiskRegister() {
   const pxs = (p, s) => (p && s ? `<div style="font-size:9px;color:var(--text3);margin-top:2px;">P${p}×S${s}</div>` : '');
 
   tbody.innerHTML = data.map(a => {
-    const repr = liveRegisterMetricsForAsset(a);
-    const inh = repr.inherit || a.inherit;
-    const res = repr.residual || a.residual;
+    const repr = reportingAssetMetrics(a);
+    const live = liveRegisterMetricsForAsset(a);
+    const inh = repr.inherit;
+    const res = repr.residual;
     const ctrls = globalControls.filter(c => c.asset_id === a.id).length;
     const rc = parsedRiskScenarioCountForAsset(a);
     const snippet = escapeHtmlSafe((a.riskDesc || '—').substring(0, 60));
@@ -5824,7 +5838,8 @@ function renderRiskRegister() {
     const multi = rc > 1 ? ` <span style="color:var(--accent2);font-weight:600;">(${rc} risks)</span>` : '';
     const resP = repr.resProb ?? Math.max(1, (repr.prob || 3) - 1);
     const resS = repr.resSev ?? Math.max(1, (repr.sev || 3) - 1);
-    const gapHint = (repr.controlGaps && repr.controlGaps.length)
+    const gapHint = (live.controlGaps && live.controlGaps.length
+      && RESIDUAL_FLOOR_RANK[live.residual] > RESIDUAL_FLOOR_RANK[res])
       ? `<div style="font-size:9px;color:var(--warn);margin-top:2px;">↑ control gap floor</div>` : '';
     return `
     <tr>
@@ -5915,7 +5930,7 @@ function renderActions() {
             </div>`;
         
         html += groupItems.map(a => {
-            const resTier = liveAssetResidualTier(a);
+            const resTier = reportingAssetResidualTier(a);
             return `
             <div class="card" style="border-left:3px solid ${resTier==='High'?'var(--danger)':'var(--warn)'}; margin-bottom:12px; padding:16px 24px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
@@ -6003,10 +6018,9 @@ function renderDashboard() {
   const approved = approvedAssetsOnly();
   const total = approved.length;
 
-  /* -------- Risk posture KPIs (elevated = High + Moderate residual, live engine) -------- */
-  const liveById = new Map(approved.map(a => [a.id, liveRegisterMetricsForAsset(a)]));
-  const residualOf = (a) => liveById.get(a.id)?.residual ?? effectiveAssetResidual(a);
-  const inherentOf = (a) => liveById.get(a.id)?.inherit ?? effectiveAssetInherent(a);
+  /* -------- Risk posture KPIs (elevated = High + Moderate from paired scenario roll-up) -------- */
+  const residualOf = reportingAssetResidualTier;
+  const inherentOf = reportingAssetInherentTier;
   const elevated = approved.filter(a => isElevatedResidualTier(residualOf(a)));
   const actionPlans = approved.filter(a => isElevatedResidualTier(residualOf(a)) && a.actionType !== 'Accept');
   const acceptable = approved.filter(a => {

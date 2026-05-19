@@ -14,7 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   
-  <link rel="stylesheet" href="./assets/styles/main.css?v=20260519-cia5-isra-multi">
+  <link rel="stylesheet" href="./assets/styles/main.css?v=20260519-dashboard-realistic">
 </head>
 <body>
 
@@ -272,7 +272,7 @@
 
       <p class="dash-section-title dashboard-elevated-only">Risk posture</p>
       <div class="metrics-grid metrics-grid--risk dashboard-elevated-only">
-        <div class="metric-card warn">
+        <div class="metric-card danger">
           <div class="metric-num" id="dm-risk-threshold-pct">0%</div>
           <div class="metric-sub" id="dm-risk-threshold-elevated-label">Elevated · Moderate + High</div>
           <div class="metric-sub" id="dm-risk-acceptable-pct">0% Low / Very Low</div>
@@ -299,9 +299,9 @@
         <div class="metric-card accent"><div class="metric-num" id="dm-total">0</div><div class="metric-label" id="dm-total-label">Approved in register</div></div>
         <div class="metric-card danger dashboard-elevated-only"><div class="metric-num" id="dm-high">0</div><div class="metric-label">High Residual Risk</div></div>
         <div class="metric-card warn dashboard-elevated-only"><div class="metric-num" id="dm-mod">0</div><div class="metric-label">Moderate Residual Risk</div></div>
-        <div class="metric-card accent dashboard-elevated-only"><div class="metric-num" id="dm-low">0</div><div class="metric-label">Low Residual Risk</div></div>
-        <div class="metric-card info dashboard-elevated-only"><div class="metric-num" id="dm-vlow">0</div><div class="metric-label">Very Low Residual</div></div>
-        <div class="metric-card info"><div class="metric-num" id="dm-pii">0</div><div class="metric-label">Assets with PII/SPI tagged</div></div>
+        <div class="metric-card teal dashboard-elevated-only"><div class="metric-num" id="dm-low">0</div><div class="metric-label">Low Residual Risk</div></div>
+        <div class="metric-card success dashboard-elevated-only"><div class="metric-num" id="dm-vlow">0</div><div class="metric-label">Very Low Residual</div></div>
+        <div class="metric-card purple"><div class="metric-num" id="dm-pii">0</div><div class="metric-label">Assets with PII/SPI tagged</div></div>
       </div>
 
       <div class="grid-3 dash-risk-viz dashboard-elevated-only" style="margin-bottom:16px">
@@ -1056,7 +1056,7 @@
 
 <div id="notification" class="notification"></div>
 
-<script src="./assets/scripts/app.js?v=20260519-action-count-fix"></script>
+<script src="./assets/scripts/app.js?v=20260519-metric-colors"></script>
 
 </body>
 </html>

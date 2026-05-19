@@ -689,6 +689,26 @@ tbody td strong {
   box-shadow: 0 0 10px var(--accent); 
 }
 
+.metric-card.neutral::before {
+  background: linear-gradient(90deg, #8a8aa8, #c8c8d8);
+  box-shadow: 0 0 12px rgba(200, 200, 216, 0.45);
+}
+
+.metric-card.success::before {
+  background: var(--success);
+  box-shadow: 0 0 12px var(--success);
+}
+
+.metric-card.purple::before {
+  background: var(--purple);
+  box-shadow: 0 0 12px var(--purple);
+}
+
+.metric-card.teal::before {
+  background: var(--accent2);
+  box-shadow: 0 0 12px var(--accent2);
+}
+
 .metric-card.danger::before { 
   background: var(--danger); 
   box-shadow: 0 0 10px var(--danger); 

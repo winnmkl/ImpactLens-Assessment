@@ -1231,114 +1231,44 @@ LANGUAGE sql IMMUTABLE AS $func$
   END;
 $func$;
 
--- Step 1: Inherent escalations
-UPDATE public."Assets" SET
-  prob = LEAST(5, CASE
-    WHEN environment = 'Internet Facing' AND "riskCategory" LIKE 'cyber_ext%'
-      THEN GREATEST(prob + 1, 3)
-    ELSE prob
-  END),
-  sev = CASE
-    WHEN type = 'FA' AND "riskCategory" LIKE 'cyber_%' THEN 5
-    WHEN (pii = 'Y' OR spi = 'Y') AND "riskCategory" IN ('cyber_ext_leak','legal_dpa') THEN 5
-    WHEN "ciaScore" >= 8
-         AND ("riskCategory" LIKE 'cyber_%' OR "riskCategory" = 'hr_insider')
-      THEN GREATEST(sev, 4)
-    ELSE sev
-  END;
-UPDATE public."Assets" SET inherit = public.il_inherit(sev, prob);
+-- Step 1: Sync roll-up columns from worst paired scenario in asset_risks_json.
+-- Do NOT mandatory-floor recompute here — incomplete AssetControls would inflate
+-- every asset to Moderate/High. The app uses JSON roll-up for dashboard/register KPIs.
+WITH worst AS (
+  SELECT
+    a.id,
+    (
+      SELECT elem
+      FROM jsonb_array_elements(a.asset_risks_json::jsonb) AS elem
+      ORDER BY
+        CASE elem->>'residual'
+          WHEN 'High' THEN 3 WHEN 'Moderate' THEN 2 WHEN 'Low' THEN 1 WHEN 'Very Low' THEN 0 ELSE 0
+        END DESC,
+        CASE elem->>'inherit'
+          WHEN 'High' THEN 3 WHEN 'Moderate' THEN 2 WHEN 'Low' THEN 1 WHEN 'Very Low' THEN 0 ELSE 0
+        END DESC
+      LIMIT 1
+    ) AS sc
+  FROM public."Assets" a
+  WHERE a.asset_risks_json IS NOT NULL
+    AND trim(a.asset_risks_json) <> ''
+    AND a.asset_risks_json <> 'null'
+)
+UPDATE public."Assets" a SET
+  prob     = COALESCE((w.sc->>'prob')::int, a.prob),
+  sev      = COALESCE((w.sc->>'sev')::int, a.sev),
+  inherit  = COALESCE(w.sc->>'inherit', a.inherit),
+  residual = COALESCE(w.sc->>'residual', a.residual)
+FROM worst w
+WHERE a.id = w.id AND w.sc IS NOT NULL;
 
--- Step 2: Residual recompute with weighted DiD + synergies + mandatory floors
-DO $real$
-DECLARE
-  r RECORD; ctrls int[]; rel_set int[]; cia int; cid int;
-  pRedRaw numeric; sRedRaw numeric; pRed numeric; sRed numeric;
-  capP numeric; capS numeric; resP int; resS int;
-  residual_rating text;
-  has_rbac bool; has_mfa bool; has_backup bool; has_crypto bool; has_irp bool;
-  has_proc bool; has_vuln bool; has_seg bool; has_fw bool;
-  is_internet bool; is_pci bool; has_pii bool; is_restricted bool; is_confid bool;
-  floor_rank int; floor_name text; cur_rank int;
-BEGIN
-  FOR r IN SELECT * FROM public."Assets" LOOP
-    SELECT COALESCE(array_agg(ctrl_id ORDER BY ctrl_id), ARRAY[]::int[]) INTO ctrls
-      FROM public."AssetControls" WHERE asset_id = r.id;
-    cia := r."ciaC" + r."ciaI" + r."ciaA";
-    rel_set := CASE r."riskCategory"
-      WHEN 'phys_theft' THEN ARRAY[1,5,7,8]
-      WHEN 'phys_destruct' THEN ARRAY[1,5,6,12,13]
-      WHEN 'hr_insider' THEN ARRAY[1,2,3,4,9,12]
-      WHEN 'hr_accidental' THEN ARRAY[1,3,6,13]
-      WHEN 'cyber_ext_ransomware' THEN ARRAY[1,4,6,7,9,10,11,13]
-      WHEN 'cyber_ext_leak' THEN ARRAY[1,3,4,7,9,10,12]
-      WHEN 'cyber_ext_ddos' THEN ARRAY[10,11,12,13]
-      WHEN 'cyber_ext_supply' THEN ARRAY[1,3,4,7,10,11,13]
-      WHEN 'cyber_int_unauth' THEN ARRAY[1,2,3,4,9,13]
-      WHEN 'cyber_int_vuln' THEN ARRAY[1,9,10,11,12]
-      WHEN 'legal_dpa' THEN ARRAY[1,3,7,8,13]
-      ELSE ARRAY[1,2,3,4,5,6,7,8,9,10,11,12,13]
-    END;
-    pRedRaw := 0; sRedRaw := 0;
-    FOREACH cid IN ARRAY ctrls LOOP
-      IF cid = ANY(rel_set) THEN
-        pRedRaw := pRedRaw + CASE cid
-          WHEN 1 THEN 0.5 WHEN 2 THEN 0.6 WHEN 3 THEN 0.9 WHEN 4 THEN 1.0
-          WHEN 5 THEN 0.7 WHEN 6 THEN 0.0 WHEN 7 THEN 0.0 WHEN 8 THEN 0.3
-          WHEN 9 THEN 0.6 WHEN 10 THEN 0.9 WHEN 11 THEN 0.9 WHEN 12 THEN 0.7
-          WHEN 13 THEN 0.0 ELSE 0 END;
-        sRedRaw := sRedRaw + CASE cid
-          WHEN 1 THEN 0.3 WHEN 2 THEN 0.3 WHEN 3 THEN 0.4 WHEN 4 THEN 0.4
-          WHEN 5 THEN 0.4 WHEN 6 THEN 1.2 WHEN 7 THEN 1.4 WHEN 8 THEN 0.5
-          WHEN 9 THEN 0.7 WHEN 10 THEN 0.4 WHEN 11 THEN 0.3 WHEN 12 THEN 0.5
-          WHEN 13 THEN 1.1 ELSE 0 END;
-      END IF;
-    END LOOP;
-    IF 3=ANY(ctrls) AND 4=ANY(ctrls) AND 3=ANY(rel_set) AND 4=ANY(rel_set) THEN pRedRaw := pRedRaw + 0.5; END IF;
-    IF 6=ANY(ctrls) AND 13=ANY(ctrls) AND 6=ANY(rel_set) AND 13=ANY(rel_set) THEN sRedRaw := sRedRaw + 0.5; END IF;
-    IF 9=ANY(ctrls) AND 10=ANY(ctrls) AND 9=ANY(rel_set) AND 10=ANY(rel_set) THEN pRedRaw := pRedRaw + 0.4; END IF;
-    IF 7=ANY(ctrls) AND 12=ANY(ctrls) AND 7=ANY(rel_set) AND 12=ANY(rel_set) THEN sRedRaw := sRedRaw + 0.4; END IF;
-    IF 11=ANY(ctrls) AND 9=ANY(ctrls) AND 13=ANY(ctrls)
-       AND 11=ANY(rel_set) AND 9=ANY(rel_set) AND 13=ANY(rel_set) THEN
-      pRedRaw := pRedRaw + 0.3; sRedRaw := sRedRaw + 0.3;
-    END IF;
-    capP := GREATEST(0, r.prob - 1); capS := GREATEST(0, r.sev - 1);
-    pRed := CASE WHEN pRedRaw <= 0 THEN 0 ELSE LEAST(capP, capP * (1 - exp(-pRedRaw / 2.0))) END;
-    sRed := CASE WHEN sRedRaw <= 0 THEN 0 ELSE LEAST(capS, capS * (1 - exp(-sRedRaw / 2.0))) END;
-    resP := GREATEST(1, ROUND(r.prob - pRed)::int);
-    resS := GREATEST(1, ROUND(r.sev  - sRed)::int);
-    residual_rating := public.il_inherit(resS, resP);
-    has_rbac:=3=ANY(ctrls); has_mfa:=4=ANY(ctrls); has_backup:=6=ANY(ctrls);
-    has_crypto:=7=ANY(ctrls); has_irp:=13=ANY(ctrls); has_proc:=1=ANY(ctrls);
-    has_vuln:=11=ANY(ctrls); has_seg:=12=ANY(ctrls); has_fw:=10=ANY(ctrls);
-    is_internet:=r.environment='Internet Facing'; is_pci:=r.type='FA';
-    has_pii:=r.pii='Y' OR r.spi='Y'; is_restricted:=cia>=8; is_confid:=cia BETWEEN 6 AND 7;
-    floor_rank := 0; floor_name := 'Very Low';
-    IF is_restricted AND NOT (has_rbac AND has_mfa AND has_backup AND has_crypto AND has_irp) THEN
-      IF floor_rank < 2 THEN floor_rank := 2; floor_name := 'Moderate'; END IF;
-    END IF;
-    IF is_confid AND NOT (has_rbac AND has_crypto AND has_irp) THEN
-      IF floor_rank < 2 THEN floor_rank := 2; floor_name := 'Moderate'; END IF;
-    END IF;
-    IF is_pci AND NOT (has_mfa AND has_crypto AND has_vuln AND has_seg) THEN
-      IF floor_rank < 3 THEN floor_rank := 3; floor_name := 'High'; END IF;
-    END IF;
-    IF has_pii AND NOT (has_proc AND has_rbac AND has_backup AND has_crypto) THEN
-      IF floor_rank < 2 THEN floor_rank := 2; floor_name := 'Moderate'; END IF;
-    END IF;
-    IF is_internet AND NOT (has_fw AND has_vuln AND has_irp) THEN
-      IF floor_rank < 2 THEN floor_rank := 2; floor_name := 'Moderate'; END IF;
-    END IF;
-    cur_rank := CASE residual_rating WHEN 'Very Low' THEN 0 WHEN 'Low' THEN 1
-      WHEN 'Moderate' THEN 2 WHEN 'High' THEN 3 ELSE 2 END;
-    IF cur_rank < floor_rank THEN
-      residual_rating := floor_name;
-      IF floor_name='High'     THEN resP:=GREATEST(resP,4); resS:=GREATEST(resS,4); END IF;
-      IF floor_name='Moderate' THEN resP:=GREATEST(resP,3); resS:=GREATEST(resS,3); END IF;
-    END IF;
-    UPDATE public."Assets" SET residual = residual_rating WHERE id = r.id;
-  END LOOP;
-END
-$real$;
+-- Step 2: Cap residual to inherent when roll-up exceeds inherent (no open control gap in seed)
+UPDATE public."Assets" SET residual = inherit
+WHERE (
+  CASE residual WHEN 'High' THEN 3 WHEN 'Moderate' THEN 2 WHEN 'Low' THEN 1 ELSE 0 END
+) > (
+  CASE inherit WHEN 'High' THEN 3 WHEN 'Moderate' THEN 2 WHEN 'Low' THEN 1 ELSE 0 END
+);
 
 -- Step 3: Risk-appetite enforcement on actionType
 UPDATE public."Assets" SET "actionType" = 'Mitigate'
