@@ -2735,3 +2735,96 @@ button.risk-sc-tab--active {
   background: rgba(200, 255, 0, 0.08);
 }
 
+/* ISRA narrative quick guides (Info Sec / Admin) */
+.isra-step-hint {
+  margin: 8px 0 12px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text3);
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+}
+.isra-label-note {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text3);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.isra-narrative-block {
+  margin-bottom: 12px;
+}
+.isra-guide-row {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.isra-guide-select {
+  font-size: 11px;
+  padding: 7px 10px;
+  background: var(--bg4);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  color: var(--text2);
+}
+.isra-guide-select:focus {
+  border-color: var(--accent2);
+  outline: none;
+  color: var(--text);
+}
+
+.isra-multi-panel {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.isra-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+}
+.isra-panel-head label {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent2);
+}
+.isra-multi-row {
+  padding: 10px 0 12px;
+  border-top: 1px solid var(--border2);
+}
+.isra-multi-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.isra-multi-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.isra-multi-row-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.isra-row-remove {
+  font-size: 10px !important;
+  padding: 4px 8px !important;
+  opacity: 0.85;
+}
+.isra-row-statement {
+  width: 100%;
+  margin-top: 0;
+}
+

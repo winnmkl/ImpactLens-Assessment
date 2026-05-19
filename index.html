@@ -14,7 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   
-  <link rel="stylesheet" href="./assets/styles/main.css?v=20260518-isra-multi-cia-q">
+  <link rel="stylesheet" href="./assets/styles/main.css?v=20260519-cia5-isra-multi">
 </head>
 <body>
 
@@ -34,7 +34,7 @@
       </svg>
       <span class="auth-brand-name">IMPACTLENS</span>
     </div>
-    <div class="auth-brand-sub">Enterprise Risk Assessment — PLM ISMS</div>
+    <div class="auth-brand-sub">Enterprise Risk Assessment Platform</div>
 
     <!-- Stage 1: Role selector -->
     <div class="auth-role-card" id="auth-stage-roles">
@@ -107,7 +107,7 @@
 
           <div class="auth-field">
             <label for="login-email">Email Address</label>
-            <input type="email" id="login-email" required placeholder="name@plm.edu.ph" autocomplete="username">
+            <input type="email" id="login-email" required placeholder="name@organization.edu" autocomplete="username">
           </div>
 
           <div class="auth-field">
@@ -130,7 +130,7 @@
 
           <div class="auth-field">
             <label for="register-email">Email Address</label>
-            <input type="email" id="register-email" required placeholder="name@plm.edu.ph" autocomplete="email">
+            <input type="email" id="register-email" required placeholder="name@organization.edu" autocomplete="email">
           </div>
 
           <div class="auth-field">
@@ -184,7 +184,7 @@
       </div>
 
       <div class="auth-footer-hint">
-        Master admin <code>admin@plm.edu.ph</code> is auto-promoted on email verification.
+        Master admin accounts can be auto-promoted on email verification (configure in Supabase Auth).
         <span class="auth-footer-sep">•</span>
         Stuck on a stale session? <button type="button" class="auth-link-btn" onclick="forceResetSession()">Reset session</button>
       </div>
@@ -382,8 +382,8 @@
         </div>
         
         <div class="form-row grid-3" style="margin-top:16px;">
-            <div class="field"><label>Hostname</label><input type="text" id="f-hostname" placeholder="e.g. PLMSRVR01"></div>
-            <div class="field"><label>Server</label><input type="text" id="f-server" placeholder="e.g. PLM 1 - Main Server"></div>
+            <div class="field"><label>Hostname</label><input type="text" id="f-hostname" placeholder="e.g. SRV-DB-01"></div>
+            <div class="field"><label>Server</label><input type="text" id="f-server" placeholder="e.g. Primary database host"></div>
             <div class="field"><label>Custodian</label><input type="text" id="f-custodian"></div>
         </div>
 
@@ -405,7 +405,7 @@
 
       <div class="card role-locked-section" id="sec-classification">
         <div class="card-header">02 — Data &amp; classification <span style="font-size:9px; color:var(--text3); margin-left:auto;">Assessor-defined</span></div>
-        <p class="page-desc" style="font-size:11px;color:var(--text2);line-height:1.45;margin:-8px 0 14px;">Start with the <strong>questionnaire</strong> (how “heavy” disclosure / integrity / outage impacts are), then refine PI flags and the CIA triad. Internet-facing deployment enforces minimum <strong>Availability = 3</strong>. Written classification justification is required on submit (Info Sec / Admin).</p>
+        <p class="page-desc" style="font-size:11px;color:var(--text2);line-height:1.45;margin:-8px 0 14px;">Start with the <strong>questionnaire</strong>, then refine PI flags and the CIA triad (1–5 each, ISO 27005 / NIST SP 800-60 aligned). Classification uses the <strong>highest</strong> C/I/A value — not the sum alone. Internet-facing deployment enforces minimum <strong>Availability = 4</strong>.</p>
         <div class="form-row grid-3">
           <div class="field"><label>Personal info (PI)?</label><select id="f-pii" onchange="runEnforcementEngine()"><option value="N">No</option><option value="Y">Yes</option></select></div>
           <div class="field"><label>Sensitive PI (SPI)?</label><select id="f-spi" onchange="runEnforcementEngine()"><option value="N">No</option><option value="Y">Yes</option></select></div>
@@ -417,23 +417,29 @@
           <div class="form-row grid-3">
             <div class="field"><label>If disclosed, how bad is the harm?</label>
               <select id="f-q-disclosure-impact" onchange="syncCiaQuestionnaireIntoClassificationFields(); runEnforcementEngine();">
-                <option value="1">1 — Low / mostly public</option>
-                <option value="2" selected>2 — Moderate institutional impact</option>
-                <option value="3">3 — Severe / regulated / heavily sensitive</option>
+                <option value="1">1 — Negligible / mostly public</option>
+                <option value="2">2 — Minor institutional impact</option>
+                <option value="3" selected>3 — Moderate / regulated categories</option>
+                <option value="4">4 — Major harm / breach notification</option>
+                <option value="5">5 — Severe / legal or safety reliance</option>
               </select>
             </div>
             <div class="field"><label>If data were wrong or tampered, impact?</label>
               <select id="f-q-integrity-impact" onchange="syncCiaQuestionnaireIntoClassificationFields(); runEnforcementEngine();">
                 <option value="1">1 — Minor inconvenience</option>
-                <option value="2" selected>2 — Operational or compliance impact</option>
-                <option value="3">3 — Severe decisions / safety / legal reliance</option>
+                <option value="2">2 — Recoverable operational impact</option>
+                <option value="3" selected>3 — Material decisions affected</option>
+                <option value="4">4 — Serious compliance / financial impact</option>
+                <option value="5">5 — Critical safety / legal reliance</option>
               </select>
             </div>
             <div class="field"><label>If unavailable, operational pain?</label>
               <select id="f-q-availability-impact" onchange="syncCiaQuestionnaireIntoClassificationFields(); runEnforcementEngine();">
                 <option value="1">1 — Minor delay</option>
-                <option value="2" selected>2 — Major service disruption</option>
-                <option value="3">3 — Mission-critical / hard deadline</option>
+                <option value="2">2 — Noticeable service degradation</option>
+                <option value="3" selected>3 — Major disruption</option>
+                <option value="4">4 — Mission-critical window</option>
+                <option value="5">5 — Hard deadline / life-safety dependency</option>
               </select>
             </div>
           </div>
@@ -454,14 +460,14 @@
           </div>
         </div>
         <div class="form-row grid-3" style="margin-top:16px;">
-          <div class="field"><label>Confidentiality (1–3) <span id="lock-c"></span></label><select id="f-c" onchange="runEnforcementEngine()"><option value="1">1 — Low</option><option value="2" selected>2 — Moderate</option><option value="3">3 — High</option></select></div>
-          <div class="field"><label>Integrity (1–3) <span id="lock-i"></span></label><select id="f-i" onchange="runEnforcementEngine()"><option value="1">1 — Low</option><option value="2" selected>2 — Moderate</option><option value="3">3 — High</option></select></div>
-          <div class="field"><label>Availability (1–3) <span id="lock-a"></span></label><select id="f-a" onchange="runEnforcementEngine()"><option value="1">1 — Low</option><option value="2" selected>2 — Moderate</option><option value="3">3 — High</option></select></div>
+          <div class="field"><label>Confidentiality (1–5) <span id="lock-c"></span></label><select id="f-c" onchange="runEnforcementEngine()"><option value="1">1 — Negligible</option><option value="2">2 — Low</option><option value="3" selected>3 — Moderate</option><option value="4">4 — High</option><option value="5">5 — Critical</option></select></div>
+          <div class="field"><label>Integrity (1–5) <span id="lock-i"></span></label><select id="f-i" onchange="runEnforcementEngine()"><option value="1">1 — Negligible</option><option value="2">2 — Low</option><option value="3" selected>3 — Moderate</option><option value="4">4 — High</option><option value="5">5 — Critical</option></select></div>
+          <div class="field"><label>Availability (1–5) <span id="lock-a"></span></label><select id="f-a" onchange="runEnforcementEngine()"><option value="1">1 — Negligible</option><option value="2">2 — Low</option><option value="3" selected>3 — Moderate</option><option value="4">4 — High</option><option value="5">5 — Critical</option></select></div>
         </div>
         <div class="form-row" style="margin-top:16px;">
-          <div class="field"><label>Classification &amp; CIA justification <span style="color:var(--warn)">*</span></label><textarea id="f-classification-justification" rows="3" placeholder="Reference categories processed, RA 10173 / contracts, retention, and rationale for each CIA value…" oninput="runEnforcementEngine()"></textarea></div>
+          <div class="field"><label>Classification &amp; CIA justification <span style="color:var(--warn)">*</span></label><textarea id="f-classification-justification" rows="3" placeholder="Reference data categories, privacy law / contracts, retention, and rationale for each CIA value…" oninput="runEnforcementEngine()"></textarea></div>
         </div>
-        <p style="margin-top: 10px; font-family: var(--mono); color: var(--accent);">Class: <span id="cia-class">Confidential</span></p>
+        <p style="margin-top: 10px; font-family: var(--mono); color: var(--accent);">Class: <span id="cia-class">Confidential (max 3 · sum 9)</span></p>
       </div>
 
       <div class="card role-locked-section" id="sec-risk-controls">
@@ -475,7 +481,7 @@
             <button type="button" class="btn btn-sm" onclick="removeCurrentRiskScenario()" style="opacity:.9">Remove this scenario</button>
           </div>
           <div id="risk-scenario-tabs" class="risk-scenario-tabs" role="tablist" aria-label="Risk scenarios"></div>
-          <p style="margin:10px 0 0;font-size:10px;color:var(--text3);line-height:1.45;">One asset may have <strong>multiple</strong> risk scenarios (per your ISRA). Pick a tab, fill category + ISRA fields, then switch. Implemented controls apply to the whole asset; relevance is combined across scenarios.</p>
+          <p class="isra-step-hint">Multiple scenarios per asset — use tabs. Controls apply asset-wide.</p>
         </div>
 
         <div class="form-row" style="margin-bottom:16px;">
@@ -508,39 +514,53 @@
             </div>
         </div>
 
-        <div class="form-row"><div class="field"><label>Identified Risk Description</label><textarea id="f-risk-desc" oninput="runEnforcementEngine()"></textarea></div></div>
+        <div class="form-row"><div class="field"><label>Identified Risk Description</label><textarea id="f-risk-desc" rows="2" oninput="runEnforcementEngine()"></textarea></div></div>
 
-        <p class="page-desc" style="font-size:11px;color:var(--text2);line-height:1.45;margin:8px 0 12px;">Use the <strong>structured threat &amp; vulnerability bands</strong> (count toward inherent P/S along with narratives), then qualitative likelihood/impact and <strong>framework escalations</strong> (CIA, exposure, PI…). Starred narrative fields still required for Info Sec / Admin.</p>
+        <p class="isra-step-hint" id="isra-band-summary">Add one or more threat and weakness rows (bands 1–5). Worst band per type feeds inherent P/S.</p>
 
-        <div class="form-row grid-2" style="margin-bottom:12px;">
-          <div class="field">
-            <label>Threat source / hostility (feeds inherent <strong>probability</strong>) <span style="font-size:10px;color:var(--text3)">1 −1 · 3 +1 vs baseline</span></label>
-            <select id="f-threat-choice" onchange="runEnforcementEngine();">
-              <option value="1">1 — Low (accidental, environmental, no credible adversary)</option>
-              <option value="2" selected>2 — Moderate (generic abuse, nuisance actors)</option>
-              <option value="3">3 — High (targeted intrusion, insider abuse of access, ransomware wave)</option>
-            </select>
+        <div id="isra-threats-panel" class="isra-multi-panel">
+          <div class="isra-panel-head">
+            <label>Threats <span style="color:var(--warn)">*</span></label>
+            <button type="button" class="btn btn-sm" onclick="addIsraThreatRow()">＋ Add threat</button>
           </div>
-          <div class="field">
-            <label>Weakness / exposure posture (feeds inherent <strong>severity</strong>) <span style="font-size:10px;color:var(--text3)">1 −1 · 3 +1</span></label>
-            <select id="f-vuln-choice" onchange="runEnforcementEngine();">
-              <option value="1">1 — Low exposure (few material gaps; patching &amp; config sound)</option>
-              <option value="2" selected>2 — Moderate (normal residual weaknesses)</option>
-              <option value="3">3 — High exposure (critical gaps; unpatched; weak access / segregation)</option>
-            </select>
-          </div>
+          <div id="isra-threats-list"></div>
         </div>
 
-        <div class="form-row"><div class="field"><label>Threat statement / threat actor narrative <span style="color:var(--warn)">*</span></label><textarea id="f-threat-statement" rows="3" placeholder="Who or what could act against this asset, and through which paths (e.g. external attacker, insider, supplier)…" oninput="runEnforcementEngine()"></textarea></div></div>
-        <div class="form-row"><div class="field"><label>Vulnerability statement (weakness / gap) <span style="color:var(--warn)">*</span></label><textarea id="f-vuln-statement" rows="3" placeholder="What specific weakness or control gap enables the threat (config, patching, access, physical, process)…" oninput="runEnforcementEngine()"></textarea></div></div>
-        <div class="form-row grid-2" style="align-items:flex-end;">
-          <div class="field"><label>Occurrence justification (frequency, precedent, appetite) <span style="color:var(--warn)">*</span></label><textarea id="f-occurrence-justification" rows="2" placeholder="Why this likelihood applies: trends, incidents elsewhere, assurance testing, seasonal factors…" oninput="runEnforcementEngine()"></textarea></div>
-          <div class="field"><label>Prior incidents for this scenario (org / comparable systems)</label><select id="f-prior-incidents" onchange="runEnforcementEngine()"><option value="N">No known prior incident</option><option value="Y">Yes — has occurred</option><option value="U">Unknown / not tracked</option></select></div>
+        <div id="isra-vulns-panel" class="isra-multi-panel">
+          <div class="isra-panel-head">
+            <label>Weaknesses / vulnerabilities <span style="color:var(--warn)">*</span></label>
+            <button type="button" class="btn btn-sm" onclick="addIsraVulnRow()">＋ Add weakness</button>
+          </div>
+          <div id="isra-vulns-list"></div>
+        </div>
+
+        <div class="form-row grid-2" style="align-items:flex-end;margin-top:12px;">
+          <div class="field">
+            <label>Occurrence justification <span style="color:var(--warn)">*</span></label>
+            <div class="isra-guide-row grid-2">
+              <select id="f-guide-occ-signal" class="isra-guide-select" onchange="applyIsraNarrativeGuides()">
+                <option value="">Guide — frequency signal…</option>
+                <option value="rare">No org precedent; peer-sector informs estimate</option>
+                <option value="peer">Comparable sector incidents within 12 mo.</option>
+                <option value="tested">Recent scan / audit / tabletop raised likelihood</option>
+                <option value="seasonal">Seasonal peak increases exposure</option>
+                <option value="trending">Threat intel / enforcement trend elevates risk</option>
+              </select>
+              <select id="f-guide-occ-prior" class="isra-guide-select" onchange="applyIsraNarrativeGuides()">
+                <option value="">Guide — prior incident…</option>
+                <option value="N">No known prior incident (org register)</option>
+                <option value="Y">Yes — occurred here or on comparable system</option>
+                <option value="U">Unknown / not tracked — treat cautiously</option>
+              </select>
+            </div>
+            <textarea id="f-occurrence-justification" rows="2" placeholder="Draft from guides above, then refine if needed." data-isra-guided="" oninput="markIsraNarrativeManual('f-occurrence-justification'); runEnforcementEngine()"></textarea>
+          </div>
+          <div class="field"><label>Prior incidents (register)</label><select id="f-prior-incidents" onchange="syncPriorIncidentsFromGuide(); runEnforcementEngine()"><option value="N">No known prior incident</option><option value="Y">Yes — has occurred</option><option value="U">Unknown / not tracked</option></select></div>
         </div>
 
         <div class="form-row grid-2" style="margin-top:16px;">
           <div class="field">
-              <label>Assessed inherent likelihood (1–5 qualitative)</label>
+              <label>Assessed inherent likelihood (1–5)</label>
               <select id="f-likelihood-qual" onchange="runEnforcementEngine()">
                 <option value="1">1 — Rare</option>
                 <option value="2">2 — Unlikely</option>
@@ -550,7 +570,7 @@
               </select>
           </div>
           <div class="field">
-              <label>Assessed inherent impact (1–5 qualitative)</label>
+              <label>Assessed inherent impact (1–5)</label>
               <select id="f-impact-qual" onchange="runEnforcementEngine()">
                 <option value="1">1 — Negligible</option>
                 <option value="2">2 — Minor</option>
@@ -563,12 +583,12 @@
         
         <div class="form-row grid-2" style="margin-top:16px;">
           <div class="field">
-              <label>Inherent probability (1–5) — qualitative + narratives + threat band + escalations</label>
+              <label>Inherent probability (auto)</label>
               <input type="hidden" id="f-prob" value="3">
               <input type="text" id="f-prob-display" readonly style="background:var(--bg4); cursor:not-allowed; font-weight:600;" placeholder="Auto-calculated...">
           </div>
           <div class="field">
-              <label>Inherent severity (1–5) — qualitative + narratives + vuln posture + escalations</label>
+              <label>Inherent severity (auto)</label>
               <input type="hidden" id="f-sev" value="3">
               <input type="text" id="f-sev-display" readonly style="background:var(--bg4); cursor:not-allowed; font-weight:600;" placeholder="Auto-calculated...">
           </div>
@@ -943,15 +963,52 @@
       </div>
 
       <div class="card">
-        <div class="card-header">Information Classification & Disposal</div>
+        <div class="card-header">Information Classification &amp; Disposal</div>
+        <p class="isra-step-hint" style="margin-bottom:12px;">CIA dimensions are rated <strong>1–5</strong> (ISO 27005 / NIST SP 800-60). The <strong>classification label</strong> is driven by the <strong>highest</strong> of C, I, or A — not the sum. Example: C=2, I=2, A=2 → max 2 → <em>Internal Use</em> (sum 6 is informational only).</p>
         <div class="table-wrap">
         <table>
-          <thead><tr><th>Classification</th><th>Score</th><th>Description</th><th>Hard Copy Disposal</th><th>Soft Copy Disposal</th></tr></thead>
+          <thead><tr><th>Classification</th><th>Max C/I/A</th><th>Typical sum range</th><th>Description</th><th>Hard copy disposal</th><th>Soft copy disposal</th></tr></thead>
           <tbody>
-            <tr><td><span class="badge badge-pub">Public</span></td><td>3</td><td>May be widely distributed without causing damage to the Organization, its employees, or stakeholders. No watermark required. Examples: Company brochures, marketing materials.</td><td>Standard waste paper. Strip-cut shredder if any doubt.</td><td>Remove directory entry. Physical media: shred or destroy.</td></tr>
-            <tr><td><span class="badge badge-int">Internal Use</span></td><td>4-5</td><td>Information intended only for use by employees. These documents should not be disclosed or circulated to external parties. Watermark: "CONTROLLED COPY".</td><td>Strip-cut shredder or certified confidential waste bin.</td><td>Remove directory entry. Physical media: secure destruction.</td></tr>
-            <tr><td><span class="badge badge-con">Confidential</span></td><td>6-7</td><td>Information that requires protection from unauthorized access. Should be circulated only to predefined individuals. Watermark: "CONFIDENTIAL".</td><td>Strip-cut shredder or certified confidential waste bin.</td><td>Overwrite file space + remove entry. Physical: approved destruction.</td></tr>
-            <tr><td><span class="badge badge-res">Restricted</span></td><td>8-9</td><td>Information that requires the highest level of protection. Distribution must be strictly controlled and logged. Watermark: "RESTRICTED".</td><td>Cross-cut shredder + destruction record/audit trail required.</td><td>Overwrite file space + destruction record. Physical: approved destruction.</td></tr>
+            <tr><td><span class="badge badge-pub">Public</span></td><td>1</td><td>3–5</td><td>May be distributed externally without material harm. No watermark required.</td><td>Standard waste paper; strip-cut if in doubt.</td><td>Delete file; physical media: destroy if sensitive.</td></tr>
+            <tr><td><span class="badge badge-int">Internal Use</span></td><td>2</td><td>4–8</td><td>For employees and authorized contractors only. Watermark: &quot;CONTROLLED COPY&quot;.</td><td>Strip-cut shredder or confidential waste bin.</td><td>Secure delete; physical media: certified destruction.</td></tr>
+            <tr><td><span class="badge badge-con">Confidential</span></td><td>3</td><td>6–11</td><td>Requires protection; limited circulation on need-to-know. Watermark: &quot;CONFIDENTIAL&quot;.</td><td>Strip-cut shredder or confidential waste bin.</td><td>Overwrite + secure delete; approved destruction for media.</td></tr>
+            <tr><td><span class="badge badge-res">Restricted</span></td><td>4–5</td><td>9–15</td><td>Highest protection; strict logging of access and distribution. Watermark: &quot;RESTRICTED&quot;.</td><td>Cross-cut shredder + destruction record.</td><td>Crypto-shred / overwrite + audit trail; approved destruction.</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">Threat &amp; weakness bands (1–5 per row)</div>
+        <p class="isra-step-hint" style="margin-bottom:12px;">Each risk scenario supports <strong>multiple</strong> threat and weakness entries. The engine uses the <strong>worst (highest) band</strong> per type, centered on 3 (±2 adjusts inherent probability / severity before qualitative ratings and escalations).</p>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>Band</th><th>Threat hostility (→ probability)</th><th>Weakness / exposure (→ severity)</th></tr></thead>
+          <tbody>
+            <tr><td><span class="badge badge-type">1</span></td><td>Rare / no credible adversary</td><td>Hardened / minimal gaps</td></tr>
+            <tr><td><span class="badge badge-vl">2</span></td><td>Unlikely targeted interest</td><td>Low residual exposure</td></tr>
+            <tr><td><span class="badge badge-lo">3</span></td><td>Moderate (baseline)</td><td>Moderate weaknesses</td></tr>
+            <tr><td><span class="badge badge-mo">4</span></td><td>High — capable adversary</td><td>Material control gaps</td></tr>
+            <tr><td><span class="badge badge-hi">5</span></td><td>Critical — targeted / insider abuse</td><td>Critical exposure</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">Frameworks &amp; standards mapped in ImpactLens</div>
+        <div class="table-wrap">
+        <table>
+          <thead><tr><th>Framework</th><th>Role in this tool</th></tr></thead>
+          <tbody>
+            <tr><td><strong>ISO/IEC 27001:2022</strong> + <strong>27002:2022</strong></td><td>Annex A control themes mapped to each implemented control (organizational, people, physical, technological).</td></tr>
+            <tr><td><strong>ISO/IEC 27005:2022</strong></td><td>Risk scenario structure, CIA 1–5 impact scale, threat/vulnerability bands, inherent → residual treatment.</td></tr>
+            <tr><td><strong>NIST CSF 2.0</strong></td><td>Control subcategories (GV, ID, PR, DE, RS, RC) linked to the 13 control families.</td></tr>
+            <tr><td><strong>NIST SP 800-60</strong></td><td>CIA impact valuation guidance for information assets.</td></tr>
+            <tr><td><strong>CIS Controls v8</strong></td><td>Safeguard IDs cross-walked to implemented controls.</td></tr>
+            <tr><td><strong>SOC 2 (TSC 2017)</strong></td><td>Common Criteria CC and availability/confidentiality criteria on control mapping.</td></tr>
+            <tr><td><strong>PCI-DSS v4.0</strong></td><td>Additional mapping when asset type = Financial (FA).</td></tr>
+            <tr><td><strong>Privacy / data-protection law</strong></td><td>PI / SPI flags and DPA-style scenarios (organization-specific statutes in justification).</td></tr>
           </tbody>
         </table>
         </div>
@@ -995,7 +1052,7 @@
 
 <div id="notification" class="notification"></div>
 
-<script src="./assets/scripts/app.js?v=20260518-history-security-signout"></script>
+<script src="./assets/scripts/app.js?v=20260519-cia5-isra-multi"></script>
 
 </body>
 </html>

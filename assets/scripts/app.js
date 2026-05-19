@@ -203,7 +203,64 @@ const INHERIT = {
   '1-1':'Very Low','1-2':'Low','1-3':'Low','1-4':'Low','1-5':'Moderate' 
 };
 
-const CIA_CLASS = { 3:'Public',4:'Internal Use',5:'Internal Use',6:'Confidential', 7:'Confidential',8:'Restricted',9:'Restricted' };
+/** CIA dimensions use ISO 27005 / NIST SP 800-60 style 1–5 impact scale (not 1–3). */
+const CIA_SCALE_MAX = 5;
+
+function clampCia(v) {
+    const n = parseInt(String(v), 10);
+    return Math.max(1, Math.min(CIA_SCALE_MAX, isNaN(n) ? 3 : n));
+}
+
+/** Spread legacy 1–3 stored values onto 1–5 when loading older records. */
+function normalizeCiaStored(v) {
+    const n = parseInt(String(v), 10);
+    if (isNaN(n)) return 3;
+    if (n <= 3) return [2, 3, 5][Math.max(0, n - 1)];
+    return clampCia(n);
+}
+
+function ciaMax(c, i, a) {
+    return Math.max(clampCia(c), clampCia(i), clampCia(a));
+}
+
+function ciaSum(c, i, a) {
+    return clampCia(c) + clampCia(i) + clampCia(a);
+}
+
+/** Classification label from highest CIA dimension (avoids sum-only mis-tiering, e.g. all 2s). */
+function ciaClassFromValues(c, i, a) {
+    const m = ciaMax(c, i, a);
+    if (m <= 1) return 'Public';
+    if (m <= 2) return 'Internal Use';
+    if (m <= 3) return 'Confidential';
+    return 'Restricted';
+}
+
+/** Back-compat for CSV paths that still pass a legacy sum score. */
+function ciaClassFromLegacyScore(score) {
+    const s = parseInt(String(score), 10);
+    if (isNaN(s)) return 'Internal Use';
+    if (s <= 3) return 'Public';
+    if (s <= 5) return 'Internal Use';
+    if (s <= 7) return 'Confidential';
+    return 'Restricted';
+}
+
+function band15(v) {
+    return Math.max(1, Math.min(5, parseInt(String(v), 10) || 3));
+}
+
+/** Map legacy 1–3 hostility / exposure bands to 1–5. */
+function normalizeBand15(v) {
+    const n = parseInt(String(v), 10);
+    if (isNaN(n)) return 3;
+    if (n <= 3) return [2, 3, 4][Math.max(0, n - 1)];
+    return band15(n);
+}
+
+function bandDeltaFromCenter(band, center = 3) {
+    return band15(band) - center;
+}
 
 const CTRL_NAMES = [
   'Documented procedures', 'Segregation of duties', 'Role-Based Access Control (RBAC)', 
@@ -434,9 +491,9 @@ function rollupScenarioWorstHeatmapAxes(scenarios) {
 /** Resolve which mandatory baselines apply to the current asset state. */
 function getApplicableMandatorySets(ctx) {
     const sets = [];
-    const ciaScore = (parseInt(ctx.c) || 0) + (parseInt(ctx.i) || 0) + (parseInt(ctx.a) || 0);
-    if (ciaScore >= 8)            sets.push({ key: 'restrictedClass', ...MANDATORY_CONTROLS.restrictedClass });
-    else if (ciaScore >= 6)       sets.push({ key: 'confidentialClass', ...MANDATORY_CONTROLS.confidentialClass });
+    const ciaMaxVal = ciaMax(parseInt(ctx.c) || 0, parseInt(ctx.i) || 0, parseInt(ctx.a) || 0);
+    if (ciaMaxVal >= 4)            sets.push({ key: 'restrictedClass', ...MANDATORY_CONTROLS.restrictedClass });
+    else if (ciaMaxVal >= 3)       sets.push({ key: 'confidentialClass', ...MANDATORY_CONTROLS.confidentialClass });
     if (ctx.type === 'FA')        sets.push({ key: 'fa', ...MANDATORY_CONTROLS.fa });
     if (ctx.pii === 'Y' || ctx.spi === 'Y') sets.push({ key: 'pii', ...MANDATORY_CONTROLS.pii });
     if (ctx.environment === 'Internet Facing') sets.push({ key: 'internetFacing', ...MANDATORY_CONTROLS.internetFacing });
@@ -474,6 +531,445 @@ const RISK_QUALITATIVE_DEFAULTS = {
     cyber_int_vuln:   { likelihood_qual: 4, impact_qual: 4 },
     legal_dpa:        { likelihood_qual: 3, impact_qual: 5 }
 };
+
+/** Quick-select phrases for Info Sec / Admin ISRA narrative guides (UI-only; persisted text stays in risk_basis). */
+const ISRA_GUIDE_PHRASES = {
+    threat_actor: {
+        external: 'An external threat actor may target this asset through opportunistic or targeted means',
+        insider: 'An insider with legitimate access could misuse privileges or exfiltrate data',
+        supplier: 'A third-party supplier or integrated SaaS provider could be compromised and affect this asset',
+        user_error: 'User error or social engineering could lead to unintended disclosure or modification',
+        physical: 'Physical theft, tampering, or facility disruption could affect this asset',
+    },
+    threat_path: {
+        network: 'via exposed network services, weak perimeter controls, or internet-facing interfaces',
+        credential: 'via stolen credentials, weak authentication, or shared administrative accounts',
+        misconfig: 'by exploiting misconfiguration, excessive permissions, or missing hardening baselines',
+        endpoint: 'through compromised endpoints, malware, or unpatched server/workstation vulnerabilities',
+        process: 'through process gaps such as weak change control, incomplete offboarding, or manual workarounds',
+    },
+    vuln_gap: {
+        patch: 'Patch and vulnerability management gaps leave known weaknesses unaddressed beyond agreed SLA',
+        access: 'Access-control weaknesses include broad RBAC, stale accounts, or missing MFA on privileged use',
+        logging: 'Insufficient logging, monitoring, or detection reduces visibility of abuse or exfiltration',
+        encrypt: 'Encryption or data-protection controls are incomplete for data at rest or in transit',
+        backup: 'Backup, recovery, or resilience testing gaps increase impact if compromise or loss occurs',
+    },
+    vuln_scope: {
+        localized: 'The gap appears localized to this asset or workload rather than enterprise-wide',
+        systemic: 'Similar gaps were noted across comparable systems or peer reviews flagged recurring exposure',
+        remediating: 'Remediation is in progress; residual weakness remains until verification closes the finding',
+    },
+    occ_signal: {
+        rare: 'No known organizational incidents for this scenario; likelihood is anchored conservatively from peer-sector trends',
+        peer: 'Comparable higher-ed or sector incidents suggest this scenario is plausible within twelve months',
+        tested: 'Recent assurance activity (vulnerability scan, audit, or tabletop) found conditions that increase likelihood',
+        seasonal: 'Seasonal peaks such as enrollment, payroll, or exams increase transaction volume and exposure',
+        trending: 'Threat intelligence or regulatory enforcement trends elevate the expected frequency of this scenario',
+    },
+    occ_prior: {
+        N: 'Internal incident register shows no matching prior event for this scenario',
+        Y: 'A prior incident or near-miss was recorded for this or a comparable system',
+        U: 'Incident tracking is incomplete; occurrence is treated as uncertain pending register review',
+    },
+};
+
+/** Suggested guide picks + bands when a risk taxonomy row is chosen. */
+const ISRA_GUIDE_DEFAULTS = {
+    phys_theft:       { actor: 'physical', path: 'process', gap: 'access', scope: 'localized', signal: 'rare', prior: 'N', threat_band: 3, vuln_band: 3 },
+    phys_destruct:    { actor: 'physical', path: 'process', gap: 'backup', scope: 'localized', signal: 'rare', prior: 'N', threat_band: 2, vuln_band: 3 },
+    hr_insider:       { actor: 'insider', path: 'credential', gap: 'access', scope: 'systemic', signal: 'peer', prior: 'N', threat_band: 4, vuln_band: 3 },
+    hr_accidental:    { actor: 'user_error', path: 'process', gap: 'backup', scope: 'localized', signal: 'tested', prior: 'N', threat_band: 3, vuln_band: 3 },
+    cyber_ext_ransomware: { actor: 'external', path: 'endpoint', gap: 'patch', scope: 'systemic', signal: 'trending', prior: 'N', threat_band: 4, vuln_band: 4 },
+    cyber_ext_leak:   { actor: 'external', path: 'network', gap: 'encrypt', scope: 'systemic', signal: 'peer', prior: 'N', threat_band: 4, vuln_band: 4 },
+    cyber_ext_ddos:   { actor: 'external', path: 'network', gap: 'logging', scope: 'localized', signal: 'trending', prior: 'N', threat_band: 4, vuln_band: 3 },
+    cyber_ext_supply: { actor: 'supplier', path: 'process', gap: 'access', scope: 'systemic', signal: 'peer', prior: 'U', threat_band: 3, vuln_band: 3 },
+    cyber_int_unauth: { actor: 'external', path: 'credential', gap: 'access', scope: 'localized', signal: 'tested', prior: 'N', threat_band: 4, vuln_band: 4 },
+    cyber_int_vuln:   { actor: 'external', path: 'misconfig', gap: 'patch', scope: 'systemic', signal: 'tested', prior: 'N', threat_band: 4, vuln_band: 4 },
+    legal_dpa:        { actor: 'external', path: 'process', gap: 'encrypt', scope: 'systemic', signal: 'trending', prior: 'N', threat_band: 3, vuln_band: 4 },
+};
+
+const ISRA_GUIDE_SELECT_IDS = [
+    'f-guide-occ-signal', 'f-guide-occ-prior',
+];
+
+function resetIsraGuideSelects() {
+    ISRA_GUIDE_SELECT_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+}
+
+function setIsraGuideSelect(id, value) {
+    const el = document.getElementById(id);
+    if (!el || value == null || value === '') return;
+    if ([...el.options].some(o => o.value === value)) el.value = value;
+}
+
+function applyIsraGuideDefaultsForCategory(categoryKey) {
+    const defs = ISRA_GUIDE_DEFAULTS[categoryKey];
+    if (!defs) return;
+    setIsraGuideSelect('f-guide-occ-signal', defs.signal);
+    setIsraGuideSelect('f-guide-occ-prior', defs.prior);
+    syncPriorIncidentsFromGuide();
+    israPendingTemplateGuides = {
+        actor: defs.actor,
+        path: defs.path,
+        gap: defs.gap,
+        scope: defs.scope,
+        signal: defs.signal,
+        prior: defs.prior,
+        threat_band: defs.threat_band ?? 3,
+        vuln_band: defs.vuln_band ?? 3,
+    };
+}
+
+function markIsraNarrativeManual(textareaId) {
+    const el = document.getElementById(textareaId);
+    if (el) el.dataset.israGuided = '';
+}
+
+function setGuidedTextarea(id, text) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return;
+    if (el.dataset.israGuided === '1' || !String(el.value || '').trim()) {
+        el.value = trimmed;
+        el.dataset.israGuided = '1';
+    }
+}
+
+function setGuidedRowStatement(row, text) {
+    if (!row) return;
+    const ta = row.querySelector('[data-field="statement"]');
+    if (!ta) return;
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return;
+    if (ta.dataset.israGuided === '1' || !String(ta.value || '').trim()) {
+        ta.value = trimmed;
+        ta.dataset.israGuided = '1';
+    }
+}
+
+function syncPriorIncidentsFromGuide() {
+    const priorGuide = document.getElementById('f-guide-occ-prior')?.value || '';
+    const priorEl = document.getElementById('f-prior-incidents');
+    if (!priorEl || !priorGuide) return;
+    if (['N', 'Y', 'U'].includes(priorGuide)) priorEl.value = priorGuide;
+}
+
+function applyIsraNarrativeGuides() {
+    syncPriorIncidentsFromGuide();
+    const threatRow = document.querySelector('#isra-threats-list .isra-multi-row');
+    const vulnRow = document.querySelector('#isra-vulns-list .isra-multi-row');
+    if (threatRow) composeIsraRowFromGuides('threat', parseInt(threatRow.dataset.rowIx || '0', 10));
+    if (vulnRow) composeIsraRowFromGuides('vuln', parseInt(vulnRow.dataset.rowIx || '0', 10));
+
+    const signalKey = document.getElementById('f-guide-occ-signal')?.value || '';
+    const priorKey = document.getElementById('f-guide-occ-prior')?.value || '';
+    if (signalKey || priorKey) {
+        const signal = ISRA_GUIDE_PHRASES.occ_signal[signalKey] || '';
+        const prior = ISRA_GUIDE_PHRASES.occ_prior[priorKey] || '';
+        const occParts = [signal, prior].filter(Boolean);
+        if (occParts.length) {
+            setGuidedTextarea('f-occurrence-justification', `${occParts.join('; ')}.`);
+        }
+    }
+
+    updateIsraBandSummary();
+    runEnforcementEngine(true);
+}
+
+function updateIsraBandSummary() {
+    const el = document.getElementById('isra-band-summary');
+    if (!el) return;
+    const threats = collectThreatsFromDom();
+    const vulns = collectVulnsFromDom();
+    const tb = threats.length ? Math.max(...threats.map(t => band15(t.band))) : 3;
+    const vb = vulns.length ? Math.max(...vulns.map(v => band15(v.band))) : 3;
+    el.textContent = `Worst threat band ${tb} and weakness band ${vb} (1–5, ISO 27005-aligned) feed inherent P/S — add rows as needed.`;
+}
+
+let israPendingTemplateGuides = null;
+
+function defaultThreatEntry() {
+    return { band: 3, actor: '', path: '', statement: '' };
+}
+
+function defaultVulnEntry() {
+    return { band: 3, gap: '', scope: '', statement: '' };
+}
+
+function normalizeThreatsArray(basis) {
+    basis = basis && typeof basis === 'object' ? basis : {};
+    if (Array.isArray(basis.threats) && basis.threats.length) {
+        return basis.threats.map(t => ({
+            band: normalizeBand15(t.band ?? t.threat_choice ?? basis.threat_choice ?? 3),
+            actor: t.actor || '',
+            path: t.path || '',
+            statement: String(t.statement || '').trim(),
+        }));
+    }
+    const stmt = String(basis.threat_statement || '').trim();
+    if (stmt || basis.threat_choice != null) {
+        return [{ band: normalizeBand15(basis.threat_choice ?? 3), actor: '', path: '', statement: stmt }];
+    }
+    return [defaultThreatEntry()];
+}
+
+function normalizeVulnsArray(basis) {
+    basis = basis && typeof basis === 'object' ? basis : {};
+    if (Array.isArray(basis.vulnerabilities) && basis.vulnerabilities.length) {
+        return basis.vulnerabilities.map(v => ({
+            band: normalizeBand15(v.band ?? v.vulnerability_choice ?? basis.vulnerability_choice ?? 3),
+            gap: v.gap || '',
+            scope: v.scope || '',
+            statement: String(v.statement || '').trim(),
+        }));
+    }
+    const stmt = String(basis.vulnerability_statement || '').trim();
+    if (stmt || basis.vulnerability_choice != null) {
+        return [{ band: normalizeBand15(basis.vulnerability_choice ?? 3), gap: '', scope: '', statement: stmt }];
+    }
+    return [defaultVulnEntry()];
+}
+
+function joinThreatStatements(threats) {
+    return (threats || []).map(t => String(t.statement || '').trim()).filter(Boolean).join(' | ');
+}
+
+function joinVulnStatements(vulns) {
+    return (vulns || []).map(v => String(v.statement || '').trim()).filter(Boolean).join(' | ');
+}
+
+function maxThreatBand(threats) {
+    const arr = threats && threats.length ? threats : [defaultThreatEntry()];
+    return Math.max(...arr.map(t => band15(t.band)));
+}
+
+function maxVulnBand(vulns) {
+    const arr = vulns && vulns.length ? vulns : [defaultVulnEntry()];
+    return Math.max(...arr.map(v => band15(v.band)));
+}
+
+function israActorOptions(selected) {
+    const opts = [
+        ['', 'Guide — threat actor…'],
+        ['external', 'External attacker'],
+        ['insider', 'Insider with access'],
+        ['supplier', 'Third-party / supplier'],
+        ['user_error', 'User error / social engineering'],
+        ['physical', 'Physical / facility'],
+    ];
+    return opts.map(([v, l]) => `<option value="${escapeHtmlSafe(v)}"${v === selected ? ' selected' : ''}>${escapeHtmlSafe(l)}</option>`).join('');
+}
+
+function israPathOptions(selected) {
+    const opts = [
+        ['', 'Guide — attack path…'],
+        ['network', 'Exposed services / perimeter'],
+        ['credential', 'Stolen creds / weak auth'],
+        ['misconfig', 'Misconfiguration / excess permissions'],
+        ['endpoint', 'Endpoint malware / unpatched host'],
+        ['process', 'Process / change-control gap'],
+    ];
+    return opts.map(([v, l]) => `<option value="${escapeHtmlSafe(v)}"${v === selected ? ' selected' : ''}>${escapeHtmlSafe(l)}</option>`).join('');
+}
+
+function israGapOptions(selected) {
+    const opts = [
+        ['', 'Guide — weakness…'],
+        ['patch', 'Patch / vuln management gap'],
+        ['access', 'RBAC / MFA / stale accounts'],
+        ['logging', 'Logging / monitoring gap'],
+        ['encrypt', 'Encryption / DLP gap'],
+        ['backup', 'Backup / recovery gap'],
+    ];
+    return opts.map(([v, l]) => `<option value="${escapeHtmlSafe(v)}"${v === selected ? ' selected' : ''}>${escapeHtmlSafe(l)}</option>`).join('');
+}
+
+function israScopeOptions(selected) {
+    const opts = [
+        ['', 'Guide — scope…'],
+        ['localized', 'Localized to this asset'],
+        ['systemic', 'Across comparable systems'],
+        ['remediating', 'Fix in progress'],
+    ];
+    return opts.map(([v, l]) => `<option value="${escapeHtmlSafe(v)}"${v === selected ? ' selected' : ''}>${escapeHtmlSafe(l)}</option>`).join('');
+}
+
+function israThreatBandOptions(selected) {
+    const labels = {
+        1: '1 — Rare / no credible adversary',
+        2: '2 — Unlikely targeted interest',
+        3: '3 — Moderate (generic abuse)',
+        4: '4 — High (capable adversary)',
+        5: '5 — Critical (targeted / insider abuse)',
+    };
+    return [1, 2, 3, 4, 5].map(v => `<option value="${v}"${String(v) === String(selected) ? ' selected' : ''}>${labels[v]}</option>`).join('');
+}
+
+function israVulnBandOptions(selected) {
+    const labels = {
+        1: '1 — Hardened / minimal gaps',
+        2: '2 — Low residual exposure',
+        3: '3 — Moderate weaknesses',
+        4: '4 — Material control gaps',
+        5: '5 — Critical exposure',
+    };
+    return [1, 2, 3, 4, 5].map(v => `<option value="${v}"${String(v) === String(selected) ? ' selected' : ''}>${labels[v]}</option>`).join('');
+}
+
+function renderIsraThreatRow(entry, ix) {
+    return `<div class="isra-multi-row" data-row-ix="${ix}">
+    <div class="isra-multi-row-head">
+      <span class="isra-multi-row-label">Threat #${ix + 1}</span>
+      <button type="button" class="btn btn-sm isra-row-remove" onclick="removeIsraThreatRow(${ix})" title="Remove threat">Remove</button>
+    </div>
+    <div class="isra-guide-row grid-3">
+      <select data-field="band" class="isra-guide-select" onchange="updateIsraBandSummary(); runEnforcementEngine(true);">${israThreatBandOptions(entry.band)}</select>
+      <select data-field="actor" class="isra-guide-select" onchange="composeIsraRowFromGuides('threat', ${ix})">${israActorOptions(entry.actor)}</select>
+      <select data-field="path" class="isra-guide-select" onchange="composeIsraRowFromGuides('threat', ${ix})">${israPathOptions(entry.path)}</select>
+    </div>
+    <textarea data-field="statement" rows="2" class="isra-row-statement" placeholder="Threat narrative (guides draft this row)." data-isra-guided="" oninput="this.dataset.israGuided=''; runEnforcementEngine(true);">${escapeHtmlSafe(entry.statement || '')}</textarea>
+  </div>`;
+}
+
+function renderIsraVulnRow(entry, ix) {
+    return `<div class="isra-multi-row" data-row-ix="${ix}">
+    <div class="isra-multi-row-head">
+      <span class="isra-multi-row-label">Weakness #${ix + 1}</span>
+      <button type="button" class="btn btn-sm isra-row-remove" onclick="removeIsraVulnRow(${ix})" title="Remove weakness">Remove</button>
+    </div>
+    <div class="isra-guide-row grid-3">
+      <select data-field="band" class="isra-guide-select" onchange="updateIsraBandSummary(); runEnforcementEngine(true);">${israVulnBandOptions(entry.band)}</select>
+      <select data-field="gap" class="isra-guide-select" onchange="composeIsraRowFromGuides('vuln', ${ix})">${israGapOptions(entry.gap)}</select>
+      <select data-field="scope" class="isra-guide-select" onchange="composeIsraRowFromGuides('vuln', ${ix})">${israScopeOptions(entry.scope)}</select>
+    </div>
+    <textarea data-field="statement" rows="2" class="isra-row-statement" placeholder="Weakness narrative (guides draft this row)." data-isra-guided="" oninput="this.dataset.israGuided=''; runEnforcementEngine(true);">${escapeHtmlSafe(entry.statement || '')}</textarea>
+  </div>`;
+}
+
+function renderIsraThreatVulnPanels(basis) {
+    const threats = normalizeThreatsArray(basis);
+    const vulns = normalizeVulnsArray(basis);
+    const tList = document.getElementById('isra-threats-list');
+    const vList = document.getElementById('isra-vulns-list');
+    if (tList) tList.innerHTML = threats.map((t, i) => renderIsraThreatRow(t, i)).join('');
+    if (vList) vList.innerHTML = vulns.map((v, i) => renderIsraVulnRow(v, i)).join('');
+    if (israPendingTemplateGuides) {
+        const g = israPendingTemplateGuides;
+        const tRow = document.querySelector('#isra-threats-list .isra-multi-row');
+        const vRow = document.querySelector('#isra-vulns-list .isra-multi-row');
+        if (tRow) {
+            const bandEl = tRow.querySelector('[data-field="band"]');
+            if (bandEl) bandEl.value = String(g.threat_band ?? 3);
+            const aEl = tRow.querySelector('[data-field="actor"]');
+            const pEl = tRow.querySelector('[data-field="path"]');
+            if (aEl && g.actor) aEl.value = g.actor;
+            if (pEl && g.path) pEl.value = g.path;
+        }
+        if (vRow) {
+            const bandEl = vRow.querySelector('[data-field="band"]');
+            if (bandEl) bandEl.value = String(g.vuln_band ?? 3);
+            const gEl = vRow.querySelector('[data-field="gap"]');
+            const sEl = vRow.querySelector('[data-field="scope"]');
+            if (gEl && g.gap) gEl.value = g.gap;
+            if (sEl && g.scope) sEl.value = g.scope;
+        }
+        setIsraGuideSelect('f-guide-occ-signal', g.signal);
+        setIsraGuideSelect('f-guide-occ-prior', g.prior);
+        israPendingTemplateGuides = null;
+        composeIsraRowFromGuides('threat', 0);
+        composeIsraRowFromGuides('vuln', 0);
+        applyIsraNarrativeGuides();
+    }
+    updateIsraBandSummary();
+}
+
+function collectThreatsFromDom() {
+    const rows = document.querySelectorAll('#isra-threats-list .isra-multi-row');
+    const out = [];
+    rows.forEach(row => {
+        out.push({
+            band: band15(row.querySelector('[data-field="band"]')?.value),
+            actor: row.querySelector('[data-field="actor"]')?.value || '',
+            path: row.querySelector('[data-field="path"]')?.value || '',
+            statement: (row.querySelector('[data-field="statement"]')?.value || '').trim(),
+        });
+    });
+    return out.length ? out : [defaultThreatEntry()];
+}
+
+function collectVulnsFromDom() {
+    const rows = document.querySelectorAll('#isra-vulns-list .isra-multi-row');
+    const out = [];
+    rows.forEach(row => {
+        out.push({
+            band: band15(row.querySelector('[data-field="band"]')?.value),
+            gap: row.querySelector('[data-field="gap"]')?.value || '',
+            scope: row.querySelector('[data-field="scope"]')?.value || '',
+            statement: (row.querySelector('[data-field="statement"]')?.value || '').trim(),
+        });
+    });
+    return out.length ? out : [defaultVulnEntry()];
+}
+
+function composeIsraRowFromGuides(kind, ix) {
+    const listId = kind === 'threat' ? 'isra-threats-list' : 'isra-vulns-list';
+    const row = document.querySelector(`#${listId} .isra-multi-row[data-row-ix="${ix}"]`);
+    if (!row) return;
+    const desc = (document.getElementById('f-risk-desc')?.value || '').trim()
+        || (RISK_TEMPLATES[g('f-risk-category')]?.desc || 'this asset');
+    if (kind === 'threat') {
+        const actorKey = row.querySelector('[data-field="actor"]')?.value || '';
+        const pathKey = row.querySelector('[data-field="path"]')?.value || '';
+        const actor = ISRA_GUIDE_PHRASES.threat_actor[actorKey] || '';
+        const path = ISRA_GUIDE_PHRASES.threat_path[pathKey] || '';
+        const parts = [actor, path].filter(Boolean);
+        if (parts.length) setGuidedRowStatement(row, `${parts.join(' ')} for ${desc}.`);
+    } else {
+        const gapKey = row.querySelector('[data-field="gap"]')?.value || '';
+        const scopeKey = row.querySelector('[data-field="scope"]')?.value || '';
+        const gap = ISRA_GUIDE_PHRASES.vuln_gap[gapKey] || '';
+        const scope = ISRA_GUIDE_PHRASES.vuln_scope[scopeKey] || '';
+        const parts = [gap, scope].filter(Boolean);
+        if (parts.length) setGuidedRowStatement(row, `${parts.join('; ')}.`);
+    }
+    runEnforcementEngine(true);
+}
+
+function addIsraThreatRow() {
+    const threats = collectThreatsFromDom();
+    threats.push(defaultThreatEntry());
+    renderIsraThreatVulnPanels({ threats, vulnerabilities: collectVulnsFromDom() });
+    runEnforcementEngine(true);
+}
+
+function removeIsraThreatRow(ix) {
+    const threats = collectThreatsFromDom();
+    if (threats.length <= 1) return notify('At least one threat row is required.', true);
+    threats.splice(ix, 1);
+    renderIsraThreatVulnPanels({ threats, vulnerabilities: collectVulnsFromDom() });
+    runEnforcementEngine(true);
+}
+
+function addIsraVulnRow() {
+    const vulns = collectVulnsFromDom();
+    vulns.push(defaultVulnEntry());
+    renderIsraThreatVulnPanels({ threats: collectThreatsFromDom(), vulnerabilities: vulns });
+    runEnforcementEngine(true);
+}
+
+function removeIsraVulnRow(ix) {
+    const vulns = collectVulnsFromDom();
+    if (vulns.length <= 1) return notify('At least one weakness row is required.', true);
+    vulns.splice(ix, 1);
+    renderIsraThreatVulnPanels({ threats: collectThreatsFromDom(), vulnerabilities: vulns });
+    runEnforcementEngine(true);
+}
+
 function generateSequentialId(type) {
     if (!type) return '';
     const existing = globalAssets.filter(a => a.type === type);
@@ -526,7 +1022,7 @@ function runEnforcementEngine(skipAutoTemplate = false) {
     if (env === 'Internet Facing') {
         const elA = document.getElementById('f-a');
         if (elA && elevate) {
-            elA.value = String(Math.max(3, parseInt(elA.value, 10) || 3));
+            elA.value = String(Math.max(4, parseInt(elA.value, 10) || 4));
         }
     }
 
@@ -536,13 +1032,17 @@ function runEnforcementEngine(skipAutoTemplate = false) {
         lockA.textContent = !elevate
             ? ''
             : env === 'Internet Facing'
-                ? 'Min. 3 — Internet-facing floor'
+                ? 'Min. 4 — Internet-facing floor'
                 : 'Assessor';
     }
 
-    const score = (+g('f-c')) + (+g('f-i')) + (+g('f-a'));
+    const c = clampCia(g('f-c'));
+    const i = clampCia(g('f-i'));
+    const a = clampCia(g('f-a'));
+    const cMax = ciaMax(c, i, a);
+    const cSum = c + i + a;
     const classEl = document.getElementById('cia-class');
-    if(classEl) classEl.textContent = CIA_CLASS[score] || 'N/A';
+    if (classEl) classEl.textContent = `${ciaClassFromValues(c, i, a)} (max ${cMax} · sum ${cSum})`;
 
     // ---------------------------------------------------------
     // GUARDRAIL 2: Threat Restrictions based on Asset Type
@@ -776,13 +1276,15 @@ function relevanceUnionForConfiguredScenarios() {
 
 function anchorsFromRiskBasisPayload(basis) {
     basis = basis && typeof basis === 'object' ? basis : {};
+    const threats = normalizeThreatsArray(basis);
+    const vulns = normalizeVulnsArray(basis);
     const lk = Math.max(1, Math.min(5, parseInt(basis.likelihood_qual ?? 3, 10)));
     const iq = Math.max(1, Math.min(5, parseInt(basis.impact_qual ?? 3, 10)));
     let p = lk;
     const prior = String(basis.prior_incidents || 'N').trim().toUpperCase();
     if (prior === 'Y') p = Math.min(5, p + 1);
-    const thr = String(basis.threat_statement || '').trim();
-    const vul = String(basis.vulnerability_statement || '').trim();
+    const thr = joinThreatStatements(threats);
+    const vul = joinVulnStatements(vulns);
     const occ = String(basis.occurrence_justification || '').trim();
     let s = iq;
     if (thr.length < 24 || vul.length < 24) {
@@ -796,28 +1298,26 @@ function anchorsFromRiskBasisPayload(basis) {
         if (/annual|regular|recent incident|past breach/i.test(occ)) p = Math.min(5, p + 1);
     }
 
-    const choiceBand = z => Math.max(1, Math.min(3, parseInt(String(z ?? 2), 10) || 2));
-    const tband = choiceBand(basis.threat_choice);
-    const vband = choiceBand(basis.vulnerability_choice);
-    /* High-threat band → ↑ likelihood anchor; Low → slight discount. Weakness posture → ↑ impact. */
-    if (tband === 3) p = Math.min(5, p + 1);
-    else if (tband === 1) p = Math.max(1, p - 1);
-    if (vband === 3) s = Math.min(5, s + 1);
-    else if (vband === 1) s = Math.max(1, s - 1);
+    const tband = maxThreatBand(threats);
+    const vband = maxVulnBand(vulns);
+    p = Math.max(1, Math.min(5, p + bandDeltaFromCenter(tband, 3)));
+    s = Math.max(1, Math.min(5, s + bandDeltaFromCenter(vband, 3)));
 
     return { p: Math.max(1, Math.min(5, p)), s: Math.max(1, Math.min(5, s)) };
 }
 
 function defaultRiskBasisObject() {
     return {
+        threats: [defaultThreatEntry()],
+        vulnerabilities: [defaultVulnEntry()],
         threat_statement: '',
         vulnerability_statement: '',
         occurrence_justification: '',
         likelihood_qual: 3,
         impact_qual: 3,
         prior_incidents: 'N',
-        threat_choice: 2,
-        vulnerability_choice: 2,
+        threat_choice: 3,
+        vulnerability_choice: 3,
     };
 }
 
@@ -862,6 +1362,12 @@ function normalizeImportedRiskScenarioRow(row) {
         sc.riskDesc = row.riskDesc ?? row.risk_desc ?? '';
         const rbIn = row.risk_basis && typeof row.risk_basis === 'object' ? row.risk_basis : {};
         sc.risk_basis = { ...defaultRiskBasisObject(), ...rbIn };
+        sc.risk_basis.threats = normalizeThreatsArray(sc.risk_basis);
+        sc.risk_basis.vulnerabilities = normalizeVulnsArray(sc.risk_basis);
+        sc.risk_basis.threat_statement = joinThreatStatements(sc.risk_basis.threats);
+        sc.risk_basis.vulnerability_statement = joinVulnStatements(sc.risk_basis.vulnerabilities);
+        sc.risk_basis.threat_choice = maxThreatBand(sc.risk_basis.threats);
+        sc.risk_basis.vulnerability_choice = maxVulnBand(sc.risk_basis.vulnerabilities);
         sc.actionType = row.actionType ?? row.action_type ?? 'Mitigate';
         sc.actionStatus = row.actionStatus ?? row.action_status ?? 'Pending';
         sc.actionPlan = row.actionPlan ?? row.action_plan ?? '';
@@ -882,6 +1388,12 @@ function migrateLegacyToRiskScenarios(asset) {
     if (parsed) return parsed.map(normalizeImportedRiskScenarioRow);
     const legacyBasis = parseJsonSafe(asset.risk_basis_json || '{}', {});
     const rb = typeof legacyBasis === 'object' && legacyBasis !== null ? { ...defaultRiskBasisObject(), ...legacyBasis } : defaultRiskBasisObject();
+    rb.threats = normalizeThreatsArray(rb);
+    rb.vulnerabilities = normalizeVulnsArray(rb);
+    rb.threat_statement = joinThreatStatements(rb.threats);
+    rb.vulnerability_statement = joinVulnStatements(rb.vulnerabilities);
+    rb.threat_choice = maxThreatBand(rb.threats);
+    rb.vulnerability_choice = maxVulnBand(rb.vulnerabilities);
     const sc = blankRiskScenario();
     sc.id = 'rs-legacy';
     sc.riskCategory = asset.riskCategory ?? '';
@@ -944,14 +1456,7 @@ function applyRiskScenarioToForm(sc) {
     setSel('f-risk-category', sc.riskCategory || '');
     setSel('f-risk-desc', sc.riskDesc || '');
     const rb = { ...defaultRiskBasisObject(), ...(sc.risk_basis && typeof sc.risk_basis === 'object' ? sc.risk_basis : {}) };
-    setSel('f-threat-statement', rb.threat_statement || '');
-    setSel('f-vuln-statement', rb.vulnerability_statement || '');
-    setSel('f-occurrence-justification', rb.occurrence_justification || '');
-    setSel('f-likelihood-qual', rb.likelihood_qual != null ? String(rb.likelihood_qual) : '3');
-    setSel('f-impact-qual', rb.impact_qual != null ? String(rb.impact_qual) : '3');
-    setSel('f-threat-choice', rb.threat_choice != null ? String(rb.threat_choice) : '2');
-    setSel('f-vuln-choice', rb.vulnerability_choice != null ? String(rb.vulnerability_choice) : '2');
-    setSel('f-prior-incidents', rb.prior_incidents || 'N');
+    loadRiskBasisToForm(rb);
     setSel('f-action-type', sc.actionType || 'Mitigate');
     setSel('f-action-status', sc.actionStatus || 'Pending');
     setSel('f-action-plan', sc.actionPlan || '');
@@ -974,11 +1479,11 @@ function computeResidualBundleForScenario(scenario, assetCtx) {
     let s = anch.s;
     const threat = String(scenario.riskCategory || '').trim();
     const { env, currentPii, currentSpi, type, cVal, iVal, aVal, active, mbssFwEv } = assetCtx;
-    const ciaScore = cVal + iVal + aVal;
+    const ciaScore = ciaMax(cVal, iVal, aVal);
 
     if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.min(5, p + 1);
     if ((currentPii === 'Y' || currentSpi === 'Y') && (threat === 'cyber_ext_leak' || threat === 'legal_dpa')) s = 5;
-    if (ciaScore >= 8 && (threat.startsWith('cyber_') || threat === 'hr_insider')) s = Math.max(s, 4);
+    if (ciaScore >= 4 && (threat.startsWith('cyber_') || threat === 'hr_insider')) s = Math.max(s, 4);
     if (type === 'FA' && threat.startsWith('cyber_')) s = 5;
     if (env === 'Internet Facing' && threat.startsWith('cyber_ext')) p = Math.max(p, 3);
 
@@ -1180,7 +1685,6 @@ function calculateRiskMath() {
     const type = ctx.type;
     const actTypeSelect = document.getElementById('f-action-type');
     const lockTreat = document.getElementById('lock-treat');
-    const ciaScore = ctx.cVal + ctx.iVal + ctx.aVal;
 
     if (actTypeSelect) {
         Array.from(actTypeSelect.options).forEach(opt => opt.disabled = false);
@@ -1195,7 +1699,7 @@ function calculateRiskMath() {
             if (optAccept) optAccept.disabled = true;
             if (actTypeSelect.value === 'Accept') actTypeSelect.value = 'Mitigate';
             lockMsg = 'PCI-DSS scoped (FA) — Accept blocked unless every scenario is Low / Very Low residual';
-        } else if (ciaScore >= 8 && worstResidualOverall === 'Moderate') {
+        } else if (ciaMax(ctx.cVal, ctx.iVal, ctx.aVal) >= 4 && worstResidualOverall === 'Moderate') {
             if (optAccept) optAccept.disabled = true;
             if (actTypeSelect.value === 'Accept') actTypeSelect.value = 'Mitigate';
             lockMsg = 'Restricted-class asset — Accept blocked while any Moderate scenario remains';
@@ -1215,6 +1719,7 @@ function calculateRiskMath() {
     renderMbssFirewallAlignmentPanel(collectMbssFwAlignmentMessages(active, mbssFwEv));
     syncMbssFirewallScoreMirrors();
     syncMbssFirewallSectionState();
+    updateIsraBandSummary();
 }
 
 function applyRiskTemplate(skipEngineUpdate = false) {
@@ -1231,9 +1736,18 @@ function applyRiskTemplate(skipEngineUpdate = false) {
             if (iq) iq.value = String(Math.max(1, Math.min(5, defQ.impact_qual)));
         }
         if (apEl && !apEl.value) apEl.value = RISK_TEMPLATES[key].action;
+        applyIsraGuideDefaultsForCategory(key);
+        renderIsraThreatVulnPanels({
+            threats: [defaultThreatEntry()],
+            vulnerabilities: [defaultVulnEntry()],
+        });
+        applyIsraNarrativeGuides();
 
-        if(!skipEngineUpdate) notify("Template applied: scenario text + qualitative anchors (revise threat / vuln narratives).");
+        if(!skipEngineUpdate) notify("Template applied — review threat / weakness rows and narratives.");
+    } else {
+        resetIsraGuideSelects();
     }
+    updateIsraBandSummary();
     if(!skipEngineUpdate) runEnforcementEngine();
 }
 
@@ -1753,7 +2267,7 @@ function showAppShell() {
 function formatAuthError(err) {
     const msg = err?.message || String(err);
     if (/invalid login credentials/i.test(msg)) {
-        return 'Invalid email or password. If you are using the demo accounts (user@plm.edu.ph / infosec@plm.edu.ph), make sure you have run supabase/hotfix_demo_accounts.sql in the Supabase SQL editor.';
+        return 'Invalid email or password. If you are using demo accounts, ensure they exist in Supabase Auth (see supabase/hotfix_demo_accounts.sql).';
     }
     if (/email not confirmed/i.test(msg)) {
         return 'Email not yet verified. Click the link Supabase sent to your inbox, then sign in again.';
@@ -2199,7 +2713,7 @@ async function seedSupabaseIfEmpty() {
             return;
         }
         if (data.length === 0) {
-            notify('Database is empty. Re-run supabase/master_setup.sql to seed 57 PLM assets.', true);
+            notify('Database is empty. Re-run supabase/master_setup.sql to seed demo assets.', true);
         }
     } catch (e) { console.error('Seed check:', e); }
 }
@@ -2217,6 +2731,18 @@ function renderSectionContent(name) {
   if (name === 'logs') renderSystemLogs();
   if (name === 'users') renderUserManagement();
   updateWorkflowBadges();
+}
+
+function ensureAddFormIsraPanels() {
+    if (!assetRiskScenarios.length) {
+        assetRiskScenarios = [blankRiskScenario()];
+        currentRiskScenarioIx = 0;
+    }
+    if (!document.querySelector('#isra-threats-list .isra-multi-row')) {
+        applyRiskScenarioToForm(assetRiskScenarios[currentRiskScenarioIx] || assetRiskScenarios[0]);
+        renderRiskScenarioTabsUi();
+        updateRiskScenarioToolbarLabels();
+    }
 }
 
 function showSection(name) {
@@ -2239,6 +2765,7 @@ function showSection(name) {
   });
 
   if (name === 'users') showUsersTab(usersActiveTab || 'pending');
+  if (name === 'add') ensureAddFormIsraPanels();
 
   renderSectionContent(name);
   refreshCloudInBackground().then(() => renderSectionContent(name));
@@ -2285,7 +2812,7 @@ const REASON_PRESETS = {
     'Other (see notes)',
   ],
   rejectUser: [
-    'Email not affiliated with PLM / not a recognised tenant',
+    'Email not affiliated with organization / not a recognised tenant',
     'Requested role not appropriate for this user',
     'User already has an active account',
     'Awaiting background or HR verification',
@@ -3033,9 +3560,10 @@ function buildAssetPayloadFromForm() {
   const type = g('f-type');
   const name = g('f-name').trim();
   const id = editingId || g('f-id');
-  const c = parseInt(document.getElementById('f-c').value) || 2;
-  const ii = parseInt(document.getElementById('f-i').value) || 2;
-  const a = parseInt(document.getElementById('f-a').value) || 2;
+  const c = clampCia(document.getElementById('f-c').value);
+  const ii = clampCia(document.getElementById('f-i').value);
+  const a = clampCia(document.getElementById('f-a').value);
+  const cMax = ciaMax(c, ii, a);
 
   const uniqCat = [...new Set(assetRiskScenarios.map(s => (s.riskCategory || '').trim()).filter(Boolean))].slice(0, 12).join('|');
   const descParts = assetRiskScenarios.map((s, i) =>
@@ -3061,8 +3589,8 @@ function buildAssetPayloadFromForm() {
     pii: document.getElementById('f-pii').value,
     spi: document.getElementById('f-spi').value,
     corp: document.getElementById('f-corp').value,
-    ciaC: c, ciaI: ii, ciaA: a, ciaScore: c + ii + a,
-    ciaClass: document.getElementById('cia-class').textContent,
+    ciaC: c, ciaI: ii, ciaA: a, ciaScore: cMax,
+    ciaClass: ciaClassFromValues(c, ii, a),
     riskCategory: uniqCat || repr?.riskCategory || '',
     riskDesc: descParts.join('\n').slice(0, 8000),
     risk_basis_json: JSON.stringify(firstBasis),
@@ -3086,14 +3614,13 @@ function buildAssetPayloadFromForm() {
 
 function draftDefaultsFromType(type) {
   if (!ALLOWED_ASSET_TYPES.has(type)) return {};
-  const c = 2;
-  const i = 2;
-  const a = 2;
-  const score = c + i + a;
+  const c = 3;
+  const i = 3;
+  const a = 3;
   return {
     pii: 'N', spi: 'N', corp: 'N',
     ciaC: c, ciaI: i, ciaA: a,
-    ciaScore: score, ciaClass: CIA_CLASS[score] || 'Internal Use',
+    ciaScore: ciaMax(c, i, a), ciaClass: ciaClassFromValues(c, i, a),
     prob: 3, sev: 3, inherit: 'Moderate', residual: 'Moderate',
     riskCategory: '', riskDesc: '', actionType: 'Mitigate', actionStatus: 'Pending',
     actionPlan: '', actionOwner: '', actionDate: ''
@@ -3124,10 +3651,10 @@ function loadCiaQuestionnaireToForm(rawJson) {
 
 /** Map questionnaire answers onto PI / corp / CIA sliders (still refine justification below). */
 function syncCiaQuestionnaireIntoClassificationFields() {
-  const clamp13 = x => Math.max(1, Math.min(3, parseInt(String(x), 10) || 2));
-  const disc = clamp13(document.getElementById('f-q-disclosure-impact')?.value);
-  const integ = clamp13(document.getElementById('f-q-integrity-impact')?.value);
-  const avail = clamp13(document.getElementById('f-q-availability-impact')?.value);
+  const clamp15 = x => Math.max(1, Math.min(5, parseInt(String(x), 10) || 3));
+  const disc = clamp15(document.getElementById('f-q-disclosure-impact')?.value);
+  const integ = clamp15(document.getElementById('f-q-integrity-impact')?.value);
+  const avail = clamp15(document.getElementById('f-q-availability-impact')?.value);
   const pEl = document.getElementById('f-pii');
   const spiEl = document.getElementById('f-spi');
   const scope = (document.getElementById('f-q-personal-scope')?.value || 'none').trim();
@@ -3138,7 +3665,7 @@ function syncCiaQuestionnaireIntoClassificationFields() {
   }
   const corpEl = document.getElementById('f-corp');
   const corpAnswer = (document.getElementById('f-q-corp-strategic')?.value || 'N').trim() === 'Y';
-  const disclosureHeavy = disc >= 3;
+  const disclosureHeavy = disc >= 4;
   if (corpEl) corpEl.value = (corpAnswer || disclosureHeavy) ? 'Y' : 'N';
   const fC = document.getElementById('f-c');
   const fI = document.getElementById('f-i');
@@ -3151,14 +3678,20 @@ function syncCiaQuestionnaireIntoClassificationFields() {
 /** Normalized ISRA narrative + qualitative anchors persisted in risk_basis_json */
 function normalizeRiskBasisForPersist() {
   const gs = id => (document.getElementById(id)?.value || '').trim();
+  const threats = collectThreatsFromDom();
+  const vulnerabilities = collectVulnsFromDom();
+  const threat_statement = joinThreatStatements(threats);
+  const vulnerability_statement = joinVulnStatements(vulnerabilities);
   return {
-    threat_statement: gs('f-threat-statement'),
-    vulnerability_statement: gs('f-vuln-statement'),
+    threats,
+    vulnerabilities,
+    threat_statement,
+    vulnerability_statement,
     occurrence_justification: gs('f-occurrence-justification'),
     likelihood_qual: Math.max(1, Math.min(5, parseInt(gs('f-likelihood-qual') || '3', 10))),
     impact_qual: Math.max(1, Math.min(5, parseInt(gs('f-impact-qual') || '3', 10))),
-    threat_choice: Math.max(1, Math.min(3, parseInt(gs('f-threat-choice') || '2', 10))),
-    vulnerability_choice: Math.max(1, Math.min(3, parseInt(gs('f-vuln-choice') || '2', 10))),
+    threat_choice: maxThreatBand(threats),
+    vulnerability_choice: maxVulnBand(vulnerabilities),
     prior_incidents: (() => {
       const x = gs('f-prior-incidents').toUpperCase();
       if (x === 'Y' || x === 'YES') return 'Y';
@@ -3171,14 +3704,15 @@ function normalizeRiskBasisForPersist() {
 function loadRiskBasisToForm(raw) {
   const m = parseJsonSafe(raw, {});
   const setVal = (id, v) => { const el = document.getElementById(id); if (el != null && v !== undefined) el.value = v; };
-  setVal('f-threat-statement', m.threat_statement || '');
-  setVal('f-vuln-statement', m.vulnerability_statement || '');
+  renderIsraThreatVulnPanels(m);
   setVal('f-occurrence-justification', m.occurrence_justification || '');
   setVal('f-likelihood-qual', m.likelihood_qual != null ? String(m.likelihood_qual) : '3');
   setVal('f-impact-qual', m.impact_qual != null ? String(m.impact_qual) : '3');
-  setVal('f-threat-choice', m.threat_choice != null ? String(m.threat_choice) : '2');
-  setVal('f-vuln-choice', m.vulnerability_choice != null ? String(m.vulnerability_choice) : '2');
   setVal('f-prior-incidents', m.prior_incidents || 'N');
+  resetIsraGuideSelects();
+  const occEl = document.getElementById('f-occurrence-justification');
+  if (occEl) occEl.dataset.israGuided = '';
+  updateIsraBandSummary();
 }
 
 /**
@@ -3221,11 +3755,15 @@ function validateIsraMandatoryFields() {
     if (!(sc.riskDesc || '').trim())
       return `Risk scenario #${i + 1}: synthesized risk description required.`;
     const rb = sc.risk_basis || defaultRiskBasisObject();
-    const thrS = String(rb.threat_statement || '').trim();
-    const vulS = String(rb.vulnerability_statement || '').trim();
+    const thrS = joinThreatStatements(normalizeThreatsArray(rb));
+    const vulS = joinVulnStatements(normalizeVulnsArray(rb));
     const occS = String(rb.occurrence_justification || '').trim();
     if (thrS.length < 24 || vulS.length < 24 || occS.length < 24)
-      return `Risk scenario #${i + 1}: threat narrative, vulnerabilities, and occurrence justification each need ≥ 24 characters.`;
+      return `Risk scenario #${i + 1}: combined threat narratives, weakness narratives, and occurrence justification each need ≥ 24 characters.`;
+    const emptyThreat = normalizeThreatsArray(rb).some(t => !String(t.statement || '').trim());
+    const emptyVuln = normalizeVulnsArray(rb).some(v => !String(v.statement || '').trim());
+    if (emptyThreat || emptyVuln)
+      return `Risk scenario #${i + 1}: every threat and weakness row needs a narrative.`;
   }
   const cj = (document.getElementById('f-classification-justification')?.value || '').trim();
   if (cj.length < 24) return 'Classification justification required (how questionnaire + CIA/PI posture were decided; ≥ 24 characters).';
@@ -3531,6 +4069,10 @@ function editAsset(id) {
           const el = document.getElementById(key);
           if(el !== null) el.value = map[key] || ''; 
       }
+      ['f-c', 'f-i', 'f-a'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.value = String(normalizeCiaStored(el.value));
+      });
       loadCiaQuestionnaireToForm(a.cia_questionnaire_json || '{}');
       assetRiskScenarios = migrateLegacyToRiskScenarios(a);
       currentRiskScenarioIx = 0;
@@ -3632,7 +4174,7 @@ function clearForm() {
   mbssFwUiSyncKey = '';
   assetRiskScenarios = [blankRiskScenario()];
   currentRiskScenarioIx = 0;
-  const fields = ['f-name','f-group','f-hostname','f-server','f-custodian','f-desc', 'f-ip', 'f-department', 'f-asset-owners', 'f-classification-justification', 'f-threat-statement', 'f-vuln-statement', 'f-occurrence-justification', 'f-risk-desc','f-action-plan','f-action-owner','f-action-date','f-risk-category'];
+  const fields = ['f-name','f-group','f-hostname','f-server','f-custodian','f-desc', 'f-ip', 'f-department', 'f-asset-owners', 'f-classification-justification', 'f-occurrence-justification', 'f-risk-desc','f-action-plan','f-action-owner','f-action-date','f-risk-category'];
   fields.forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   
   const selects = ['f-type', 'f-id'];
@@ -3651,8 +4193,10 @@ function clearForm() {
   if(document.getElementById('f-likelihood-qual')) document.getElementById('f-likelihood-qual').value = '3';
   if(document.getElementById('f-impact-qual')) document.getElementById('f-impact-qual').value = '3';
   if(document.getElementById('f-prior-incidents')) document.getElementById('f-prior-incidents').value = 'N';
-  if(document.getElementById('f-threat-choice')) document.getElementById('f-threat-choice').value = '2';
-  if(document.getElementById('f-vuln-choice')) document.getElementById('f-vuln-choice').value = '2';
+  resetIsraGuideSelects();
+  renderIsraThreatVulnPanels(defaultRiskBasisObject());
+  const occEl = document.getElementById('f-occurrence-justification');
+  if (occEl) occEl.dataset.israGuided = '';
   if(document.getElementById('f-action-type')) document.getElementById('f-action-type').value = 'Mitigate';
   if(document.getElementById('f-action-status')) document.getElementById('f-action-status').value = 'Pending';
   
@@ -4498,7 +5042,7 @@ async function downloadIarExcelTemplateWorkbook() {
 
   {
     const ws = wb.addWorksheet('1 — Asset ID', { views: [{ state: 'frozen', ySplit: 4 }] });
-    styleTitle(ws, 1, 'IMPACTLENS  ·  PLM ISMS  —  Template: Asset Identification', 12);
+    styleTitle(ws, 1, 'IMPACTLENS  —  Template: Asset Identification', 12);
     styleSubtitle(ws, 2, hint + '  ·  Sheet 1 of 8', 12);
     ws.addRow([]);
     const hdr = ws.addRow(CSV_SHEET1_HEADERS);
@@ -4868,13 +5412,13 @@ async function importCsvSensitivity(rows) {
       pii: ynCell(row.pii),
       spi: ynCell(row.spi),
       corp: ynCell(row.corp),
-      ciaC: parseInt(row.ciaC, 10) || a.ciaC,
-      ciaI: parseInt(row.ciaI, 10) || a.ciaI,
-      ciaA: parseInt(row.ciaA, 10) || a.ciaA,
       updated_by: currentUser?.email || null
     };
-    partial.ciaScore = partial.ciaC + partial.ciaI + partial.ciaA;
-    partial.ciaClass = CIA_CLASS[partial.ciaScore] || a.ciaClass;
+    partial.ciaC = clampCia(parseInt(row.ciaC, 10) || normalizeCiaStored(a.ciaC));
+    partial.ciaI = clampCia(parseInt(row.ciaI, 10) || normalizeCiaStored(a.ciaI));
+    partial.ciaA = clampCia(parseInt(row.ciaA, 10) || normalizeCiaStored(a.ciaA));
+    partial.ciaScore = ciaMax(partial.ciaC, partial.ciaI, partial.ciaA);
+    partial.ciaClass = ciaClassFromValues(partial.ciaC, partial.ciaI, partial.ciaA);
     if (row.ciaClass != null && String(row.ciaClass).trim())
       partial.ciaClass = String(row.ciaClass).trim();
     if (row.classification_justification != null && String(row.classification_justification).trim())
@@ -4924,8 +5468,8 @@ async function importCsvRisk(rows) {
     }
     const tb = parseInt(row.threat_band, 10);
     const vb = parseInt(row.vuln_band, 10);
-    if (!isNaN(tb) && tb >= 1 && tb <= 3) rb.threat_choice = tb;
-    if (!isNaN(vb) && vb >= 1 && vb <= 3) rb.vulnerability_choice = vb;
+    if (!isNaN(tb) && tb >= 1 && tb <= 5) rb.threat_choice = tb;
+    if (!isNaN(vb) && vb >= 1 && vb <= 5) rb.vulnerability_choice = vb;
     patch.risk_basis_json = JSON.stringify(rb);
 
     if (row.asset_risks_json != null && String(row.asset_risks_json).trim()) {
@@ -5661,7 +6205,7 @@ async function exportDataXLSX() {
         : { color: { argb: 'FF6A6A78' } };
     const setCols = (ws, widths) => { ws.columns = widths.map(w => ({ width: w })); };
     const addBranding = (ws, cols) => {
-        styleTitle(ws, 1, 'IMPACTLENS  ·  PLM ISMS  —  Information Asset Register', cols);
+        styleTitle(ws, 1, 'IMPACTLENS  —  Information Asset Register', cols);
         styleSubtitle(ws, 2, 'Generated ' + new Date().toLocaleString() + '  ·  Role: ' + (isAdmin ? 'Admin (CISO)' : 'Information Security') + '  ·  Records: ' + assets.length, cols);
         ws.addRow([]);
     };
@@ -5857,7 +6401,7 @@ async function exportDataXLSX() {
         return dt.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
     };
     const todayISO = fmtDate(new Date());
-    const reviewerEmail = currentUser?.email || 'admin@plm.edu.ph';
+    const reviewerEmail = currentUser?.email || 'admin@example.org';
 
     // =====================================================
     // Sheet 7 — Rejected & Deleted (BOTH roles).
@@ -6377,6 +6921,15 @@ window.promptReason         = promptReason;
 window.showSection          = showSection;
 window.runEnforcementEngine = runEnforcementEngine;
 window.applyRiskTemplate    = applyRiskTemplate;
+window.applyIsraNarrativeGuides = applyIsraNarrativeGuides;
+window.markIsraNarrativeManual = markIsraNarrativeManual;
+window.syncPriorIncidentsFromGuide = syncPriorIncidentsFromGuide;
+window.updateIsraBandSummary = updateIsraBandSummary;
+window.addIsraThreatRow = addIsraThreatRow;
+window.removeIsraThreatRow = removeIsraThreatRow;
+window.addIsraVulnRow = addIsraVulnRow;
+window.removeIsraVulnRow = removeIsraVulnRow;
+window.composeIsraRowFromGuides = composeIsraRowFromGuides;
 window.syncCiaQuestionnaireIntoClassificationFields = syncCiaQuestionnaireIntoClassificationFields;
 window.addRiskScenario             = addRiskScenario;
 window.removeCurrentRiskScenario   = removeCurrentRiskScenario;
