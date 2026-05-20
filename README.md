@@ -2,24 +2,50 @@
 
 A standards-aligned, multi-tenant Information Security Risk Assessment (IAR) platform built for the **Pamantasan ng Lungsod ng Maynila (PLM) ISMS**. Implements the full NIST SP 800-30 Rev. 1 risk-management lifecycle with ISO/IEC 27001:2022, CIS Controls v8, SOC 2 Trust Services Criteria, PCI-DSS v4.0 and RA 10173 (Philippine Data Privacy Act) compliance baked in.
 
-> **v2.0 — major rewrite (May 2026).** The v1 single-user prototype has been replaced by a 3-tier role-based application backed by Supabase Auth, PostgreSQL triggers, mandatory-control floors and a **9-sheet (Info Sec) / 12-sheet (Admin)** ExcelJS audit export (includes MBSS & firewall review sheets). If you are looking for the localStorage prototype, check the v1 tag.
+> **v2.1 — May 2026.** Builds on v2.0 with **CIA 1–5** classification, **multi-row threat/vulnerability bands**, **117-asset realistic seed**, **Vercel production deploy**, dashboard KPI fixes (~18% elevated portfolio), and paired-scenario roll-ups from `asset_risks_json`. If you are looking for the localStorage prototype, check the v1 tag.
+
+**Live demo:** [https://impactlens-assessment.vercel.app](https://impactlens-assessment.vercel.app)
 
 ---
 
 ## Table of Contents
-1. [What's new in v2.0](#whats-new-in-v20)
-2. [Architecture](#architecture)
-3. [Quick start](#quick-start)
-4. [Roles & permissions](#roles--permissions)
-5. [Risk-math engine](#risk-math-engine)
-6. [Compliance mapping](#compliance-mapping)
-7. [Workflow](#workflow)
-8. [Reject / Delete with reason capture](#reject--delete-with-reason-capture)
-9. [Excel export](#excel-export)
-10. [Project structure](#project-structure)
-11. [Operations](#operations)
-12. [Browser support](#browser-support)
-13. [References](#references)
+1. [What's new in v2.1](#whats-new-in-v21)
+2. [What's new in v2.0](#whats-new-in-v20)
+3. [Architecture](#architecture)
+4. [Quick start](#quick-start)
+5. [Roles & permissions](#roles--permissions)
+6. [Risk-math engine](#risk-math-engine)
+7. [Compliance mapping](#compliance-mapping)
+8. [Workflow](#workflow)
+9. [Reject / Delete with reason capture](#reject--delete-with-reason-capture)
+10. [Excel export](#excel-export)
+11. [Project structure](#project-structure)
+12. [Operations](#operations)
+13. [Browser support](#browser-support)
+14. [References](#references)
+
+---
+
+## What's new in v2.1
+
+| Area | Change |
+|---|---|
+| **CIA scale** | Confidentiality / Integrity / Availability rated **1–5** (ISO 27005 / NIST SP 800-60 aligned); classification label driven by **max(C,I,A)**, not sum alone |
+| **Risk basis** | Multiple **threat** and **vulnerability** rows per scenario (bands 1–5); worst band feeds inherent P/S |
+| **Seed register** | **117 approved PLM assets** with realistic residual mix (~7 High, ~14 Moderate, ~66 Low, ~30 Very Low ≈ **18% elevated**) |
+| **Dashboard KPIs** | Register roll-up from **paired `asset_risks_json`** scenarios (`reportingAssetResidualTier`) — avoids mandatory-floor inflation on portfolio view |
+| **Action plans** | Unified count across nav badge, dashboard donut, and Action Plans page (excludes `Accept` on elevated risks) |
+| **FA / PCI scope** | PCI-DSS **High** floor applies only to **in-scope FA** assets (cyber/payment exposure) — not petty-cash / `phys_theft` ledgers |
+| **Deployment** | Static site on **Vercel** (`vercel.json`, `.vercelignore` uses `/scripts` so `assets/scripts/` is included) |
+| **SQL bootstrap** | `master_setup.sql` syncs roll-up columns **from JSON** — do **not** re-run legacy mandatory-floor bulk recompute on seed data |
+
+### Regenerate asset seed (optional)
+
+```bash
+node scripts/regenerate_master_asset_seed.mjs
+```
+
+Rewrites section `-- 4. ASSET SEED` in `supabase/master_setup.sql` (110–120 assets, multi-scenario JSON, control assignments).
 
 ---
 
@@ -59,9 +85,11 @@ A standards-aligned, multi-tenant Information Security Risk Assessment (IAR) pla
 └────────────────────────────────────────────────────────────────┘
 ```
 
-**Frontend stack:** vanilla ES2020 JavaScript (no framework, single `app.js` ~3.2k lines), CSS custom-properties theme (`main.css` ~1.5k lines), ExcelJS for branded multi-sheet workbooks, Supabase JS for auth + REST. Both vendor libraries are served first-party (`assets/vendor/*.min.js`) to bypass strict-tracking-prevention browsers (Edge / Brave) that otherwise block storage access.
+**Frontend stack:** vanilla ES2020 JavaScript (single `app.js` ~7k lines), CSS custom-properties theme (`main.css` ~2.8k lines), ExcelJS for branded multi-sheet workbooks, Supabase JS for auth + REST. Both vendor libraries are served first-party (`assets/vendor/*.min.js`) to bypass strict-tracking-prevention browsers (Edge / Brave) that otherwise block storage access.
 
-**Server:** lightweight `scripts/serve.mjs` (Node 18+) static server with `Cache-Control: no-store` headers and an explicit `?v=YYYYMMDDx` cache marker on every CSS/JS reference.
+**Server:** lightweight `scripts/serve.mjs` (Node 18+) static server with `Cache-Control: no-store` headers and an explicit `?v=YYYYMMDD-*` cache marker on every CSS/JS reference.
+
+**Production:** [Vercel](https://impactlens-assessment.vercel.app) — static deploy, no build step (`vercel.json`). Deploy with `npm run deploy:prod` (requires [Vercel CLI](https://vercel.com/docs/cli) linked to the project).
 
 ---
 
@@ -84,10 +112,13 @@ Open the Supabase SQL Editor for your project and run the scripts in order:
 
 | Step | File | Purpose | Idempotent? |
 |---|---|---|---|
-| 1 | `supabase/master_setup.sql` | Tables, RLS, triggers, seed of 57 PLM assets, risk-math realignment, `mbss_json` / `firewall_json` columns | yes |
-| 2 *(optional)* | `supabase/hotfix_demo_accounts.sql` | Pre-provision `infosec@plm.edu.ph` / `user@plm.edu.ph` (skip the email-verification step) | yes |
-| 3 *(optional)* | `supabase/hotfix_mbss_firewall_columns.sql` | Adds `mbss_json` / `firewall_json` if your DB predates May 2026 `master_setup.sql` | yes |
-| 4 *(optional)* | `supabase/hotfix_realign_risk_math.sql` | Re-derives risk math + adds `user_profiles.rejection_reason` for legacy databases | yes |
+| 1 | `supabase/master_setup.sql` | Tables, RLS, triggers, **117-asset seed**, JSON roll-up sync, `mbss_json` / `firewall_json` | yes |
+| 2 *(optional)* | `supabase/migration_isra_v5_cia5_multi_threat_vuln.sql` | Column docs + legacy CIA 1–3 → 1–5 normalization on existing DBs | yes |
+| 3 *(optional)* | `supabase/fix_register_residuals_manual.sql` | Fix stale inherit/residual, restore roll-up from JSON, FA petty-cash tiers | yes |
+| 4 *(optional)* | `supabase/hotfix_demo_accounts.sql` | Pre-provision `infosec@plm.edu.ph` / `user@plm.edu.ph` (skip email verification) | yes |
+| 5 *(optional)* | `supabase/hotfix_mbss_firewall_columns.sql` | Adds `mbss_json` / `firewall_json` if your DB predates May 2026 `master_setup.sql` | yes |
+
+> **Avoid on seeded demo DB:** `supabase/hotfix_realign_risk_math.sql` — applies legacy mandatory-floor recompute to **all** rows and can inflate residuals to Moderate/High. Use `fix_register_residuals_manual.sql` instead.
 
 In **Authentication → Providers** make sure Email is enabled and **Confirm email** is ON. The `master_setup.sql` trigger auto-promotes any verified `admin@plm.edu.ph`, `infosec@plm.edu.ph`, or `user@plm.edu.ph` to an active profile.
 
@@ -108,7 +139,9 @@ ImpactLens uses **Supabase Auth’s built-in email**. You do **not** need Resend
 
 2. [Providers → Email](https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/providers) — Email **ON**, **Confirm email** **ON**.
 
-3. [URL Configuration](https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/url-configuration) — **Site URL** `http://localhost:8000`; **Redirect URLs** `http://localhost:8000/**` and `http://localhost:8000/index.html`.
+3. [URL Configuration](https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/url-configuration) — **Site URL** `http://localhost:8000` (local) or `https://impactlens-assessment.vercel.app` (production); **Redirect URLs** must include both:
+   - `http://localhost:8000/**`
+   - `https://impactlens-assessment.vercel.app/**`
 
 4. [Email templates](https://supabase.com/dashboard/project/haspklehikocqswmgmtk/auth/templates) — **Confirm signup** must include `{{ .ConfirmationURL }}`.
 
@@ -189,7 +222,7 @@ After residual is computed, the engine applies a non-negotiable floor when an as
 |---|---|---|---|
 | Restricted (CIA ≥ 8) | RBAC, MFA, Backup, Encryption, IRP | Moderate | ISO 27001:2022 §A.5.10–A.5.15 + NIST CSF PR.AA + PR.DS |
 | Confidential (CIA 6–7) | RBAC, Encryption, IRP | Moderate | ISO 27001:2022 §A.8.2 + NIST CSF PR.DS |
-| FA (PCI-DSS scope) | MFA, Encryption, Vuln Mgmt, Segmentation | **High** | PCI-DSS v4.0 Req 3, 4, 8.4, 11.3, 1.4.4 |
+| FA (PCI-DSS scope) | MFA, Encryption, Vuln Mgmt, Segmentation | **High** | PCI-DSS v4.0 Req 3, 4, 8.4, 11.3, 1.4.4 — **only when `isPciInScopeFaAsset()`** (internet-facing, `cyber_*` / payment threats; **not** petty-cash `phys_theft` FA ledgers) |
 | PII / SPI | Procedures, RBAC, Backup, Encryption | Moderate | RA 10173 §20 + ISO 27701 + GDPR Art. 32 |
 | Internet-Facing | Firewall/WAF, Vuln Mgmt, IRP | Moderate | CIS v8 §12 + §17 + NIST PR.IR-01, DE.CM-01 |
 
@@ -209,7 +242,11 @@ The control checkbox list classifies each control into one of four states based 
 - **Both** (green ribbon) — lowers P/S *and* lifts the floor.
 - **Disabled** (struck through) — neither relevant nor required.
 
-This was a deliberate fix in v2 — v1 had restricted the picker only to threat-relevant controls, which made it impossible to satisfy a baseline whose controls fell outside the threat's relevance set.
+### 6. Dashboard & register roll-up (v2.1)
+
+Portfolio KPIs (elevated %, residual donuts, action-plan counts) use **`reportingAssetResidualTier()`** — the worst **paired** scenario from `asset_risks_json` / save-time roll-up. This matches the seeded realistic distribution (~18% elevated).
+
+The **live mandatory-floor engine** (`liveRegisterMetricsForAsset`) still runs in the asset form and shows a **“↑ control gap floor”** hint on the risk register when live analysis would exceed the stored tier. Do not use live recompute alone for dashboard aggregates — incomplete `AssetControls` rows would show ~100% elevated.
 
 ---
 
@@ -294,25 +331,32 @@ Risk-rating cells use a fixed colour code (High = red, Moderate = amber, Low = c
 ```
 ImpactLens-Assessment/
 ├── index.html                              # DOM only, cache-busted asset references
-├── package.json                            # Node deps, npm scripts
+├── package.json                            # Node deps, npm scripts, Vercel deploy
+├── vercel.json                             # Static Vercel deploy + cache headers
+├── .vercelignore                           # Excludes /scripts, /docs — NOT assets/scripts
 ├── README.md                               # this file
 ├── scripts/
 │   ├── serve.mjs                           # static dev server with no-store headers
-│   └── patch_index2.mjs                    # one-shot helper for HTML cache markers
+│   ├── regenerate_master_asset_seed.mjs    # rebuild 117-asset seed block in master_setup.sql
+│   ├── build_master_sql.mjs                # compose full master_setup from parts
+│   └── test-auth-email.mjs                 # Supabase signup email smoke test
 ├── assets/
-│   ├── styles/main.css                     # ~1.5k lines, theme + components
-│   ├── scripts/app.js                      # ~3.2k lines, full app logic
+│   ├── styles/main.css                     # theme + dashboard metric cards
+│   ├── scripts/app.js                      # full app logic (~7k lines)
 │   └── vendor/
 │       ├── supabase.min.js                 # vendored to bypass tracking prevention
 │       └── exceljs.min.js                  # vendored, same reason
 ├── supabase/
-│   ├── master_setup.sql                    # tables + RLS + triggers + seed + realignment
+│   ├── master_setup.sql                    # tables + RLS + triggers + 117-asset seed + JSON sync
+│   ├── fix_register_residuals_manual.sql   # manual fix for stale / inflated residuals
+│   ├── migration_isra_v5_cia5_multi_threat_vuln.sql
 │   ├── hotfix_demo_accounts.sql            # optional: pre-provision demo accounts
-│   ├── hotfix_realign_risk_math.sql        # optional: re-derive seeded math + add column
 │   ├── hotfix_action_plans.sql             # optional: diversify seed action-plan dates
 │   └── hotfix_user_profiles_rls.sql        # legacy: RLS recursion fix (already in master)
 └── docs/
-    ├── ARCHITECTURE.md                     # v2 system design (Supabase)
+    ├── ARCHITECTURE.md                     # v2 system design (Supabase + Vercel)
+    ├── CALCULATION_README.md               # formula-level risk engine reference
+    ├── TOOL_OVERVIEW.md                    # stakeholder / assessor overview
     ├── USER_GUIDE.md                       # End-user guide
     ├── MODULE_ISRA_DESCRIPTION.md          # ISRA module scope
     ├── LIMITATIONS_AND_SCOPE.md            # Out-of-scope + defense talking points
@@ -326,10 +370,19 @@ ImpactLens-Assessment/
 ## Operations
 
 ### Cache busting
-Every `<link>`/`<script>` referencing local CSS/JS carries a `?v=YYYYMMDDx` marker. Bump the trailing letter whenever you ship a substantive change so the browser pulls the new bytes immediately. Current marker: **`v=20260517o`**.
+Every `<link>`/`<script>` referencing local CSS/JS carries a `?v=YYYYMMDD-*` marker. Bump the suffix whenever you ship a substantive change so browsers pull new bytes immediately.
+
+**Current markers:** `main.css?v=20260519-dashboard-realistic` · `app.js?v=20260519-metric-colors`
+
+### Deploy to Vercel
+```bash
+npm run deploy:prod
+# → https://impactlens-assessment.vercel.app
+```
+Ensure Supabase **Redirect URLs** include the production domain (see [Quick start](#2-bootstrap-the-supabase-database)).
 
 ### Re-running database scripts
-All SQL files use `IF NOT EXISTS`, `CREATE OR REPLACE`, and idempotent `ADD COLUMN IF NOT EXISTS` so they can be re-run any number of times without side effects.
+All SQL files use `IF NOT EXISTS`, `CREATE OR REPLACE`, and idempotent `ADD COLUMN IF NOT EXISTS` where applicable. After changing seed logic, re-run `master_setup.sql` section 4 (assets) or `fix_register_residuals_manual.sql` on existing projects.
 
 ### Bypassing tracking prevention
 If a browser blocks `localStorage` for the Supabase SDK (Edge "Tracking Prevention", Brave, etc.), the app uses a `directFetch()` helper that hits the PostgREST API with the explicit access token instead of relying on the SDK's locked session — sign-ins and saves complete in <1s instead of timing out at 15s.
@@ -368,4 +421,4 @@ On **Asset Table**, use **CSV Template** → fill in Excel → **Import CSV**. R
 
 **Built for the Pamantasan ng Lungsod ng Maynila Information Security Office.**
 
-*v2.0 — May 2026*
+*v2.1 — May 2026*

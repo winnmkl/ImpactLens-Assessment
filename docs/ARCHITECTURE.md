@@ -1,4 +1,4 @@
-# ImpactLens Architecture (v2.0)
+# ImpactLens Architecture (v2.1)
 
 ## System Overview
 
@@ -82,7 +82,7 @@ Linked to `auth.users`: `requested_role`, `approved_role`, `account_status` (`pe
 | Module | Section ID | Roles | Description |
 |--------|------------|-------|-------------|
 | ISRA / IAR | `sec-add`, queues, register | All (scoped) | Core risk assessment and asset lifecycle |
-| Dashboard | `sec-dashboard` | Info Sec, Admin | KPIs, charts, heatmap inputs |
+| Dashboard | `sec-dashboard` | Info Sec, Admin | KPIs from **paired `asset_risks_json` roll-up**; live gap hints on register only |
 | Risk register | `sec-risk` | Info Sec, Admin | Heatmap + risk table |
 | Control metrics | `sec-controls` | Info Sec, Admin | Adoption of 13 controls |
 | Action plans | `sec-actions` | Info Sec, Admin | Elevated residual treatments |
@@ -106,7 +106,9 @@ Implemented in `calculateRiskMath()` and `runEnforcementEngine()`:
 3. **Floors** — `getApplicableMandatorySets()` / `MANDATORY_CONTROLS`
 4. **Appetite** — Blocks `Accept` when residual or asset class forbids it
 
-Saved values persist on `Assets` rows; optional SQL realignment in `supabase/hotfix_realign_risk_math.sql`.
+**Portfolio vs. form math (v2.1):** Dashboard and register badges use `reportingAssetResidualTier()` (stored paired scenarios). The asset form still runs `computeResidualBundleForScenario()` live, including mandatory floors. Register rows show **↑ control gap floor** when live analysis exceeds the stored tier.
+
+Saved values persist on `Assets` rows and in `asset_risks_json`. `master_setup.sql` syncs roll-up columns from JSON — avoid `hotfix_realign_risk_math.sql` on seeded demo data.
 
 ---
 
@@ -154,11 +156,20 @@ ImpactLens-Assessment/
 
 ## Deployment and operations
 
+### Local
 - Run `npm start` → http://localhost:8000
 - Execute `supabase/master_setup.sql` in Supabase SQL Editor
-- Configure Auth: confirm email, redirect URLs (see README)
-- Bump `?v=` on CSS/JS in `index.html` after each release
+- Configure Auth: confirm email, redirect URLs for **localhost and production** (see README)
+
+### Vercel (production)
+- **URL:** https://impactlens-assessment.vercel.app
+- **Config:** `vercel.json` (static site, no framework build)
+- **Deploy:** `npm run deploy:prod` (Vercel CLI, project linked via `.vercel/project.json`)
+- **Important:** `.vercelignore` must use `/scripts` (root-only) so `assets/scripts/app.js` is **not** excluded
+
+### Cache busting
+Bump `?v=` on CSS/JS in `index.html` after each release. Current: `main.css?v=20260519-dashboard-realistic`, `app.js?v=20260519-metric-colors`.
 
 ---
 
-*v2.0 — May 2026 — PLM ISMS*
+*v2.1 — May 2026 — PLM ISMS*

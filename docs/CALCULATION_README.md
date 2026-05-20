@@ -143,7 +143,7 @@ Then:
 |--------------|-----------------|----------------------|-------|
 | `restrictedClass` | CIA sum **≥ 8** | 3, 4, 6, 7, 13 | Moderate |
 | `confidentialClass` | CIA **6–7** (and not Restricted rule) | 3, 7, 13 | Moderate |
-| `fa` | Asset type **FA** | 4, 7, 11, 12 (MFA, Encryption, Vuln mgmt, Segmentation) | High |
+| `fa` | Asset type **FA** **and** `isPciInScopeFaAsset()` — internet-facing, `cyber_*` / payment-related threat; **not** petty-cash `phys_theft` ledgers | 4, 7, 11, 12 (MFA, Encryption, Vuln mgmt, Segmentation) | High |
 | `pii` | PII or SPI = **Y** | 1, 3, 6, 7 | Moderate |
 | `internetFacing` | Environment = Internet Facing | 10, 11, 13 | Moderate |
 
@@ -179,6 +179,16 @@ After math, the **Treatment Type** dropdown may disable **Accept** when:
 
 ---
 
+## 12. Dashboard / register roll-up (v2.1)
+
+Portfolio metrics (`renderDashboard`, nav action badge, residual donuts) use **`effectiveAssetResidual()` / `reportingAssetResidualTier()`** — worst **paired** scenario from `asset_risks_json`, not a live mandatory-floor pass over incomplete `AssetControls`.
+
+**Why:** Live floor recompute on every approved asset without full control coverage inflates the register to ~100% Moderate/High. Seeded demo data targets ~18% elevated (7 High + 14 Moderate of 117).
+
+**Register gap hint:** `liveRegisterMetricsForAsset()` still runs per row; if control gaps would raise the floor above the stored tier, UI shows **↑ control gap floor**.
+
+---
+
 ## 11. Change control
 
-When you change formulas, update **`docs/CALCULATION_README.md`** in the same change as **`app.js`**, and bump the `app.js?v=` query string in **`index.html`** so browsers load the new logic.
+When you change formulas, update **`docs/CALCULATION_README.md`** in the same change as **`app.js`**, and bump the `app.js?v=` / `main.css?v=` query strings in **`index.html`** so browsers load the new logic.

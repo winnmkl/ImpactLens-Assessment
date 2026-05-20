@@ -62,6 +62,10 @@ The **treatment type** (e.g. Accept) is **blocked** when doing so would contradi
 
 Each control in the UI can be **relevant** to the threat (drives math), **baseline-required** (lifts floor when satisfied), **both**, or **disabled** — so users can satisfy baselines even when a control is not threat-relevant for P/S reduction (**deliberate v2 behavior** vs. the v1 prototype).
 
+### 6. Dashboard portfolio view (v2.1)
+
+Elevated-risk KPIs and action-plan counts use the **stored paired scenario** roll-up (`asset_risks_json`), giving a realistic portfolio (~18% elevated in the PLM seed). The **live floor engine** applies on the asset form and as an optional **gap hint** on the risk register — not as the dashboard denominator.
+
 ---
 
 ## The thirteen controls and compliance mapping
