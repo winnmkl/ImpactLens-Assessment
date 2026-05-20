@@ -2,7 +2,7 @@
   "name": "impactlens-assessment",
   "version": "2.1.0",
   "description": "Multi-role, standards-aligned Information Security Risk Assessment (IAR) platform built on Supabase. NIST SP 800-30, ISO 27001:2022, CIS v8, SOC 2, PCI-DSS v4.0, CIA 1–5, multi-scenario risks, Vercel-deployed static frontend.",
-  "main": "index.html",
+  "main": "public/index.html",
   "type": "module",
   "keywords": [
     "risk-assessment",
@@ -32,7 +32,7 @@
   "scripts": {
     "start": "node scripts/serve.mjs 8000",
     "start:node": "node scripts/serve.mjs 8000",
-    "build": "node vercel-build.mjs",
+    "build": "node -e \"process.exit(0)\"",
     "deploy": "vercel deploy --yes",
     "deploy:prod": "vercel deploy --prod --yes",
     "test": "echo 'Add tests here'",

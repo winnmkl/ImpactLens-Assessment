@@ -10,7 +10,6 @@ yarn-error.log*
 # Build outputs
 dist/
 build/
-public/
 *.min.js
 *.min.css
 

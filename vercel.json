@@ -3,7 +3,7 @@
   "version": 2,
   "framework": null,
   "installCommand": "exit 0",
-  "buildCommand": "node vercel-build.mjs",
+  "buildCommand": "exit 0",
   "outputDirectory": "public",
   "headers": [
     {

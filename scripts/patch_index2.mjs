@@ -1,5 +1,5 @@
 import fs from 'fs';
-const p = new URL('../index.html', import.meta.url);
+const p = new URL('../public/index.html', import.meta.url);
 let s = fs.readFileSync(p, 'utf8');
 const D = 'di' + 'v';
 

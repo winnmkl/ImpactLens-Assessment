@@ -1,69 +1,62 @@
 # ImpactLens — Vercel deployment
 
-Static site (vanilla HTML/CSS/JS). No build step. Supabase client loads from CDN in `index.html`.
+Static site (vanilla HTML/CSS/JS). Site files live in **`public/`** (committed to git). Supabase client loads from CDN in `public/index.html`.
 
 ## Production URLs
 
 | Project | URL | Notes |
 |---------|-----|--------|
-| **Primary (recommended)** | https://impactlens-assessment.vercel.app | CLI-linked project `impactlens-assessment` |
-| GitHub auto-import | `impact-lens-assessment-mcr7` | Same repo — uses `public/` output from `vercel-build.mjs` |
+| **Primary** | https://impactlens-assessment.vercel.app | Project `impactlens-assessment` |
+| GitHub import | `impact-lens-assessment-mcr7` | Same repo, same `public/` output |
 
-Use **one** Vercel project for production if possible. Both projects can deploy from the same repo when `vercel.json` is present.
+Both projects use **`outputDirectory: public`** in `vercel.json`. The folder is in git — no build copy step required.
 
 ---
 
-## Deploy from CLI (reliable)
+## Local dev
 
 ```bash
-npm run deploy:prod
+npm start
 ```
 
-Requires [Vercel CLI](https://vercel.com/docs/cli) logged in and `.vercel/project.json` linked to your target project.
+Serves **`public/`** at http://localhost:8000
+
+Edit files under `public/index.html` and `public/assets/`.
 
 ---
 
-## GitHub → Vercel (CI)
+## GitHub → Vercel
 
-### Connect a project (primary or mcr7)
-
-1. [Vercel Dashboard](https://vercel.com/winnmkls-projects) → open the project (e.g. **`impactlens-assessment`** or **`impact-lens-assessment-mcr7`**).
-2. **Settings → Git** → Connect **winnmkl/ImpactLens-Assessment** → branch **`main`** → Production.
-3. **Settings → General → Build & Development Settings:**
+1. [Vercel Dashboard](https://vercel.com/winnmkls-projects) → your project → **Settings → Git** → branch **`main`**.
+2. **Settings → General → Build & Development Settings:**
    - **Framework Preset:** Other
-   - **Root Directory:** `./` (repo root)
-   - **Build Command:** leave empty (uses `vercel.json`) or `node vercel-build.mjs`
+   - **Root Directory:** `./`
+   - **Build Command:** leave empty (uses `vercel.json`) or `exit 0`
    - **Output Directory:** leave empty (uses `vercel.json`) or **`public`**
-   - **Install Command:** leave empty (uses `vercel.json`) or `exit 0`
-4. Redeploy from **Deployments → Redeploy**.
+   - **Install Command:** leave empty or `exit 0`
+3. **Redeploy** latest `main`.
 
-### If you see: *No Output Directory named "public" found*
+### *No Output Directory named "public" found*
 
-The dashboard had **Output Directory = `public`** but the old config did not create that folder. The repo now runs `vercel-build.mjs`, which copies `index.html` and `assets/` into `public/` before deploy. Pull latest `main` and redeploy.
+Usually an old deploy before `public/` was committed, or **Root Directory** points at a subfolder. Ensure repo root contains `public/index.html` and `public/assets/`.
 
 | Check | Action |
 |-------|--------|
-| Framework = Next.js | Set to **Other**; `vercel.json` has `"framework": null` |
-| Output Directory = `public` | OK — matches `vercel.json` after this fix |
-| Output Directory empty | OK — `vercel.json` sets `"outputDirectory": "public"` |
-| Build fails on `vercel-build.mjs` | Ensure **Root Directory** is repo root, not a subfolder |
-| Two Vercel projects for same repo | Both can work; prefer one production URL |
+| Framework = Next.js | Set to **Other** |
+| Output Directory | **`public`** or empty (vercel.json sets it) |
+| Root Directory | **`./`** repo root, not `public` |
 
 ---
 
-## `vercel.json` (repo)
+## `vercel.json`
 
-- `"framework": null` — static site, no Next.js
-- `"buildCommand": "node vercel-build.mjs"` — copies root static files into `public/`
-- `"outputDirectory": "public"` — satisfies mcr7 and standard static deploy
-- `"installCommand": "exit 0"` — no npm install required for deploy
-- Cache headers for `/assets/*` and `index.html`
+- `"outputDirectory": "public"` — Vercel serves `public/` as site root
+- `"buildCommand": "exit 0"` — no npm build; static files are already in `public/`
+- Cache headers for `/assets/*` and `/index.html`
 
 ---
 
 ## Supabase redirect URLs
-
-Add both for auth email links:
 
 - `http://localhost:8000/**`
 - `https://impactlens-assessment.vercel.app/**`
@@ -72,7 +65,7 @@ Add both for auth email links:
 
 ## `.vercelignore`
 
-Uses `/scripts` and `/docs` (root only) so **`assets/scripts/app.js` is included**. Do not use bare `scripts` — that would exclude the app bundle.
+Uses `/scripts` and `/docs` (root only) so **`public/assets/scripts/app.js` is included**.
 
 ---
 
