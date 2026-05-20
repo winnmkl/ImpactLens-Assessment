@@ -11,7 +11,7 @@ let supabaseClient = null;
 function initSupabaseClient() {
     const lib = window.supabase;
     if (!lib?.createClient) {
-        throw new Error('Supabase SDK failed to load. Check your network and refresh the page.');
+        throw new Error('Unable to load sign-in services. Check your network and refresh the page.');
     }
     return lib.createClient(supabaseUrl, supabaseKey, {
         auth: {
@@ -114,7 +114,7 @@ try {
     document.addEventListener('DOMContentLoaded', () => {
         const el = document.getElementById('login-error');
         if (el) {
-            el.textContent = err.message;
+            el.textContent = sanitizeUserFacingError(err);
             el.hidden = false;
         }
     });
@@ -167,7 +167,7 @@ async function directFetch(path, { method = 'GET', body, params, prefer, timeout
     } catch (err) {
         clearTimeout(timer);
         if (err?.name === 'AbortError') {
-            throw new Error('Network timeout — Supabase did not respond within ' + (timeoutMs / 1000) + 's. Check your internet connection or Edge Tracking Prevention settings for *.supabase.co.');
+            throw new Error('Network timeout — the server did not respond in time. Check your connection and try again.');
         }
         throw err;
     }
@@ -2412,29 +2412,42 @@ function showAppShell() {
 function formatAuthError(err) {
     const msg = err?.message || String(err);
     if (/invalid login credentials/i.test(msg)) {
-        return 'Invalid email or password. If you are using demo accounts, ensure they exist in Supabase Auth (see supabase/hotfix_demo_accounts.sql).';
+        return 'Invalid email or password. Check your credentials and try again.';
     }
     if (/email not confirmed/i.test(msg)) {
-        return 'Email not yet verified. Click the link Supabase sent to your inbox, then sign in again.';
+        return 'Your email is not verified yet. Open the confirmation link in your inbox, then sign in again.';
     }
     if (/error sending confirmation email|unexpected_failure/i.test(msg)) {
-        return 'Supabase could not send the verification email. In the Dashboard: turn OFF custom SMTP (Authentication → SMTP) to use built-in mail, enable Confirm email (Providers → Email), and add http://localhost:8000 to URL Configuration. If you enabled custom SMTP before with wrong credentials, disable it and try again. Test: npm run test:auth-email -- your@email.com';
+        return 'We could not send the verification email. Try again in a few minutes or contact your administrator.';
     }
     if (/signup is disabled/i.test(msg)) {
-        return 'Sign-up is disabled in Supabase. Enable Email provider under Authentication → Providers.';
+        return 'New registrations are temporarily unavailable. Contact your administrator.';
     }
     if (/user already registered/i.test(msg)) {
-        return 'An account already exists for this email. Try signing in or resend verification.';
+        return 'An account already exists for this email. Sign in instead or use a different address.';
     }
     if (/rate limit/i.test(msg)) {
-        return 'Email rate limit hit. Wait a minute and try again.';
+        return 'Too many attempts. Please wait a minute and try again.';
+    }
+    if (/network timeout|failed to fetch|network error|load failed/i.test(msg)) {
+        return 'Connection timed out. Check your internet connection and try again.';
+    }
+    return sanitizeUserFacingError(msg);
+}
+
+/** Strip backend / infrastructure details from messages shown to end users. */
+function sanitizeUserFacingError(errOrMsg) {
+    const msg = (typeof errOrMsg === 'string' ? errOrMsg : (errOrMsg?.message || '')).trim();
+    if (!msg) return 'Something went wrong. Please try again.';
+    if (/supabase|postgrest|postgres|master_setup|hotfix_|\.sql\b|JWT|RLS|HTTP \d{3}|tracking prevention|\.supabase\.co/i.test(msg)) {
+        return 'Something went wrong. Please try again or contact your administrator.';
     }
     return msg;
 }
 
 async function handleRegister(event) {
     event.preventDefault();
-    if (!supabaseClient) return notify('Supabase is not initialized.', true);
+    if (!supabaseClient) return notify('Unable to connect. Refresh the page and try again.', true);
     const email = document.getElementById('register-email')?.value?.trim();
     const password = document.getElementById('register-password')?.value;
     const password2 = document.getElementById('register-password2')?.value;
@@ -2482,7 +2495,7 @@ async function handleRegister(event) {
 
 async function handleLogin(event) {
     event.preventDefault();
-    if (!supabaseClient) return notify('Supabase is not initialized. Refresh the page.', true);
+    if (!supabaseClient) return notify('Unable to connect. Refresh the page and try again.', true);
     const email = document.getElementById('login-email')?.value?.trim();
     const password = document.getElementById('login-password')?.value;
     const selectedRole = document.getElementById('login-role')?.value || 'user';
@@ -2638,7 +2651,7 @@ async function _enterAuthenticatedAppCore(session, requestedRole = null) {
         const userEl = document.getElementById('hdr-user');
         if (roleEl) roleEl.textContent = '—';
         if (userEl) userEl.textContent = currentUser.email || '—';
-        notify('Signed in, but your profile could not be loaded. Refresh or check Supabase.', true);
+        notify('Signed in, but your profile could not be loaded. Refresh the page or contact your administrator.', true);
         authUiReady = true;
         return;
     }
@@ -2701,7 +2714,7 @@ async function _enterAuthenticatedAppCore(session, requestedRole = null) {
         renderSectionContent(document.querySelector('.section.active')?.id?.replace('sec-', '') || landing);
     } catch (err) {
         console.error('Post-login data sync:', err);
-        notify('Signed in, but some data failed to load. Run supabase/master_setup.sql.', true);
+        notify('Signed in, but some data could not be loaded. Refresh the page or contact your administrator.', true);
     }
     authUiReady = true;
 }
@@ -2800,11 +2813,7 @@ async function syncFromCloud(silent = false) {
         renderNotificationBadge();
     } catch (err) {
         console.error('Cloud Sync Error: ', err);
-        const msg = err?.message || String(err);
-        const hint = /relation.*does not exist|schema cache/i.test(msg)
-            ? ' Database tables missing — run supabase/master_setup.sql in the Supabase SQL Editor.'
-            : '';
-        if (!silent) notify('Failed to connect to Supabase DB.' + hint, true);
+        if (!silent) notify('Unable to load register data. Refresh the page or contact your administrator.', true);
     }
 }
 
@@ -2853,12 +2862,12 @@ async function seedSupabaseIfEmpty() {
         if (error) {
             console.error('Seed check failed:', error);
             if (/relation.*does not exist/i.test(error.message || '')) {
-                notify('Run supabase/master_setup.sql in the Supabase SQL Editor.', true);
+                notify('The system is not fully configured. Contact your administrator.', true);
             }
             return;
         }
         if (data.length === 0) {
-            notify('Database is empty. Re-run supabase/master_setup.sql to seed demo assets.', true);
+            notify('No register data is available yet. Contact your administrator.', true);
         }
     } catch (e) { console.error('Seed check:', e); }
 }
@@ -2914,15 +2923,30 @@ function showSection(name) {
 
   renderSectionContent(name);
   refreshCloudInBackground().then(() => renderSectionContent(name));
+  closeMobileNav();
 }
 
 function notify(msg, isErr=false) {
   const el = document.getElementById('notification');
   if(!el) return;
-  el.textContent = (isErr ? '⚠ ' : '✓ ') + msg; 
+  const text = isErr ? sanitizeUserFacingError(msg) : msg;
+  el.textContent = (isErr ? '⚠ ' : '✓ ') + text;
   el.className = 'notification' + (isErr ? ' error' : '') + ' show';
   setTimeout(() => el.classList.remove('show'), 3000);
 }
+
+function toggleMobileNav() {
+  const open = document.body.classList.toggle('nav-open');
+  const btn = document.getElementById('nav-toggle');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+function closeMobileNav() {
+  document.body.classList.remove('nav-open');
+  const btn = document.getElementById('nav-toggle');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+window.toggleMobileNav = toggleMobileNav;
+window.closeMobileNav = closeMobileNav;
 
 // =====================================================================
 // REASON-CAPTURE MODAL (used by Reject / Delete actions across roles)
@@ -3926,7 +3950,7 @@ async function saveAssetToDB() {
     saveBtn.dataset.busy = '1';
     saveBtn.disabled = true;
   }
-  setSaveStatus('busy', '<span class="spinner"></span> Saving asset to Supabase…');
+  setSaveStatus('busy', '<span class="spinner"></span> Saving asset…');
 
   try {
     if (!supabaseClient) {
@@ -4011,8 +4035,7 @@ async function saveAssetToDB() {
       console.error('[saveAssetToDB] upsert error:', assetErr, assetErr?.body || '');
       const stale = /timeout|fetch|network|jwt|expired|unauthor/i.test(assetErr?.message || '');
       setSaveStatus('err',
-        `<strong>✗ Save failed.</strong> ${escapeHtml(assetErr.message || 'Unknown error')}`
-        + (assetErr.status ? ` <span style="opacity:.7">(HTTP ${assetErr.status})</span>` : '')
+        `<strong>✗ Save failed.</strong> ${escapeHtml(sanitizeUserFacingError(assetErr))}`
         + '<div class="save-status-actions">'
         + (stale ? '<button type="button" class="btn btn-sm" onclick="forceResetSession()">Reset session &amp; sign in again</button>' : '')
         + '<button type="button" class="btn btn-sm" onclick="setSaveStatus(\'idle\')">Dismiss</button>'
@@ -4613,7 +4636,7 @@ async function renderUserManagement() {
   if (!rows.length) {
     const { data, error } = await supabaseClient.from('user_profiles').select('*').order('created_at', { ascending: false });
     if (error) {
-      tbody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtmlSafe(error.message)}. Run supabase/master_setup.sql.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5">Unable to load accounts. Refresh the page or contact your administrator.</td></tr>`;
       return;
     }
     rows = globalUserProfiles = data || [];
@@ -4715,7 +4738,7 @@ async function rejectUserAccount(userId) {
   const reason = await promptReason({
     title: `Reject account request — ${target.email}`,
     eyebrow: 'User Management · Pending approval',
-    description: 'The applicant remains in Supabase Auth but their profile is marked rejected and they will not be able to sign in. The reason is recorded in System Logs.',
+    description: 'The applicant will not be able to sign in. The reason is recorded in System Logs.',
     presets: REASON_PRESETS.rejectUser,
     confirmLabel: 'Reject account',
     tone: 'danger',
@@ -5694,7 +5717,7 @@ async function importCsvMbss(rows) {
     n++;
   }
   await syncFromCloud(true);
-  notify(`Updated MBSS baseline for ${n} asset(s). Run supabase/hotfix_mbss_firewall_columns.sql if PATCH fails.`);
+  notify(`Updated MBSS baseline for ${n} asset(s).`);
 }
 
 async function importCsvFirewall(rows) {

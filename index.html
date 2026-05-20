@@ -14,7 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   
-  <link rel="stylesheet" href="./assets/styles/main.css?v=20260519-dashboard-realistic">
+  <link rel="stylesheet" href="./assets/styles/main.css?v=20260519-mobile-auth">
 </head>
 <body>
 
@@ -150,7 +150,7 @@
           </div>
 
           <p class="auth-hint-new">
-            Supabase will email a verification link. Confirm it before signing in.
+            A verification link will be emailed to you. Confirm it before signing in.
             Standard Users need Info Sec / Admin approval; Info Sec needs Admin approval.
           </p>
 
@@ -184,7 +184,7 @@
       </div>
 
       <div class="auth-footer-hint">
-        Master admin accounts can be auto-promoted on email verification (configure in Supabase Auth).
+        Master admin accounts may be activated automatically after email verification.
         <span class="auth-footer-sep">•</span>
         Stuck on a stale session? <button type="button" class="auth-link-btn" onclick="forceResetSession()">Reset session</button>
       </div>
@@ -195,7 +195,13 @@
 <div id="app-shell" class="app-shell hidden">
 
 <header>
-  <div class="logo">
+  <div class="header-left">
+    <button type="button" class="nav-toggle" id="nav-toggle" onclick="toggleMobileNav()" aria-label="Open menu" aria-expanded="false" aria-controls="main-nav">
+      <span class="nav-toggle-bar"></span>
+      <span class="nav-toggle-bar"></span>
+      <span class="nav-toggle-bar"></span>
+    </button>
+    <div class="logo">
     <div class="logo-mark">
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="margin-right: 4px; filter: drop-shadow(0 0 8px rgba(200,255,0,0.6));">
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
@@ -203,6 +209,7 @@
       IMPACTLENS
     </div>
     <div class="logo-sub">Information Security<br>Risk Assessment</div>
+  </div>
   </div>
   <div class="header-right">
     <div class="status-dot"></div>
@@ -236,6 +243,7 @@
 </header>
 
 <div class="layout">
+  <div class="nav-overlay" id="nav-overlay" onclick="closeMobileNav()" aria-hidden="true"></div>
   <nav id="main-nav">
     <div class="nav-section nav-user-only nav-admin-only nav-infosec-only"><div class="nav-label">Overview</div><div class="nav-item" data-section="dashboard" onclick="showSection('dashboard')"><span class="nav-icon">[■]</span> Dashboard</div></div>
     <div class="nav-section nav-user-only nav-infosec-only nav-admin-only"><div class="nav-label">Assets</div><div class="nav-item" data-section="add" onclick="showSection('add')"><span class="nav-icon">[+]</span> Add Asset</div><div class="nav-item nav-user-only nav-infosec-only" data-section="my-submissions" onclick="showSection('my-submissions')"><span class="nav-icon">[≡]</span> My Submissions</div></div>
@@ -1056,7 +1064,7 @@
 
 <div id="notification" class="notification"></div>
 
-<script src="./assets/scripts/app.js?v=20260519-metric-colors"></script>
+<script src="./assets/scripts/app.js?v=20260519-mobile-auth"></script>
 
 </body>
 </html>

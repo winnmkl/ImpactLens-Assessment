@@ -2707,26 +2707,6 @@ body[data-role="infosec"] .col-infosec-only {
   color: var(--text2);
 }
 
-/* Responsive */
-@media (max-width: 560px) {
-  #auth-screen .auth-role-card {
-    flex-direction: column;
-    gap: 1rem;
-    padding: 1.6rem 1.4rem;
-  }
-  #auth-screen .auth-role-divider {
-    width: auto;
-    height: 1px;
-    background: linear-gradient(to right, transparent, rgba(255,255,255,0.10), transparent);
-  }
-  #auth-screen .auth-role-btn { width: 100%; flex-direction: row; justify-content: flex-start; padding: 8px 12px; }
-  #auth-screen .auth-role-btn::after { display: none; }
-  #auth-screen .auth-icon-box { width: 72px; height: 72px; border-radius: 16px; }
-  #auth-screen .auth-icon-box svg { width: 40px; height: 40px; }
-  #auth-screen .auth-role-label { text-align: left; max-width: none; }
-  #auth-screen .auth-form-card { padding: 1.6rem 1.4rem; }
-}
-
 /* Multi risk scenarios (ISRA) tabs */
 .risk-scenario-tabs {
   display: flex;
@@ -2846,5 +2826,293 @@ button.risk-sc-tab--active {
 .isra-row-statement {
   width: 100%;
   margin-top: 0;
+}
+
+/* ========================================== MOBILE & TABLET RESPONSIVE ========================================== */
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.nav-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  background: var(--bg3);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.nav-toggle-bar {
+  display: block;
+  width: 100%;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.nav-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  top: 72px;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 89;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+@media (max-width: 900px) {
+  header {
+    padding: 0 12px;
+    height: auto;
+    min-height: 64px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .nav-toggle {
+    display: flex;
+  }
+
+  body.nav-open .nav-toggle-bar:nth-child(1) {
+    transform: translateY(7px) rotate(45deg);
+  }
+  body.nav-open .nav-toggle-bar:nth-child(2) {
+    opacity: 0;
+  }
+  body.nav-open .nav-toggle-bar:nth-child(3) {
+    transform: translateY(-7px) rotate(-45deg);
+  }
+
+  .logo-sub {
+    display: none;
+  }
+
+  .logo-mark {
+    font-size: 24px;
+  }
+
+  .header-right {
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+    width: 100%;
+  }
+
+  .header-stat:not(.hdr-user-keep):not(.role-pill) {
+    display: none;
+  }
+
+  .header-stat.role-pill,
+  .header-stat.user-pill {
+    font-size: 10px;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .nav-overlay {
+    display: block;
+  }
+
+  body.nav-open .nav-overlay {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  nav#main-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: min(280px, 88vw);
+    height: 100vh;
+    z-index: 200;
+    transform: translateX(-105%);
+    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.45);
+    padding-top: 80px;
+  }
+
+  body.nav-open nav#main-nav {
+    transform: translateX(0);
+  }
+
+  main {
+    padding: 16px 12px 24px;
+  }
+
+  .page-header {
+    margin-bottom: 24px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-title {
+    font-size: 32px;
+  }
+
+  .page-desc {
+    font-size: 12px;
+  }
+
+  .metrics-grid,
+  .metrics-grid--risk {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+
+  .metric-card {
+    padding: 16px 14px;
+  }
+
+  .metric-num {
+    font-size: 28px !important;
+  }
+
+  .grid-2,
+  .grid-3,
+  .grid-4,
+  .dash-risk-viz.grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .form-row.grid-2,
+  .form-row.grid-3,
+  .form-row.grid-4 {
+    grid-template-columns: 1fr;
+  }
+
+  .controls-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -4px;
+    padding: 0 4px;
+  }
+
+  table {
+    min-width: 640px;
+  }
+
+  .card {
+    padding: 16px;
+  }
+
+  .card-header {
+    font-size: 11px;
+  }
+
+  .btn {
+    min-height: 40px;
+    padding: 10px 14px;
+  }
+
+  .btn-sm {
+    min-height: 36px;
+    padding: 8px 12px;
+  }
+
+  .notification {
+    left: 12px;
+    right: 12px;
+    bottom: 16px;
+    max-width: none;
+  }
+
+  .notif-dropdown {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: 72px;
+    width: auto;
+    max-height: 50vh;
+  }
+
+  .il-modal {
+    width: calc(100vw - 24px);
+    max-width: none;
+    margin: 12px;
+  }
+
+  .chart-bar-label {
+    width: 72px;
+    font-size: 10px;
+  }
+
+  .risk-scenario-tabs {
+    gap: 4px;
+  }
+
+  button.risk-sc-tab {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: center;
+  }
+
+  .register-csv-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .register-csv-toolbar .btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .metrics-grid,
+  .metrics-grid--risk {
+    grid-template-columns: 1fr;
+  }
+
+  .header-right > div[style*="display: flex"] {
+    width: 100%;
+    margin-left: 0 !important;
+    justify-content: space-between;
+  }
+
+  .header-stat.user-pill {
+    display: none;
+  }
+
+  #auth-screen .auth-role-card {
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.6rem 1.4rem;
+  }
+  #auth-screen .auth-role-divider {
+    width: auto;
+    height: 1px;
+    background: linear-gradient(to right, transparent, rgba(255,255,255,0.10), transparent);
+  }
+  #auth-screen .auth-role-btn { width: 100%; flex-direction: row; justify-content: flex-start; padding: 8px 12px; }
+  #auth-screen .auth-role-btn::after { display: none; }
+  #auth-screen .auth-icon-box { width: 72px; height: 72px; border-radius: 16px; }
+  #auth-screen .auth-icon-box svg { width: 40px; height: 40px; }
+  #auth-screen .auth-role-label { text-align: left; max-width: none; }
+  #auth-screen .auth-form-card { padding: 1.6rem 1.4rem; }
+
+  .auth-screen {
+    padding: 16px 12px;
+  }
 }
 
