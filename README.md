@@ -392,6 +392,9 @@ Every `<link>`/`<script>` referencing local CSS/JS carries a `?v=YYYYMMDD-*` mar
 npm run deploy:prod
 # → https://impactlens-assessment.vercel.app
 ```
+
+**GitHub CI failing (~2s error)?** See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — usually a duplicate Vercel project or Framework Preset ≠ **Other**.
+
 Ensure Supabase **Redirect URLs** include the production domain (see [Quick start](#2-bootstrap-the-supabase-database)).
 
 ### Re-running database scripts
