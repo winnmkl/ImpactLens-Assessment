@@ -49,82 +49,6 @@ function urlHasAuthHandshakeParams() {
     } catch (_) { return false; }
 }
 
-const IMPACTLENS_HISTORY_SIGNOUT_NOTICE_KEY = 'impactlens_notice_history_return';
-/** Set on pagehide when an authenticated session is frozen into BFCache (Back/Forward return). */
-const IMPACTLENS_BFCACHE_AUTH_FLAG = 'impactlens_bfcache_auth';
-/** Toast after session was cleared because the document was reached via browser history (Back/Forward). */
-const HISTORY_RETURN_SECURITY_SIGNOUT_MSG =
-    'You were signed out automatically for security after using the browser Back button. Sign in again to continue.';
-
-/** True when this document load was reached via browser Back/Forward (history). */
-function wasHistoryNavigation() {
-    try {
-        const n = performance.getEntriesByType?.('navigation')?.[0];
-        if (n?.type === 'back_forward') return true;
-        const legacy = performance.navigation;
-        if (legacy && legacy.type === legacy.TYPE_BACK_FORWARD) return true;
-    } catch (_) { /* noop */ }
-    return false;
-}
-
-/** True when a prior authenticated visit was frozen for BFCache before Back/Forward return. */
-function wasBfCacheAuthenticatedReturn() {
-    try {
-        if (sessionStorage.getItem(IMPACTLENS_BFCACHE_AUTH_FLAG) !== '1') return false;
-        sessionStorage.removeItem(IMPACTLENS_BFCACHE_AUTH_FLAG);
-        return true;
-    } catch (_) {
-        return false;
-    }
-}
-
-function markBfCacheAuthenticatedSession() {
-    try {
-        if (authUiReady && currentUser) {
-            sessionStorage.setItem(IMPACTLENS_BFCACHE_AUTH_FLAG, '1');
-        }
-    } catch (_) { /* noop */ }
-}
-
-/** Block auto re-entry from persisted tokens after a history-return sign-out until explicit login. */
-let blockAutoSignIn = false;
-let historyReturnSignOutInFlight = null;
-
-async function signOutAfterHistoryReturn() {
-    if (historyReturnSignOutInFlight) return historyReturnSignOutInFlight;
-    historyReturnSignOutInFlight = (async () => {
-        blockAutoSignIn = true;
-        suppressAuthReset = true;
-        clearSupabasePersistedSession();
-        document.body.dataset.role = '';
-        currentUser = null;
-        currentRole = null;
-        currentProfile = null;
-        currentAccessToken = null;
-        pendingVerifyEmail = null;
-        authUiReady = false;
-        enterAppInFlight = null;
-        showAuthScreen();
-        try {
-            sessionStorage.setItem(IMPACTLENS_HISTORY_SIGNOUT_NOTICE_KEY, '1');
-            sessionStorage.removeItem(IMPACTLENS_BFCACHE_AUTH_FLAG);
-        } catch (_) { /* noop */ }
-        if (supabaseClient) {
-            try { await supabaseClient.auth.signOut(); } catch (_) { /* noop */ }
-        }
-        suppressAuthReset = false;
-    })();
-    try {
-        await historyReturnSignOutInFlight;
-    } finally {
-        historyReturnSignOutInFlight = null;
-    }
-}
-
-function shouldSignOutOnHistoryReturn() {
-    return wasHistoryNavigation() || wasBfCacheAuthenticatedReturn();
-}
-
 function stripAuthParamsFromUrl() {
     try {
         const url = new URL(window.location.href);
@@ -140,6 +64,99 @@ function stripAuthParamsFromUrl() {
         window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
     } catch (_) { /* noop */ }
 }
+
+// Browser Back/Forward — navigate auth stages and app sections (does not block or sign out).
+const IL_HISTORY = 'impactlens';
+let suppressHistorySync = false;
+
+function ilHistoryPayload(state) {
+    return state?.[IL_HISTORY] || null;
+}
+
+function ilAuthUrl(stage, role, tab) {
+    const base = window.location.pathname + window.location.search;
+    if (stage === 'roles') return `${base}#/auth`;
+    const r = role || 'user';
+    const t = tab || 'login';
+    return `${base}#/auth/${r}/${t}`;
+}
+
+function ilAppUrl(section) {
+    return `${window.location.pathname}${window.location.search}#/app/${section || 'dashboard'}`;
+}
+
+function pushAppHistory(section, replace = false) {
+    if (suppressHistorySync || !authUiReady) return;
+    const st = { [IL_HISTORY]: { view: 'app', section } };
+    const url = ilAppUrl(section);
+    if (replace) history.replaceState(st, '', url);
+    else history.pushState(st, '', url);
+}
+
+function pushAuthHistory(stage, role, tab, replace = false) {
+    if (suppressHistorySync) return;
+    const authScreen = document.getElementById('auth-screen');
+    if (!authScreen || authScreen.classList.contains('hidden')) return;
+    const st = { [IL_HISTORY]: { view: 'auth', stage, role: role || null, tab: tab || 'login' } };
+    const url = ilAuthUrl(stage, role, tab);
+    if (replace) history.replaceState(st, '', url);
+    else history.pushState(st, '', url);
+}
+
+function openAuthRoleForm(role, tab = 'login') {
+    setAuthRole(role);
+    document.getElementById('auth-stage-roles')?.classList.add('hidden');
+    document.getElementById('auth-stage-form')?.classList.remove('hidden');
+    document.querySelectorAll('#auth-screen .auth-role-btn').forEach(b => {
+        b.style.opacity = '';
+        b.style.borderColor = '';
+    });
+    showAuthTab(tab, { fromHistory: true });
+    if (tab === 'login') document.getElementById('login-email')?.focus();
+}
+
+function applyAuthHistoryState(pl) {
+    if (!pl || pl.view !== 'auth') return;
+    if (pl.stage === 'roles') {
+        backToRoleSelect({ fromHistory: true });
+        return;
+    }
+    if (pl.stage === 'form' && pl.role) {
+        openAuthRoleForm(pl.role, pl.tab || 'login');
+    }
+}
+
+function parseLocationHashView() {
+    const raw = (window.location.hash || '').replace(/^#\/?/, '');
+    if (!raw) return null;
+    if (raw === 'auth') return { view: 'auth', stage: 'roles' };
+    if (raw.startsWith('auth/')) {
+        const [, role, tab] = raw.split('/');
+        if (role && ['user', 'infosec', 'admin'].includes(role)) {
+            return { view: 'auth', stage: 'form', role, tab: tab === 'register' ? 'register' : 'login' };
+        }
+        return { view: 'auth', stage: 'roles' };
+    }
+    if (raw.startsWith('app/')) {
+        const section = raw.slice(4).split('/')[0];
+        if (section) return { view: 'app', section };
+    }
+    return null;
+}
+
+window.addEventListener('popstate', (e) => {
+    const pl = ilHistoryPayload(e.state) || parseLocationHashView();
+    suppressHistorySync = true;
+    try {
+        if (pl?.view === 'app' && pl.section && authUiReady) {
+            showSection(pl.section, { fromHistory: true });
+        } else if (pl?.view === 'auth' && !authUiReady) {
+            applyAuthHistoryState(pl);
+        }
+    } finally {
+        suppressHistorySync = false;
+    }
+});
 
 /** Completes PKCE email-confirmation links (?token_hash=…&type=signup). */
 async function handleAuthCallbackFromUrl() {
@@ -2161,6 +2178,7 @@ function showAuthScreen() {
     resetAuthSteps();
     // Lazily boot the background wave animation the first time we land here.
     initAuthWave();
+    pushAuthHistory('roles', null, null, true);
 }
 
 function resetAuthSteps() {
@@ -2264,20 +2282,21 @@ function selectAuthRole(el, role, ev) {
         // Focus first input for keyboard users
         showAuthTab('login');
         document.getElementById('login-email')?.focus();
+        pushAuthHistory('form', role, 'login', false);
     }, 320);
 }
 window.selectAuthRole = selectAuthRole;
 
-function backToRoleSelect() {
+function backToRoleSelect(opts = {}) {
     clearAuthError();
     const stageRoles = document.getElementById('auth-stage-roles');
     const stageForm  = document.getElementById('auth-stage-form');
     if (stageRoles) stageRoles.classList.remove('hidden');
     if (stageForm)  stageForm.classList.add('hidden');
-    // Reset any sub-step (verify/pending) so a returning user lands on creds next time
     document.getElementById('auth-step-credentials')?.classList.remove('hidden');
     document.getElementById('auth-step-verify')?.classList.add('hidden');
     document.getElementById('auth-step-pending')?.classList.add('hidden');
+    if (!opts.fromHistory) pushAuthHistory('roles', null, null, false);
 }
 window.backToRoleSelect = backToRoleSelect;
 
@@ -2373,7 +2392,7 @@ async function resendVerificationEmail() {
     }
 }
 
-function showAuthTab(tab) {
+function showAuthTab(tab, opts = {}) {
     const loginForm = document.getElementById('login-form');
     const regForm = document.getElementById('register-form');
     document.getElementById('tab-login')?.classList.toggle('active', tab === 'login');
@@ -2382,6 +2401,10 @@ function showAuthTab(tab) {
     regForm?.classList.toggle('hidden', tab !== 'register');
     clearAuthError();
     if (tab === 'register') clearAuthRejectionBanner();
+    if (!opts.fromHistory) {
+        const role = document.getElementById('login-role')?.value || 'user';
+        pushAuthHistory('form', role, tab, true);
+    }
 }
 
 function clearAuthRejectionBanner() {
@@ -2510,7 +2533,6 @@ function sanitizeUserFacingError(errOrMsg) {
 
 async function handleRegister(event) {
     event.preventDefault();
-    blockAutoSignIn = false;
     if (!supabaseClient) return notify('Unable to connect. Refresh the page and try again.', true);
     const email = document.getElementById('register-email')?.value?.trim();
     const password = document.getElementById('register-password')?.value;
@@ -2559,7 +2581,6 @@ async function handleRegister(event) {
 
 async function handleLogin(event) {
     event.preventDefault();
-    blockAutoSignIn = false;
     if (!supabaseClient) return notify('Unable to connect. Refresh the page and try again.', true);
     const email = document.getElementById('login-email')?.value?.trim();
     const password = document.getElementById('login-password')?.value;
@@ -2613,7 +2634,6 @@ async function handleLogin(event) {
 }
 
 function handleLogout(signOutMessage = 'Signed out.') {
-    blockAutoSignIn = false;
     // Reset client state and flip the UI FIRST so the user is never trapped
     // waiting on the Supabase round-trip (which can hang on slow networks).
     document.body.dataset.role = '';
@@ -2626,7 +2646,6 @@ function handleLogout(signOutMessage = 'Signed out.') {
     showAuthScreen();
     notify(signOutMessage, signOutMessage !== 'Signed out.');
     clearSupabasePersistedSession();
-    try { sessionStorage.removeItem(IMPACTLENS_BFCACHE_AUTH_FLAG); } catch (_) {}
     // Best-effort revoke the cloud session in the background; ignore errors.
     if (supabaseClient) {
         try {
@@ -2663,21 +2682,7 @@ let suppressAuthReset = false;
 let pendingLoginRole = null;
 let enterAppInFlight = null;
 
-/** @deprecated use signOutAfterHistoryReturn — kept as alias for clarity in init flow */
-async function purgeSessionAfterHistoryNavigation() {
-    await signOutAfterHistoryReturn();
-}
-
-function flushHistoryReturnSecurityNotice() {
-    try {
-        if (sessionStorage.getItem(IMPACTLENS_HISTORY_SIGNOUT_NOTICE_KEY) !== '1') return;
-        sessionStorage.removeItem(IMPACTLENS_HISTORY_SIGNOUT_NOTICE_KEY);
-        notify(HISTORY_RETURN_SECURITY_SIGNOUT_MSG, true);
-    } catch (_) { /* noop */ }
-}
-
 async function enterAuthenticatedApp(session, requestedRole = null) {
-    if (blockAutoSignIn) return;
     if (!session?.user) return;
     const userId = session.user.id;
     if (enterAppInFlight?.userId === userId) return enterAppInFlight.promise;
@@ -2761,7 +2766,9 @@ async function _enterAuthenticatedAppCore(session, requestedRole = null) {
     if (userEl) userEl.textContent = currentUser.email || '—';
     applyRoleUI();
     const landing = { user: 'dashboard', infosec: 'draft-queue', admin: 'dashboard' }[currentRole] || 'add';
-    showSection(landing);
+    const hashView = parseLocationHashView();
+    const section = (hashView?.view === 'app' && hashView.section) ? hashView.section : landing;
+    showSection(section, { replaceHistory: true });
     try {
         await syncFromCloud(true);
         await seedSupabaseIfEmpty();
@@ -2954,7 +2961,7 @@ function ensureAddFormIsraPanels() {
     }
 }
 
-function showSection(name) {
+function showSection(name, opts = {}) {
   const allowed = {
     user: ['dashboard', 'add', 'my-submissions', 'register', 'guidelines'],
     infosec: ['dashboard', 'add', 'my-submissions', 'draft-queue', 'pending-queue', 'register', 'risk', 'controls', 'actions', 'logs', 'users', 'guidelines'],
@@ -2979,6 +2986,7 @@ function showSection(name) {
   renderSectionContent(name);
   refreshCloudInBackground().then(() => renderSectionContent(name));
   closeMobileNav();
+  if (!opts.fromHistory) pushAppHistory(name, !!opts.replaceHistory);
 }
 
 function notify(msg, isErr=false) {
@@ -7091,30 +7099,6 @@ async function exportDataXLSX() {
 // ==========================================
 // 8. INITIALIZATION
 // ==========================================
-// BFCache / history return: sign out when the user comes back via Back/Forward.
-window.addEventListener('pagehide', (e) => {
-    if (e.persisted) markBfCacheAuthenticatedSession();
-});
-
-window.addEventListener('pageshow', (e) => {
-    if (!supabaseClient || urlHasAuthHandshakeParams()) return;
-    let bfcacheFlag = false;
-    try { bfcacheFlag = sessionStorage.getItem(IMPACTLENS_BFCACHE_AUTH_FLAG) === '1'; } catch (_) {}
-    const historyReturn = e.persisted || wasHistoryNavigation() || bfcacheFlag;
-    if (!historyReturn) return;
-    if (authUiReady && currentUser) {
-        signOutAfterHistoryReturn().then(() => flushHistoryReturnSecurityNotice());
-        return;
-    }
-    if (e.persisted) {
-        supabaseClient.auth.getSession().then(({ data: { session } }) => {
-            if (session) {
-                signOutAfterHistoryReturn().then(() => flushHistoryReturnSecurityNotice());
-            }
-        }).catch(() => {});
-    }
-});
-
 (async function initApp() {
     if (!supabaseClient) {
         showAuthScreen();
@@ -7124,22 +7108,18 @@ window.addEventListener('pageshow', (e) => {
     const handledCallback = await handleAuthCallbackFromUrl();
     if (!handledCallback) {
         const { data: { session: initialSession } } = await supabaseClient.auth.getSession();
-        const historyReturn = shouldSignOutOnHistoryReturn();
-        if (historyReturn && !urlHasAuthHandshakeParams()) {
-            await signOutAfterHistoryReturn();
-        } else if (initialSession && !blockAutoSignIn) {
+        if (initialSession) {
             await enterAuthenticatedApp(initialSession);
         } else {
+            const hashView = parseLocationHashView();
             showAuthScreen();
+            if (hashView?.view === 'auth') applyAuthHistoryState(hashView);
         }
     }
-
-    flushHistoryReturnSecurityNotice();
 
     supabaseClient.auth.onAuthStateChange(async (event, session) => {
         if (event === 'INITIAL_SESSION') return;
         if (event === 'SIGNED_IN' && session) {
-            if (blockAutoSignIn) return;
             if (authUiReady && currentUser?.id === session.user?.id) return;
             const role = pendingLoginRole;
             pendingLoginRole = null;
