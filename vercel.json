@@ -3,7 +3,8 @@
   "version": 2,
   "framework": null,
   "installCommand": "exit 0",
-  "buildCommand": "exit 0",
+  "buildCommand": "node vercel-build.mjs",
+  "outputDirectory": "public",
   "headers": [
     {
       "source": "/assets/(.*)",

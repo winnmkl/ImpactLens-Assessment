@@ -7,9 +7,9 @@ Static site (vanilla HTML/CSS/JS). No build step. Supabase client loads from CDN
 | Project | URL | Notes |
 |---------|-----|--------|
 | **Primary (recommended)** | https://impactlens-assessment.vercel.app | CLI-linked project `impactlens-assessment` |
-| GitHub auto-import | `impact-lens-assessment-*` | May be a **second** project if Git was connected twice |
+| GitHub auto-import | `impact-lens-assessment-mcr7` | Same repo — uses `public/` output from `vercel-build.mjs` |
 
-Use **one** Vercel project for production. Duplicate Git imports often fail with a ~2s error when framework settings conflict.
+Use **one** Vercel project for production if possible. Both projects can deploy from the same repo when `vercel.json` is present.
 
 ---
 
@@ -19,41 +19,44 @@ Use **one** Vercel project for production. Duplicate Git imports often fail with
 npm run deploy:prod
 ```
 
-Requires [Vercel CLI](https://vercel.com/docs/cli) logged in and `.vercel/project.json` linked to `impactlens-assessment`.
+Requires [Vercel CLI](https://vercel.com/docs/cli) logged in and `.vercel/project.json` linked to your target project.
 
 ---
 
 ## GitHub → Vercel (CI)
 
-### Connect to the existing project (recommended)
+### Connect a project (primary or mcr7)
 
-1. [Vercel Dashboard](https://vercel.com/winnmkls-projects) → open **`impactlens-assessment`** (not a duplicate `impact-lens-assessment-mcr7`).
+1. [Vercel Dashboard](https://vercel.com/winnmkls-projects) → open the project (e.g. **`impactlens-assessment`** or **`impact-lens-assessment-mcr7`**).
 2. **Settings → Git** → Connect **winnmkl/ImpactLens-Assessment** → branch **`main`** → Production.
 3. **Settings → General → Build & Development Settings:**
    - **Framework Preset:** Other
    - **Root Directory:** `./` (repo root)
-   - **Build Command:** leave empty (use `vercel.json`) or `exit 0`
-   - **Output Directory:** leave **empty** (not `public`, not `dist`)
-   - **Install Command:** leave empty (use `vercel.json`) or `exit 0`
+   - **Build Command:** leave empty (uses `vercel.json`) or `node vercel-build.mjs`
+   - **Output Directory:** leave empty (uses `vercel.json`) or **`public`**
+   - **Install Command:** leave empty (uses `vercel.json`) or `exit 0`
 4. Redeploy from **Deployments → Redeploy**.
 
-### If you see a failed deploy in ~2 seconds
+### If you see: *No Output Directory named "public" found*
 
-Usually **wrong framework preset** (Next.js/React detected from old `package.json` deps) or a **duplicate project**.
+The dashboard had **Output Directory = `public`** but the old config did not create that folder. The repo now runs `vercel-build.mjs`, which copies `index.html` and `assets/` into `public/` before deploy. Pull latest `main` and redeploy.
 
 | Check | Action |
 |-------|--------|
 | Framework = Next.js | Set to **Other**; `vercel.json` has `"framework": null` |
-| Output Directory = `public` or `dist` | **Clear it** — `index.html` is at repo root |
-| Two Vercel projects for same repo | Delete the broken duplicate; connect Git once |
-| Build logs mention missing output | Root cause above — not a missing npm build |
+| Output Directory = `public` | OK — matches `vercel.json` after this fix |
+| Output Directory empty | OK — `vercel.json` sets `"outputDirectory": "public"` |
+| Build fails on `vercel-build.mjs` | Ensure **Root Directory** is repo root, not a subfolder |
+| Two Vercel projects for same repo | Both can work; prefer one production URL |
 
 ---
 
 ## `vercel.json` (repo)
 
 - `"framework": null` — static site, no Next.js
-- `"installCommand": "exit 0"` / `"buildCommand": "exit 0"` — skip npm install/build
+- `"buildCommand": "node vercel-build.mjs"` — copies root static files into `public/`
+- `"outputDirectory": "public"` — satisfies mcr7 and standard static deploy
+- `"installCommand": "exit 0"` — no npm install required for deploy
 - Cache headers for `/assets/*` and `index.html`
 
 ---

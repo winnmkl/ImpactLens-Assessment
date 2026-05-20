@@ -32,7 +32,7 @@
   "scripts": {
     "start": "node scripts/serve.mjs 8000",
     "start:node": "node scripts/serve.mjs 8000",
-    "build": "node -e \"process.exit(0)\"",
+    "build": "node vercel-build.mjs",
     "deploy": "vercel deploy --yes",
     "deploy:prod": "vercel deploy --prod --yes",
     "test": "echo 'Add tests here'",
