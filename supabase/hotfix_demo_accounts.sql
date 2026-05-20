@@ -1,5 +1,5 @@
 -- =================================================================
--- HOTFIX: Seed Info Sec + Standard User demo accounts (auto-approved)
+-- HOTFIX: Seed Admin + Info Sec + Standard User demo accounts (auto-approved)
 -- Run in: https://supabase.com/dashboard/project/haspklehikocqswmgmtk/sql/new
 -- Idempotent: safe to re-run; cleans any prior partial entries first.
 -- =================================================================
@@ -56,17 +56,18 @@ BEGIN
 END;
 $func$;
 
--- 2) Create the two demo users (deterministic IDs, bcrypt passwords) ---
+-- 2) Create the three demo users (deterministic IDs, bcrypt passwords) ---
 DO $body$
 DECLARE
+  v_admin   uuid := '0000aaaa-0000-4000-a000-000000000003';
   v_infosec uuid := '0000aaaa-0000-4000-a000-000000000001';
   v_user    uuid := '0000aaaa-0000-4000-a000-000000000002';
 BEGIN
   -- Cleanup any prior partial state
-  DELETE FROM auth.identities    WHERE user_id IN (v_infosec, v_user);
-  DELETE FROM public.user_profiles WHERE id      IN (v_infosec, v_user);
-  DELETE FROM auth.users         WHERE id        IN (v_infosec, v_user);
-  DELETE FROM auth.users         WHERE lower(email) IN ('infosec@plm.edu.ph','user@plm.edu.ph');
+  DELETE FROM auth.identities    WHERE user_id IN (v_admin, v_infosec, v_user);
+  DELETE FROM public.user_profiles WHERE id      IN (v_admin, v_infosec, v_user);
+  DELETE FROM auth.users         WHERE id        IN (v_admin, v_infosec, v_user);
+  DELETE FROM auth.users         WHERE lower(email) IN ('admin@plm.edu.ph','infosec@plm.edu.ph','user@plm.edu.ph');
 
   -- Insert auth.users (email_confirmed_at=now() makes them sign-in ready)
   INSERT INTO auth.users (
@@ -75,6 +76,16 @@ BEGIN
     created_at, updated_at,
     confirmation_token, recovery_token, email_change_token_new, email_change
   ) VALUES
+  (
+    '00000000-0000-0000-0000-000000000000',
+    v_admin, 'authenticated', 'authenticated',
+    'admin@plm.edu.ph',
+    crypt('IAS_AdminAccount2526@', gen_salt('bf')),
+    now(),
+    '{"provider":"email","providers":["email"]}'::jsonb,
+    '{"requested_role":"admin"}'::jsonb,
+    now(), now(), '', '', '', ''
+  ),
   (
     '00000000-0000-0000-0000-000000000000',
     v_infosec, 'authenticated', 'authenticated',
@@ -102,6 +113,11 @@ BEGIN
     last_sign_in_at, created_at, updated_at
   ) VALUES
   (
+    v_admin::text, v_admin,
+    jsonb_build_object('sub', v_admin::text, 'email', 'admin@plm.edu.ph', 'email_verified', true),
+    'email', now(), now(), now()
+  ),
+  (
     v_infosec::text, v_infosec,
     jsonb_build_object('sub', v_infosec::text, 'email', 'infosec@plm.edu.ph', 'email_verified', true),
     'email', now(), now(), now()
@@ -115,6 +131,7 @@ BEGIN
   -- Force-active profiles (trigger fires too; ON CONFLICT keeps us aligned)
   INSERT INTO public.user_profiles (id, email, requested_role, approved_role, account_status, approved_at)
   VALUES
+    (v_admin,   'admin@plm.edu.ph',   'admin',   'admin',   'active', now()),
     (v_infosec, 'infosec@plm.edu.ph', 'infosec', 'infosec', 'active', now()),
     (v_user,    'user@plm.edu.ph',    'user',    'user',    'active', now())
   ON CONFLICT (id) DO UPDATE SET

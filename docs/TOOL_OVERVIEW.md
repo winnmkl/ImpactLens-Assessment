@@ -125,6 +125,7 @@ Enforcement is **layered**: `showSection()` rules, `body[data-role]` CSS, and **
 | Need | Document / location |
 |------|---------------------|
 | Install, seed DB, email auth | **`README.md`** |
+| **Open account / test login** | **`docs/ACCOUNT_OPENING_GUIDE.md`** |
 | Exact escalation rules, floor table, appetite locks | **`README.md`** → *Risk-math engine* |
 | Full control ↔ framework ID table | **`README.md`** → *Compliance mapping* + `CONTROL_COMPLIANCE` in **`app.js`** |
 | Module boundaries & limitations | **`docs/LIMITATIONS_AND_SCOPE.md`**, **`docs/MODULE_ISRA_DESCRIPTION.md`** |

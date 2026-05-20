@@ -9,9 +9,15 @@ Quick reference for PLM ISMS assessors. Plain language; for full technical detai
 1. Install Node 18+ and run `npm install` then `npm start`.
 2. Open http://localhost:8000
 3. Ensure Supabase `master_setup.sql` has been run (see README).
-4. Register or sign in with a verified email.
+4. Register or sign in — see **[docs/ACCOUNT_OPENING_GUIDE.md](ACCOUNT_OPENING_GUIDE.md)** for test credentials and step-by-step sign-in.
 
-**Demo accounts** (if `hotfix_demo_accounts.sql` was run): `user@plm.edu.ph`, `infosec@plm.edu.ph`, `admin@plm.edu.ph`
+### Test accounts (after `hotfix_demo_accounts.sql`)
+
+| Role | Email | Password |
+|------|-------|----------|
+| Admin (CISO) | `admin@plm.edu.ph` | `IAS_AdminAccount2526@` |
+| Info Sec | `infosec@plm.edu.ph` | `IAS_InfosecAccount2526@` |
+| Standard User | `user@plm.edu.ph` | `IAS_UserAccount2526@` |
 
 ---
 

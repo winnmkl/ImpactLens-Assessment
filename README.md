@@ -24,6 +24,8 @@ A standards-aligned, multi-tenant Information Security Risk Assessment (IAR) pla
 13. [Browser support](#browser-support)
 14. [References](#references)
 
+**Account opening & test login:** [docs/ACCOUNT_OPENING_GUIDE.md](docs/ACCOUNT_OPENING_GUIDE.md)
+
 ---
 
 ## What's new in v2.1
@@ -115,7 +117,7 @@ Open the Supabase SQL Editor for your project and run the scripts in order:
 | 1 | `supabase/master_setup.sql` | Tables, RLS, triggers, **117-asset seed**, JSON roll-up sync, `mbss_json` / `firewall_json` | yes |
 | 2 *(optional)* | `supabase/migration_isra_v5_cia5_multi_threat_vuln.sql` | Column docs + legacy CIA 1–3 → 1–5 normalization on existing DBs | yes |
 | 3 *(optional)* | `supabase/fix_register_residuals_manual.sql` | Fix stale inherit/residual, restore roll-up from JSON, FA petty-cash tiers | yes |
-| 4 *(optional)* | `supabase/hotfix_demo_accounts.sql` | Pre-provision `infosec@plm.edu.ph` / `user@plm.edu.ph` (skip email verification) | yes |
+| 4 *(optional)* | `supabase/hotfix_demo_accounts.sql` | Pre-provision **admin / infosec / user** test accounts (passwords in [ACCOUNT_OPENING_GUIDE.md](docs/ACCOUNT_OPENING_GUIDE.md)) | yes |
 | 5 *(optional)* | `supabase/hotfix_mbss_firewall_columns.sql` | Adds `mbss_json` / `firewall_json` if your DB predates May 2026 `master_setup.sql` | yes |
 
 > **Avoid on seeded demo DB:** `supabase/hotfix_realign_risk_math.sql` — applies legacy mandatory-floor recompute to **all** rows and can inflate residuals to Moderate/High. Use `fix_register_residuals_manual.sql` instead.
@@ -164,10 +166,20 @@ npm start
 The server automatically falls back to a free port if 8000 is occupied. Hard-refresh (`Ctrl-F5`) any time `?v=YYYYMMDDx` changes.
 
 ### 4. Sign in
-- **Master Admin (CISO):** create `admin@plm.edu.ph` from Supabase Dashboard with **Auto Confirm User** *or* register through the app and verify the email.
-- **Info Sec:** `infosec@plm.edu.ph` (auto-approved by trigger).
-- **Standard User:** `user@plm.edu.ph` (auto-approved by trigger).
-- **Anyone else:** registers from the app, waits for Info Sec or Admin to approve their requested role.
+
+**Full walkthrough:** [docs/ACCOUNT_OPENING_GUIDE.md](docs/ACCOUNT_OPENING_GUIDE.md) (test credentials, registration, approval flow).
+
+After running `supabase/hotfix_demo_accounts.sql`:
+
+| Role | Email | Password |
+|------|-------|----------|
+| **Admin (CISO)** | `admin@plm.edu.ph` | `IAS_AdminAccount2526@` |
+| **Info Sec** | `infosec@plm.edu.ph` | `IAS_InfosecAccount2526@` |
+| **Standard User** | `user@plm.edu.ph` | `IAS_UserAccount2526@` |
+
+Pick the matching **role tile** on the login screen, then **SIGN IN** with the credentials above.
+
+Alternatively, register `admin@plm.edu.ph` through the app or Supabase Dashboard (auto-promoted to admin on email verify). Other emails require Info Sec / Admin approval after verification.
 
 ---
 
@@ -358,6 +370,7 @@ ImpactLens-Assessment/
     ├── CALCULATION_README.md               # formula-level risk engine reference
     ├── TOOL_OVERVIEW.md                    # stakeholder / assessor overview
     ├── USER_GUIDE.md                       # End-user guide
+    ├── ACCOUNT_OPENING_GUIDE.md          # Sign-in, test credentials, registration
     ├── MODULE_ISRA_DESCRIPTION.md          # ISRA module scope
     ├── LIMITATIONS_AND_SCOPE.md            # Out-of-scope + defense talking points
     ├── DOCUMENTATION_BACKGROUND.txt        # Full background (copy-paste)
